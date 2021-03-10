@@ -13,12 +13,27 @@
 #include <gtest/gtest.h>
 #include <iostream>
 
-#include <dataset.h>
-#include <layer.h>
 #include <ml-api-common.h>
-#include <model.h>
 #include <nntrainer_test_util.h>
+#include <model.h>
+#include <layer.h>
 #include <optimizer.h>
+#include <dataset.h>
+
+/**
+ * @brief      get data which size is batch for train
+ * @param[out] outVec
+ * @param[out] outLabel
+ * @param[out] last if the data is finished
+ * @param[in] user_data private data for the callback
+ * @retval status for handling error
+ */
+int getBatch_train(float **outVec, float **outLabel, bool *last,
+                   void *user_data);
+
+int getBatch_val(float **outVec, float **outLabel, bool *last,
+                 void *user_data);
+
 
 static const std::string getTestResPath(const std::string &file) {
   return getResPath(file, {"test"});
@@ -209,48 +224,117 @@ TEST(nntrainer_ccapi, train_with_config_01_p) {
  * @brief Neural Network Model Training
  */
 TEST(nntrainer_ccapi, train_dataset_with_file_01_p) {
+
+
+
+
+
+  //Define model
   std::unique_ptr<ml::train::Model> model;
-  std::shared_ptr<ml::train::Layer> layer;
+  model = ml::train::createModel(ml::train::ModelType::NEURAL_NET);
+  model->setProperty({"loss=cross", "batch_size=16", "epochs=2",
+                      "save_path=model.bin"});
+
+  //Define optimizer
   std::shared_ptr<ml::train::Optimizer> optimizer;
-  std::shared_ptr<ml::train::Dataset> dataset;
+  optimizer = ml::train::optimizer::Adam(
+    {"learning_rate=0.0001", "decay_rate=0.96", "decay_steps=1000",
+     "beta1=0.002", "beta2=0.001", "epsilon=1e-7"});
+  model->setOptimizer(optimizer);
 
-  EXPECT_NO_THROW(model =
-                    ml::train::createModel(ml::train::ModelType::NEURAL_NET));
-
-  EXPECT_NO_THROW(layer = ml::train::layer::Input({"input_shape=1:1:62720",
-                                                   "normalization=true",
-                                                   "bias_initializer=zeros"}));
-  EXPECT_NO_THROW(model->addLayer(layer));
-
-  EXPECT_NO_THROW(
-    layer = ml::train::layer::FullyConnected(
+  //Define layers
+  std::shared_ptr<ml::train::Layer> layer;
+  layer = ml::train::layer::Input({"input_shape=1:1:62720",
+                                   "normalization=true",
+                                   "bias_initializer=zeros"});
+  model->addLayer(layer);
+  
+  layer = ml::train::layer::FullyConnected(
       {"unit= 10", "activation=softmax", "bias_initializer=zeros",
        "weight_regularizer=l2norm", "weight_regularizer_constant=0.005",
        "weight_initializer=xavier_uniform",
-       "input_layers=" + layer->getName()}));
-  EXPECT_NO_THROW(model->addLayer(layer));
+       "input_layers=" + layer->getName()});
+  model->addLayer(layer);
 
-  EXPECT_NO_THROW(
-    optimizer = ml::train::optimizer::Adam(
-      {"learning_rate=0.0001", "decay_rate=0.96", "decay_steps=1000",
-       "beta1=0.002", "beta2=0.001", "epsilon=1e-7"}));
-  EXPECT_NO_THROW(model->setOptimizer(optimizer));
+  layer = ml::train::layer::BackboneNNStreamer({"modelfile=add.tflite",
+   "input_layers=" + layer->getName()});
+  model->addLayer(layer);
 
-  EXPECT_NO_THROW(dataset = ml::train::createDataset(
+
+  //Define dataset
+  //method 1
+  std::shared_ptr<ml::train::Dataset> dataset;
+  dataset = ml::train::createDataset(
                     ml::train::DatasetType::FILE,
                     getTestResPath("trainingSet.dat").c_str(),
-                    getTestResPath("valSet.dat").c_str(), nullptr));
-  EXPECT_EQ(dataset->setProperty(
-              {"label_data=" + getTestResPath("label.dat"), "buffer_size=100"}),
-            ML_ERROR_NONE);
-  EXPECT_EQ(model->setDataset(dataset), ML_ERROR_NONE);
+                    getTestResPath("valSet.dat").c_str(), nullptr);
+  dataset->setProperty(
+              {"label_data=" + getTestResPath("label.dat"), "buffer_size=100"});
+  model->setDataset(dataset);
 
-  EXPECT_EQ(model->setProperty({"loss=cross", "batch_size=16", "epochs=2",
-                                "save_path=model.bin"}),
-            ML_ERROR_NONE);
-  EXPECT_EQ(model->compile(), ML_ERROR_NONE);
-  EXPECT_EQ(model->initialize(), ML_ERROR_NONE);
-  EXPECT_NO_THROW(model->train());
+  //method 2
+  std::shared_ptr<ml::train::Dataset> dataset;
+  dataset = createDataset(ml::train::DatasetType::GENERATOR);
+  dataset->setGeneratorFunc(ml::train::DatasetDataType::DATA_TRAIN,
+                            getBatch_train);
+  dataset->setGeneratorFunc(ml::train::DatasetDataType::DATA_VAL,
+                            getBatch_val);
+
+
+
+
+  //Load the ini file(optional)
+  model->loadFromConfig("model.ini");
+
+  model->compile();
+
+  model->initialize();
+  
+  //Load the pretrained weight(optional)
+  model->readModel();
+
+  model->train();
+
+
+  //Load the ini file(optional)
+  model->loadFromConfig("model.ini");
+
+
+  model->compile();
+
+
+  model->initialize();
+
+  //Load the pretrained weight(optional)
+  model->readModel();
+
+
+  model->train();
+
+
+
+  //Load the ini file(optional)
+  model->loadFromConfig("model.ini");
+
+
+
+  model->compile();
+
+
+
+  model->initialize();
+
+
+  //Load the pretrained weight(optional)
+  model->readModel();
+
+
+
+  model->train();
+
+
+
+
 
   EXPECT_FLOAT_EQ(model->getTrainingLoss(), 2.1934659);
   EXPECT_FLOAT_EQ(model->getValidationLoss(), 2.2051108);
@@ -261,6 +345,7 @@ TEST(nntrainer_ccapi, train_dataset_with_file_01_p) {
  * @brief Neural Network Model Training
  */
 TEST(nntrainer_ccapi, train_dataset_with_generator_01_p) {
+
   std::unique_ptr<ml::train::Model> model;
   std::shared_ptr<ml::train::Layer> layer;
   std::shared_ptr<ml::train::Optimizer> optimizer;
