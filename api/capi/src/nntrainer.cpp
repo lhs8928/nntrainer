@@ -968,6 +968,84 @@ int ml_train_dataset_destroy(ml_train_dataset_h dataset) {
   return status;
 }
 
+int ml_train_model_get_input_dimensions(ml_train_model_h model,
+                                        ml_tensors_info_h *info) {
+  int status = ML_ERROR_NONE;
+  ml_train_model *nnmodel;
+  std::shared_ptr<ml::train::Model> m;
+  returnable f;
+
+  check_feature_state();
+
+  ML_TRAIN_GET_VALID_MODEL_LOCKED(nnmodel, model);
+  ML_TRAIN_ADOPT_LOCK(nnmodel, model_lock);
+  m = nnmodel->model;
+
+  std::vector<nntrainer::TensorDim> dims = m->getInputDimension();
+
+  f = [&]() { return ml_tensors_info_set_count(*info, dims.size()); };
+  status = nntrainer_exception_boundary(f);
+  if (status != ML_ERROR_NONE)
+    return status;
+
+  for (unsigned int i = 0; i < dims.size(); ++i) {
+    f = [&]() {
+      return ml_tensors_info_set_tensor_type(*info, i, ML_TENSOR_TYPE_FLOAT32);
+    };
+    status = nntrainer_exception_boundary(f);
+    if (status != ML_ERROR_NONE)
+      return status;
+
+    f = [&]() {
+      return ml_tensors_info_set_tensor_dimension(*info, i, dims[i].getDim());
+    };
+    status = nntrainer_exception_boundary(f);
+    if (status != ML_ERROR_NONE)
+      return status;
+  }
+
+  return status;
+}
+
+int ml_train_model_get_output_dimensions(ml_train_model_h model,
+                                         ml_tensors_info_h *info) {
+  int status = ML_ERROR_NONE;
+  ml_train_model *nnmodel;
+  std::shared_ptr<ml::train::Model> m;
+  returnable f;
+
+  check_feature_state();
+
+  ML_TRAIN_GET_VALID_MODEL_LOCKED(nnmodel, model);
+  ML_TRAIN_ADOPT_LOCK(nnmodel, model_lock);
+  m = nnmodel->model;
+
+  std::vector<nntrainer::TensorDim> dims = m->getOutputDimension();
+
+  f = [&]() { return ml_tensors_info_set_count(*info, dims.size()); };
+  status = nntrainer_exception_boundary(f);
+  if (status != ML_ERROR_NONE)
+    return status;
+
+  for (unsigned int i = 0; i < dims.size(); ++i) {
+    f = [&]() {
+      return ml_tensors_info_set_tensor_type(*info, i, ML_TENSOR_TYPE_FLOAT32);
+    };
+    status = nntrainer_exception_boundary(f);
+    if (status != ML_ERROR_NONE)
+      return status;
+
+    f = [&]() {
+      return ml_tensors_info_set_tensor_dimension(*info, i, dims[i].getDim());
+    };
+    status = nntrainer_exception_boundary(f);
+    if (status != ML_ERROR_NONE)
+      return status;
+  }
+
+  return status;
+}
+
 #ifdef __cplusplus
 }
 #endif
