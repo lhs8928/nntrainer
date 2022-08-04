@@ -19,6 +19,32 @@
  * @author	Jijoong Moon <jijoong.moon@samsung.com>
  * @bug		No known bugs except for NYI items
  *
+ *
+ * Please note that Dimension is not considered
+ *
+ * ----------------------------------------------------------------------------
+ * |    forward    |  local gradient  |            global gradient            |
+ * ----------------------------------------------------------------------------
+ * |(1) input      |                  |         Too long to describe          |
+ * |(2) deviation  |                  |  (7)*(5)*(4)-(7)*(5)*(2)*(4)/(3)*(2)  |
+ * |(3) variance   |                  |        -1/2(7)*(5)*(2)*(4)/(3)        |
+ * |(4) inv_std    |   -1/2*(4)/(3)   |              (7)*(5)*(2)              |
+ * |(5) gamma      |      (2)*(4)     |                  (7)                  |
+ * |(6) beta       |       sum(7)     |                                       |
+ * |(7) output     |        (7)       |                                       |
+ * ----------------------------------------------------------------------------
+ *
+ *
+ *
+ * (1)-----[-](2)-------------------------------------------[*]--[*]--[+](7)
+ *  |       |     |                                          |    |    |
+ *  |       |     |                                          |    |    |
+ *  --[avg]--     --[**2]--[avg]--[+eps](3)--[1/sqrt(x)](4)---    |    |
+ *                                                                |    |
+ * (5)-------------------------------------------------------------    |
+ *                                                                     |
+ * (6)------------------------------------------------------------------
+ *
  */
 
 #include <bn_layer.h>
@@ -47,7 +73,6 @@ enum BNParams {
 
 BatchNormalizationLayer::BatchNormalizationLayer() :
   Layer(),
-  divider(0),
   bn_props(props::Epsilon(), props::BNPARAMS_MU_INIT(),
            props::BNPARAMS_VAR_INIT(), props::BNPARAMS_BETA_INIT(),
            props::BNPARAMS_GAMMA_INIT(), props::Momentum(), props::Axis(),
@@ -94,11 +119,9 @@ void BatchNormalizationLayer::finalize(InitLayerContext &context) {
 
   dim.setTensorDim(axis, in_dim.getTensorDim(axis));
 
-  divider = 1;
   for (unsigned int i = 0; i < 4; ++i) {
     if (axis != i) {
       axes_to_reduce.push_back(i);
-      divider *= in_dim.getTensorDim(i);
     }
   }
 
@@ -230,18 +253,11 @@ void BatchNormalizationLayer::calcDerivative(RunLayerContext &context) {
     Tensor &dgamma = context.getWeightGrad(wt_idx[BNParams::gamma]);
     t_full.multiply_i(invstd);
     t_full.sum(axes_to_reduce, dgamma);
-
-    /**
-     * This implementation depends on the pre-calculated dbeta calculated.
-     */
-    Tensor &dbeta = context.getWeightGrad(wt_idx[BNParams::beta]);
-    dbeta.divide(divider, t_reduced);
-  } else {
-    deriv.average(axes_to_reduce, t_reduced);
   }
 
-  deriv.subtract(t_reduced, dx);
-  dx.subtract_i(deviation);
+  deriv.subtract(deviation, deviation);
+  deviation.average(axes_to_reduce, t_reduced);
+  deviation.subtract(t_reduced, dx);
 
   invstd.multiply_i(gamma);
   dx.multiply_i(invstd);
@@ -264,18 +280,6 @@ void BatchNormalizationLayer::setBatch(RunLayerContext &context,
                                        unsigned int batch) {
   context.updateTensor(wt_idx[BNParams::deviation], batch);
   context.updateTensor(wt_idx[BNParams::t_full], batch);
-
-  /// reset divider
-  divider = 1;
-  auto input_dim = context.getInput(0).getDim();
-  for (auto axis : axes_to_reduce) {
-    if (axis == 0) {
-      /// @note input dim batch is not updated, it will be more sensible we
-      /// update batch before any node comes to this spot
-      divider *= batch;
-    }
-    divider *= input_dim.getTensorDim(axis);
-  }
 }
 
 } /* namespace nntrainer */
