@@ -279,6 +279,18 @@ Tensor *TensorPool::registerRequestSpec(RequestSpec &&spec) {
   return pool.back().tensor.get();
 }
 
+Tensor *TensorPool::mirroring(const std::string origin_name,
+                              const std::string new_name,
+                              const bool multiout_grad) {
+  name_map[new_name] = name_map[origin_name];
+  Tensor *ret = pool[name_map[origin_name]].tensor.get();
+  if (multiout_grad) {
+    ret->setMultioutGrad(multiout_grad);
+    shared_tensor_list.emplace(ret);
+  }
+  return ret;
+}
+
 TensorPool::RequestSpec &TensorPool::getSourceSpec(const std::string &name) {
   RequestSpec *rs = &pool.at(name_map.at(name));
   while (auto dep_details = std::get_if<DependentDetails>(&rs->details)) {
@@ -323,7 +335,9 @@ Tensor *TensorPool::requestOrExtend(const std::string &name,
                                     const TensorDim &dim,
                                     const std::vector<unsigned int> &exec_order,
                                     TensorLifespan lifespan,
-                                    const Tensor::Initializer &init) {
+                                    const Tensor::Initializer &init,
+                                    const std::string reference_name,
+                                    const bool multiout_grad) {
   NNTR_THROW_IF(lifespan == TensorLifespan::UNMANAGED, std::invalid_argument)
     << "unmanaged life span is not supported";
 
@@ -334,6 +348,9 @@ Tensor *TensorPool::requestOrExtend(const std::string &name,
     NNTR_THROW_IF(t->getInitializer() != init, std::invalid_argument)
       << "tensor initializer mismatch for requestOrExtend name: " << name;
     return extend(name, dim, exec_order, lifespan);
+  } else if (reference_name != "") {
+    extend(reference_name, dim, exec_order, lifespan);
+    return mirroring(reference_name, name, multiout_grad);
   } else {
     return request(name, dim, exec_order, lifespan, init);
   }

@@ -41,11 +41,13 @@ void MultiOutLayer::forwarding(RunLayerContext &context, bool training) {
 
 void MultiOutLayer::calcDerivative(RunLayerContext &context) {
   Tensor &ret = context.getOutgoingDerivative(SINGLE_INOUT_IDX);
-  for (unsigned int idx = 0; idx < context.getNumOutputs(); ++idx) {
-    if (idx == 0) {
-      ret.copy(context.getIncomingDerivative(idx));
-    } else {
-      ret.add_i(context.getIncomingDerivative(idx));
+  if (!context.executeInPlace()) {
+    for (unsigned int idx = 0; idx < context.getNumOutputs(); ++idx) {
+      if (idx == 0) {
+        ret.copy(context.getIncomingDerivative(idx));
+      } else {
+        ret.add_i(context.getIncomingDerivative(idx));
+      }
     }
   }
 }

@@ -48,8 +48,19 @@ void AdditionLayer::calcDerivative(RunLayerContext &context) {
      * Tensor assignement needs to make sure that the previous connected layers
      * are not inplace
      */
-    context.getOutgoingDerivative(idx).copy(
-      context.getIncomingDerivative(SINGLE_INOUT_IDX));
+    Tensor &outgoing_derivative = context.getOutgoingDerivative(idx);
+    const Tensor &incoming_derivative =
+      context.getIncomingDerivative(SINGLE_INOUT_IDX);
+    if (outgoing_derivative.getMultioutGrad()) {
+      if (outgoing_derivative.getInitFlag()) {
+        outgoing_derivative.add_i(incoming_derivative);
+      } else {
+        outgoing_derivative.copy(incoming_derivative);
+        outgoing_derivative.setInitFlag(true);
+      }
+    } else {
+      outgoing_derivative.copy(incoming_derivative);
+    }
   }
 }
 

@@ -233,7 +233,8 @@ public:
    */
   std::vector<Var_Grad *>
   requestInputs(const GraphNode &node, const std::vector<TensorDim> &inputs_dim,
-                const std::vector<std::string> &outputs_name = {});
+                const std::vector<std::string> &outputs_name = {},
+                const std::vector<bool> &multiout = {});
 
   /**
    * @brief     Get all the weights which match the above condition
@@ -455,6 +456,8 @@ public:
    * @param order except execution order
    */
   void flushCacheExcept(unsigned int order);
+
+  void setInitFlag() { tensor_pool.setInitflag(); }
 
 private:
   /** @todo: merge this list to one */

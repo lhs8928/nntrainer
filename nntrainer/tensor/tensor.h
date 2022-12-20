@@ -83,6 +83,8 @@ public:
     name(name_),
     data(nullptr),
     offset(0),
+    multiout_grad(false),
+    initFlag(false),
     src_tensor() {}
 
   /**
@@ -93,7 +95,8 @@ public:
    * @param name Name of the tensor
    */
   Tensor(const TensorDim &d, bool alloc_now,
-         Initializer init = Initializer::NONE, std::string name = "");
+         Initializer init = Initializer::NONE, std::string name = "",
+         bool multiout_grad = false);
 
   /**
    * @brief     Constructor of Tensor with dimension/buf
@@ -1358,6 +1361,14 @@ public:
   Tensor::Initializer getInitializer() const { return initializer; }
   static constexpr float epsilon = 1e-5;
 
+  bool getMultioutGrad() { return multiout_grad; }
+
+  void setMultioutGrad(bool multiout) { multiout_grad = multiout; }
+
+  bool getInitFlag() { return initFlag; }
+
+  void setInitFlag(bool flag) { initFlag = flag; }
+
 private:
   /**< handle the data as a std::shared_ptr<float> type */
   TensorDim dim;
@@ -1368,6 +1379,8 @@ private:
 
   std::shared_ptr<MemoryData<float>> data;
   unsigned int offset;
+  bool multiout_grad;
+  bool initFlag;
 
   /**<
    * When using shared_data with tensor, this stores the ptr of the source

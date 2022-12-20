@@ -93,12 +93,13 @@ static auto rng = [] {
 }();
 
 Tensor::Tensor(const TensorDim &d, bool alloc_now, Tensor::Initializer init,
-               std::string name_) :
+               std::string name_, bool multi_grad) :
   Tensor(name_) {
   if (d.getDataLen() != 0) {
     dim = d;
     strides = d.computeStrides();
     initializer = init;
+    multiout_grad = multi_grad;
 
     if (alloc_now)
       allocate();
