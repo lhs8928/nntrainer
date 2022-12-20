@@ -232,6 +232,50 @@ static std::unique_ptr<NeuralNetwork> split_and_join_dangle() {
   return nn;
 }
 
+static std::unique_ptr<NeuralNetwork> multiout1() {
+  std::unique_ptr<NeuralNetwork> nn(new NeuralNetwork());
+  nn->setProperty({"batch_size=2"});
+
+  auto graph = makeGraph({
+    {"input", {"name=input", "input_shape=1:1:5"}},
+    {"fully_connected", {"name=fc0", "unit=5"}},
+    {"multiout", {"name=multiout"}},
+    {"fully_connected", {"name=fc1", "input_layers=multiout(0)", "unit=4"}},
+    {"fully_connected", {"name=fc2", "input_layers=multiout(1)", "unit=4"}},
+    {"addition", {"name=add", "input_layers=fc1, fc2"}},
+    {"mse", {"name=loss", "input_layers=add"}},
+  });
+  for (auto &node : graph) {
+    nn->addLayer(node);
+  }
+
+  nn->setOptimizer(ml::train::createOptimizer("sgd", {"learning_rate = 0.1"}));
+  return nn;
+}
+
+static std::unique_ptr<NeuralNetwork> multiout2() {
+  std::unique_ptr<NeuralNetwork> nn(new NeuralNetwork());
+  nn->setProperty({"batch_size=2"});
+
+  auto graph = makeGraph({
+    {"input", {"name=input", "input_shape=1:1:5"}},
+    {"fully_connected", {"name=fc0", "unit=5"}},
+    {"multiout", {"name=multiout1"}},
+    {"fully_connected", {"name=fc1", "input_layers=multiout1(0)", "unit=4"}},
+    {"multiout", {"name=multiout2", "input_layers=multiout1(1)"}},
+    {"fully_connected", {"name=fc2", "input_layers=multiout2(0)", "unit=4"}},
+    {"fully_connected", {"name=fc3", "input_layers=multiout2(1)", "unit=4"}},
+    {"addition", {"name=add", "input_layers=fc1, fc2, fc3"}},
+    {"mse", {"name=loss", "input_layers=add"}},
+  });
+  for (auto &node : graph) {
+    nn->addLayer(node);
+  }
+
+  nn->setOptimizer(ml::train::createOptimizer("sgd", {"learning_rate = 0.1"}));
+  return nn;
+}
+
 GTEST_PARAMETER_TEST(
   multiInoutModels, nntrainerModelTest,
   ::testing::ValuesIn({
@@ -248,6 +292,8 @@ GTEST_PARAMETER_TEST(
     mkModelTc_V2(one_to_many, "one_to_many", ModelTestOption::ALL_V2),
     mkModelTc_V2(split_and_join_dangle, "split_and_join_dangle",
                  ModelTestOption::ALL_V2),
+    mkModelTc_V2(multiout1, "multiout1", ModelTestOption::ALL_V2),
+    mkModelTc_V2(multiout2, "multiout2", ModelTestOption::ALL_V2),
   }),
   [](const testing::TestParamInfo<nntrainerModelTest::ParamType> &info) {
     return std::get<1>(info.param);

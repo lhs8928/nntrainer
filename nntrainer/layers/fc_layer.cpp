@@ -119,7 +119,19 @@ void FullyConnectedLayer::calcDerivative(RunLayerContext &context) {
   const Tensor &derivative_ = context.getIncomingDerivative(SINGLE_INOUT_IDX);
   Tensor &ret_ = context.getOutgoingDerivative(SINGLE_INOUT_IDX);
 
-  ret_.dot_deriv_wrt_1(weight, derivative_, false, false);
+  if (ret_.getMultioutGrad()) {
+    if (ret_.getInitFlag()) {
+      Tensor temp;
+      temp.dot_deriv_wrt_1(weight, derivative_, false, false);
+
+      ret_.add_i(temp);
+    } else {
+      ret_.dot_deriv_wrt_1(weight, derivative_, false, false);
+      ret_.setInitFlag(true);
+    }
+  } else {
+    ret_.dot_deriv_wrt_1(weight, derivative_, false, false);
+  }
 }
 
 void FullyConnectedLayer::calcGradient(RunLayerContext &context) {
