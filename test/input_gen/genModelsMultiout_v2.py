@@ -108,6 +108,39 @@ class OneToMany(torch.nn.Module):
         loss = self.loss(d0, labels[0])
         return d0, loss
 
+class Multiout1(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc0 = torch.nn.Linear(5, 5)
+        self.fc1 = torch.nn.Linear(5, 4)
+        self.fc2 = torch.nn.Linear(5, 4)
+        self.loss = torch.nn.MSELoss()
+
+    def forward(self, inputs, labels):
+        out0 = self.fc0(inputs[0])
+        out1 = self.fc1(out0)
+        out2 = self.fc2(out0)
+        out = out1 + out2
+        loss = self.loss(out, labels[0])
+        return out, loss
+
+class Multiout2(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc0 = torch.nn.Linear(5, 5)
+        self.fc1 = torch.nn.Linear(5, 4)
+        self.fc2 = torch.nn.Linear(5, 4)
+        self.fc3 = torch.nn.Linear(5, 4)
+        self.loss = torch.nn.MSELoss()
+
+    def forward(self, inputs, labels):
+        out0 = self.fc0(inputs[0])
+        out1 = self.fc1(out0)
+        out2 = self.fc2(out0)
+        out3 = self.fc3(out0)
+        out = out1 + out2 + out3
+        loss = self.loss(out, labels[0])
+        return out, loss
 
 if __name__ == "__main__":
     record_v2(
@@ -164,6 +197,22 @@ if __name__ == "__main__":
         input_dims=[(5, 2)],
         label_dims=[(5, 1)],
         name="one_to_many"
+    )
+
+    record_v2(
+        Multiout1(),
+        iteration=2,
+        input_dims=[(2, 5)],
+        label_dims=[(2, 4)],
+        name="multiout1"
+    )
+
+    record_v2(
+        Multiout2(),
+        iteration=2,
+        input_dims=[(2, 5)],
+        label_dims=[(2, 4)],
+        name="multiout2"
     )
 
 #    inspect_file("split_and_join_dangle.nnmodelgolden")

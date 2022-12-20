@@ -71,7 +71,19 @@ void ActivationLayer::calcDerivative(RunLayerContext &context) {
   Tensor &ret = context.getOutgoingDerivative(SINGLE_INOUT_IDX);
   Tensor &out = context.getOutput(SINGLE_INOUT_IDX);
 
-  acti_func.run_prime_fn(out, ret, deriv);
+  if (ret.getMultioutGrad()) {
+    if (ret.getInitFlag()) {
+      Tensor temp;
+      acti_func.run_prime_fn(out, temp, deriv);
+
+      ret.add_i(temp);
+    } else {
+      acti_func.run_prime_fn(out, ret, deriv);
+      ret.setInitFlag(true);
+    }
+  } else {
+    acti_func.run_prime_fn(out, ret, deriv);
+  }
 }
 
 void ActivationLayer::exportTo(Exporter &exporter,

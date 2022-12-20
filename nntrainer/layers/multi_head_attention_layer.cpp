@@ -753,9 +753,44 @@ void MultiHeadAttentionLayer::calcDerivative(RunLayerContext &context) {
   const unsigned int value_height = value_dim.height();
   const unsigned int input_value_width_size = value_dim.width();
 
-  d_query.dot_deriv_wrt_1(query_fc_weight, d_projected_query);
-  d_key.dot_deriv_wrt_1(key_fc_weight, d_projected_key);
-  d_value.dot_deriv_wrt_1(value_fc_weight, d_projected_value, false, false);
+  if (d_query.getMultioutGrad()) {
+    Tensor temp;
+    if (d_query.getInitFlag()) {
+      temp.dot_deriv_wrt_1(query_fc_weight, d_projected_query);
+      d_query.add_i(temp);
+    } else {
+      d_query.dot_deriv_wrt_1(query_fc_weight, d_projected_query);
+      d_query.setInitFlag(true);
+    }
+  } else {
+    d_query.dot_deriv_wrt_1(query_fc_weight, d_projected_query);
+  }
+
+  if (d_key.getMultioutGrad()) {
+    Tensor temp;
+    if (d_key.getInitFlag()) {
+      temp.dot_deriv_wrt_1(key_fc_weight, d_projected_key);
+      d_key.add_i(temp);
+    } else {
+      d_key.dot_deriv_wrt_1(key_fc_weight, d_projected_key);
+      d_key.setInitFlag(true);
+    }
+  } else {
+    d_key.dot_deriv_wrt_1(key_fc_weight, d_projected_key);
+  }
+
+  if (d_value.getMultioutGrad()) {
+    Tensor temp;
+    if (d_value.getInitFlag()) {
+      temp.dot_deriv_wrt_1(value_fc_weight, d_projected_value, false, false);
+      d_value.add_i(temp);
+    } else {
+      temp.dot_deriv_wrt_1(value_fc_weight, d_projected_value, false, false);
+      d_value.setInitFlag(true);
+    }
+  } else {
+    d_value.dot_deriv_wrt_1(value_fc_weight, d_projected_value, false, false);
+  }
 }
 
 void MultiHeadAttentionLayer::calcGradient(RunLayerContext &context) {

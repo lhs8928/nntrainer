@@ -383,6 +383,8 @@ void NetworkGraph::backwarding(
     throw std::runtime_error(
       "Error: last layer does not accept label, we can't train");
 
+  tensor_manager->setInitFlag();
+
   for (auto iter = iter_begin; iter != iter_end && !stop_cb(nullptr); iter++) {
     auto &ln = *iter;
     PROFILE_TIME_START(profile_keys.at(ln->getType()));
@@ -664,33 +666,33 @@ void NetworkGraph::inPlaceOptimize() {
   }
 }
 
-/**
- * @brief Set the Inplace Shared Memory Config By Layer object
- *
- * @param lnode layer node object
- * @param shared_var if the variable should be shared
- * @param shared_grad if the gradient should be shared
- */
-static void
-setInplaceSharedMemoryConfigByLayer(const std::shared_ptr<LayerNode> &lnode,
-                                    bool &shared_var, bool &shared_grad) {
-  /** for multiout layer, variables are shared but gradients are not */
-  if (lnode->getType() == MultiOutLayer::type) {
-    shared_var = true;
-    shared_grad = false;
-  } else {
-    shared_var = true;
-    shared_grad = true;
-  }
-  /** @todo for addition layer, variables are not shared but gradients are */
-  /**
-   * @todo for layers which support in-place, both variables and gradients
-   * will be shared.
-   *
-   * @todo add a check here is the layer being checked here can support
-   * in-place or not
-   */
-}
+// /**
+//  * @brief Set the Inplace Shared Memory Config By Layer object
+//  *
+//  * @param lnode layer node object
+//  * @param shared_var if the variable should be shared
+//  * @param shared_grad if the gradient should be shared
+//  */
+// static void
+// setInplaceSharedMemoryConfigByLayer(const std::shared_ptr<LayerNode> &lnode,
+//                                     bool &shared_var, bool &shared_grad) {
+//   /** for multiout layer, variables are shared but gradients are not */
+//   if (lnode->getType() == MultiOutLayer::type) {
+//     shared_var = true;
+//     shared_grad = false;
+//   } else {
+//     shared_var = true;
+//     shared_grad = true;
+//   }
+//   /** @todo for addition layer, variables are not shared but gradients are */
+//   /**
+//    * @todo for layers which support in-place, both variables and gradients
+//    * will be shared.
+//    *
+//    * @todo add a check here is the layer being checked here can support
+//    * in-place or not
+//    */
+// }
 
 std::vector<Var_Grad *>
 NetworkGraph::finalizeContext(const std::shared_ptr<LayerNode> &lnode,
@@ -710,13 +712,26 @@ NetworkGraph::finalizeContext(const std::shared_ptr<LayerNode> &lnode,
    * allocated output. This is necessary for manager to know when this output
    * node is going to be used.
    */
-  std::vector<std::string> input_names;
-  input_names.reserve(prev_inputs.size());
+  std::vector<std::string> input_con_names;
+  input_con_names.reserve(prev_inputs.size());
   std::transform(prev_inputs.begin(), prev_inputs.end(),
-                 std::back_inserter(input_names),
+                 std::back_inserter(input_con_names),
                  [](auto const &vg) { return vg->getName(); });
+
+  std::vector<std::string> input_names;
+  // input_names.reserve(lnode->getNumInputs());
+  for (unsigned int i = 0; i < lnode->getNumInputConnections(); ++i) {
+    input_names.push_back(lnode->getInputConnectionName(i));
+  }
+  std::vector<bool> multiout;
+  multiout.reserve(lnode->getNumInputConnections());
+  std::transform(
+    input_names.begin(), input_names.end(), std::back_inserter(multiout),
+    [&](const std::string input_name) {
+      return getLayerNode(input_name)->getType() == MultiOutLayer::type;
+    });
   const std::vector<Var_Grad *> &inputs = tensor_manager->requestInputs(
-    gnode, init_context.getInputDimensions(), input_names);
+    gnode, init_context.getInputDimensions(), input_con_names, multiout);
 
   /** In-Place optimizations */
   /**
@@ -726,27 +741,28 @@ NetworkGraph::finalizeContext(const std::shared_ptr<LayerNode> &lnode,
    */
   auto out_specs = init_context.getOutSpecs();
   /// @note try move inplace control to finalize
-  bool shared_var = false, shared_grad = false;
   if (lnode->executeInPlace() != InPlace::NONE) {
-    setInplaceSharedMemoryConfigByLayer(lnode, shared_var, shared_grad);
+    // setInplaceSharedMemoryConfigByLayer(lnode, shared_var, shared_grad);
     for (unsigned int i = 0; i < out_specs.size(); ++i) {
       auto &s = out_specs.at(i);
-      if (shared_var) {
-        s.variable_spec.request_type =
-          TensorSpecV2::RequestType::READ_ONLY_VIEW;
-        if (lnode->getType() == IdentityLayer::type) {
-          s.variable_spec.reference_name = inputs[i]->getName();
-        } else {
-          s.variable_spec.reference_name = inputs[0]->getName();
-        }
+      s.variable_spec.request_type = TensorSpecV2::RequestType::READ_ONLY_VIEW;
+      if (lnode->getType() == IdentityLayer::type) {
+        s.variable_spec.reference_name = inputs[i]->getName();
+      } else {
+        s.variable_spec.reference_name = inputs[0]->getName();
       }
-      if (shared_grad && s.gradient_spec) {
+
+      if (s.gradient_spec) {
         s.gradient_spec->request_type =
           TensorSpecV2::RequestType::READ_ONLY_VIEW;
         if (lnode->getType() == IdentityLayer::type) {
           s.gradient_spec->reference_name = inputs[i]->getGradientName();
         } else {
           s.gradient_spec->reference_name = inputs[0]->getGradientName();
+        }
+        if (lnode->getType() == MultiOutLayer::type) {
+          s.gradient_spec->request_type = TensorSpecV2::RequestType::SHARED;
+          s.gradient_spec->multiout_grad = true;
         }
       }
     }

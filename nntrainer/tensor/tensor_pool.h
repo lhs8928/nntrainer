@@ -20,6 +20,7 @@
 #include <limits>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -168,6 +169,9 @@ public:
                   const Tensor::Initializer &init = Tensor::Initializer::NONE,
                   bool is_weight_grad = false);
 
+  Tensor *mirroring(const std::string reference_name,
+                    const std::string new_name, const bool multiout_grad);
+
   /**
    * @brief     Request tensor which is a view of already requested with the
    * given spec
@@ -223,11 +227,11 @@ public:
    * @return Tensor* ptr to either to the existing tensor or newly created
    * tensor
    */
-  Tensor *
-  requestOrExtend(const std::string &name, const TensorDim &dim,
-                  const std::vector<unsigned int> &exec_order,
-                  TensorLifespan lifespan,
-                  const Tensor::Initializer &init = Tensor::Initializer::NONE);
+  Tensor *requestOrExtend(
+    const std::string &name, const TensorDim &dim,
+    const std::vector<unsigned int> &exec_order, TensorLifespan lifespan,
+    const Tensor::Initializer &init = Tensor::Initializer::NONE,
+    const std::string reference_name = "", const bool multiout_grad = false);
 
   /**
    * @brief reidentify the source of already created tensor (or view).
@@ -259,6 +263,12 @@ public:
    *
    */
   void flushCacheExcept(unsigned int order);
+
+  void setInitflag() {
+    for (Tensor *tensor : shared_tensor_list) {
+      tensor->setInitFlag(false);
+    }
+  }
 
 private:
   /**
@@ -357,6 +367,8 @@ private:
   std::unordered_map<std::string, unsigned int>
     name_map;                           /**< indexing of requested tensors */
   std::unique_ptr<MemoryPool> mem_pool; /**< memory pool for the tensors */
+
+  std::unordered_set<Tensor *> shared_tensor_list;
 
   /**
    * @brief     Check if the lifespan leads to long term valitidy

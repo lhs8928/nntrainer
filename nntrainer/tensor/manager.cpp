@@ -185,7 +185,8 @@ static Tensor *requestTensor_(const TensorSpecV2 &spec,
   case RT::UNIQUE:
     return tp.request(name, spec.dim, order, spec.ls, spec.initializer);
   case RT::SHARED:
-    return tp.requestOrExtend(name, spec.dim, order, spec.ls, spec.initializer);
+    return tp.requestOrExtend(name, spec.dim, order, spec.ls, spec.initializer,
+                              spec.reference_name, spec.multiout_grad);
   case RT::READ_ONLY_VIEW:
     return tp.view(name, spec.reference_name, spec.dim, order, spec.ls);
   case RT::MAYBE_MODIFYING_VIEW:
@@ -519,7 +520,8 @@ std::vector<Var_Grad *> Manager::requestTensors(
 std::vector<Var_Grad *>
 Manager::requestInputs(const GraphNode &node,
                        const std::vector<TensorDim> &inputs_dim,
-                       const std::vector<std::string> &outputs_name) {
+                       const std::vector<std::string> &outputs_name,
+                       const std::vector<bool> &multiout) {
   using RT = TensorSpecV2::RequestType;
 
   TensorSpecV2 var_common_spec, grad_common_spec;
@@ -558,6 +560,9 @@ Manager::requestInputs(const GraphNode &node,
       grad_spec.request_type = var_spec.request_type = RT::READ_ONLY_VIEW;
       var_spec.reference_name = outputs_name[idx];
       grad_spec.reference_name = outputs_name[idx] + Var_Grad::grad_suffix;
+      if (multiout[idx]) {
+        grad_spec.request_type = var_spec.request_type = RT::SHARED;
+      }
     } else if (!node.getInputConnections().empty()) {
       grad_spec.request_type = var_spec.request_type = RT::UNIQUE;
     } else {
