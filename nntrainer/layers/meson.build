@@ -6,6 +6,7 @@ layer_sources = [
   'activation_layer.cpp',
   'addition_layer.cpp',
   'attention_layer.cpp',
+  'batchwise_dot_product_layer.cpp',
   'mol_attention_layer.cpp',
   'multi_head_attention_layer.cpp',
   'concat_layer.cpp',

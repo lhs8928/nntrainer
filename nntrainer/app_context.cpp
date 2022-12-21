@@ -33,6 +33,7 @@
 #include <activation_layer.h>
 #include <addition_layer.h>
 #include <attention_layer.h>
+#include <batchwise_dot_product_layer.h>
 #include <bn_layer.h>
 #include <centroid_knn.h>
 #include <concat_layer.h>
@@ -306,6 +307,9 @@ static void add_default_object(AppContext &ac) {
                      LayerType::LAYER_POSITIONAL_ENCODING);
   ac.registerFactory(nntrainer::createLayer<IdentityLayer>, IdentityLayer::type,
                      LayerType::LAYER_IDENTITY);
+  ac.registerFactory(nntrainer::createLayer<BatchwiseDotproductLayer>,
+                     BatchwiseDotproductLayer::type,
+                     LayerType::LAYER_BATCHWISE_DOTPRODUCT);
 
 #ifdef ENABLE_NNSTREAMER_BACKBONE
   ac.registerFactory(nntrainer::createLayer<NNStreamerLayer>,

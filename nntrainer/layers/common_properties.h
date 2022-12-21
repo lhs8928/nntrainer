@@ -1136,6 +1136,36 @@ public:
 };
 
 /**
+ * @brief Transpose query property, indicated that query should be transpose or not
+ *
+ */
+class TransposeQuery : public nntrainer::Property<bool> {
+public:
+  /**
+   * @brief Construct a new TransposeQuery object
+   *
+   */
+  TransposeQuery(bool value = false);
+  static constexpr const char *key = "transpose_query";
+  using prop_tag = bool_prop_tag;
+};
+
+/**
+ * @brief Transpose key property, indicated that key should be transpose or not
+ *
+ */
+class TransposeKey : public nntrainer::Property<bool> {
+public:
+  /**
+   * @brief Construct a new TransposeKey object
+   *
+   */
+  TransposeKey(bool value = false);
+  static constexpr const char *key = "transpose_key";
+  using prop_tag = bool_prop_tag;
+};
+
+/**
  * @brief K property, K is the size of the three projections in MoL attention
  *
  */
