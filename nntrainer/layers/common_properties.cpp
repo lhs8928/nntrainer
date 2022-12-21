@@ -330,6 +330,9 @@ void GenericShape::set(const TensorDim &value) {
 
 ScaledDotProduct::ScaledDotProduct(bool value) { set(value); }
 
+TransposeQuery::TransposeQuery(bool value) { set(value); }
+TransposeKey::TransposeKey(bool value) { set(value); }
+
 NumHeads::NumHeads(unsigned int value) { set(value); }
 
 ReturnAttentionWeight::ReturnAttentionWeight(

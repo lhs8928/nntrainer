@@ -95,6 +95,7 @@ enum LayerType {
   LAYER_RESHAPE,                  /**< Reshape Layer type */
   LAYER_REDUCE_MEAN,              /**< Reduce mean Layer type */
   LAYER_IDENTITY,                 /**< Identity Layer type */
+  LAYER_BATCHWISE_DOTPRODUCT,     /**< Batchwise Dotproduct Layer type */
   LAYER_LOSS_CONSTANT_DERIVATIVE, /**< Synthetic loss layer to feed constant
                                      derivative */
   LAYER_UNKNOWN = ML_TRAIN_LAYER_TYPE_UNKNOWN /**< Unknown */
@@ -252,6 +253,14 @@ namespace layer {
 inline std::unique_ptr<Layer>
 Input(const std::vector<std::string> &properties = {}) {
   return createLayer(LayerType::LAYER_IN, properties);
+}
+
+/**
+ * @brief Helper function to create batchwise dot product layer
+ */
+inline std::unique_ptr<Layer>
+BatchwiseDotproduct(const std::vector<std::string> &properties = {}) {
+  return createLayer(LayerType::LAYER_BATCHWISE_DOTPRODUCT, properties);
 }
 
 /**
