@@ -59,7 +59,8 @@ public:
    */
   virtual unsigned int requestMemory(
     size_t bytes, unsigned int start_time, unsigned int end_time,
-    std::vector<unsigned int> exec_order = std::vector<unsigned int>());
+    std::vector<unsigned int> exec_order = std::vector<unsigned int>(),
+    bool is_wgrad = false);
 
   /**
    * @brief Plan the layout with memory planner
@@ -195,7 +196,10 @@ private:
   std::vector<std::vector<unsigned int>>
     memory_exec_order; /**< execution order for the requested memory */
 
-  void *mem_pool;   /**< memory pool allocated at once */
+  std::vector<bool>
+    memory_is_wgrad; /**< index for identification of weight gradient */
+
+  void *mem_pool; /**< memory pool allocated at once */
 
   size_t pool_size; /**< memory requirement for this pool */
 

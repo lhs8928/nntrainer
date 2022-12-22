@@ -356,8 +356,7 @@ std::vector<Weight *> Manager::requestWeights(
 
   std::vector<unsigned int> var_exec_order(
     {forwarding_order, calcDerivative_order});
-  std::vector<unsigned int> default_grad_exec_order(
-    {calcDerivative_order});
+  std::vector<unsigned int> default_grad_exec_order({calcDerivative_order});
 
   TensorLifespan var_ls = TensorLifespan::MAX_LIFESPAN;
   TensorLifespan grad_ls = TensorLifespan::BACKWARD_FUNC_LIFESPAN;
@@ -391,6 +390,10 @@ std::vector<Weight *> Manager::requestWeights(
                                         var_ls, t_initializer);
 
       if (trainable && need_gradient) {
+        /** We cannot use the tensor shedulding for weight gradient if the
+         * weight is shared. Weight Sharing means, the gradient is not temporal
+         * for each layer anymore and it is hard to overwritten.
+         */
         grad = tensor_pool.requestOrExtend(shared_name + Var_Grad::grad_suffix,
                                            dim, grad_exec_order, grad_ls,
                                            Tensor::Initializer::ZEROS);
@@ -400,10 +403,18 @@ std::vector<Weight *> Manager::requestWeights(
       var =
         weight_pool.request(name, dim, var_exec_order, var_ls, t_initializer);
 
-      if (trainable && need_gradient)
+      if (trainable && need_gradient) {
+        /** is_wgrad is the index which is true when it is the gradient tensor
+         * of weight. If it is true, memory planner schedule based on it to
+         * reduce the memory.
+         */
+        bool is_wgrad = true;
+        if (Weight::isGradientClipByGlobalNorm(clip_by_global_norm))
+          is_wgrad = false;
         grad = tensor_pool.request(name + Var_Grad::grad_suffix, dim,
                                    grad_exec_order, grad_ls,
-                                   Tensor::Initializer::ZEROS);
+                                   Tensor::Initializer::ZEROS, is_wgrad);
+      }
     }
 
     weights_v2.emplace_back(std::make_unique<Weight>(
@@ -421,10 +432,9 @@ std::vector<Weight *> Manager::requestWeights(
  * @brief     Create weights with the given spec
  *
  */
-std::vector<Var_Grad *>
-Manager::requestTensors(const GraphNode &node,
-                        const std::vector<Var_Grad::Spec> &tensors_spec,
-                        bool trainable, const std::vector<std::string> &shared_names) {
+std::vector<Var_Grad *> Manager::requestTensors(
+  const GraphNode &node, const std::vector<Var_Grad::Spec> &tensors_spec,
+  bool trainable, const std::vector<std::string> &shared_names) {
   const auto [forwarding_order, calcGradient_order, calcDerivative_order] =
     node.getExecutionOrder();
 
@@ -442,7 +452,8 @@ Manager::requestTensors(const GraphNode &node,
       var_exec_order.push_back(forwarding_order);
 
     /** usage for tensors gradient in backwarding */
-    if (trainable && enum_class_logical_and(tspan, TensorLifespan::CALC_GRAD_LIFESPAN)) {
+    if (trainable &&
+        enum_class_logical_and(tspan, TensorLifespan::CALC_GRAD_LIFESPAN)) {
       var_exec_order.push_back(calcGradient_order);
       grad_exec_order.push_back(calcGradient_order);
     }
