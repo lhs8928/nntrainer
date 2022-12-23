@@ -1,6 +1,7 @@
 util_sources = [
   'util_func.cpp',
   'profiler.cpp',
+  'tracer.cpp',
   'ini_wrapper.cpp',
   'node_exporter.cpp',
   'base_properties.cpp',
