@@ -198,10 +198,9 @@ public:
    *
    * @return created tensors list
    */
-  std::vector<Var_Grad *>
-  requestTensors(const GraphNode &node,
-                 const std::vector<Var_Grad::Spec> &tensors_spec, bool trainable,
-                 const std::vector<std::string> &shared_names = {});
+  std::vector<Var_Grad *> requestTensors(
+    const GraphNode &node, const std::vector<Var_Grad::Spec> &tensors_spec,
+    bool trainable, const std::vector<std::string> &shared_names = {});
 
   /**
    * @brief     Create tensors with the given spec
@@ -213,7 +212,7 @@ public:
    */
   std::vector<Tensor *> requestWeightOptimizerVariables(
     const std::vector<TensorDim> &dims, const std::string &name,
-    const TensorLifespan &lifespan,
+    const TensorLifespan &lifespan, bool is_grad_clip,
     Tensor::Initializer initializer = Tensor::Initializer::NONE);
 
   /**

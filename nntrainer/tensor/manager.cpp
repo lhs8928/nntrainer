@@ -354,8 +354,15 @@ std::vector<Weight *> Manager::requestWeights(
   const auto [forwarding_order, calcGradient_order, calcDerivative_order] =
     node.getExecutionOrder();
 
-  std::vector<unsigned int> var_exec_order(
+  std::vector<unsigned int> default_var_exec_order(
     {forwarding_order, calcDerivative_order});
+
+  /**
+   *  TODO: This needs to be fixed. calcDerivative does not needs the gradient.
+   *  Howvere, current implementation of loss needs the gradient computation.
+   *  and therefore, if we remove the calcDerivative order, then tests fails.
+   */
+
   std::vector<unsigned int> default_grad_exec_order({calcDerivative_order});
 
   TensorLifespan var_ls = TensorLifespan::MAX_LIFESPAN;
@@ -368,6 +375,7 @@ std::vector<Weight *> Manager::requestWeights(
     auto &[dim, t_initializer, w_reg, w_reg_const, decay, clip_by_global_norm,
            need_gradient, name] = weights_spec.at(i);
     auto grad_exec_order = default_grad_exec_order;
+    auto var_exec_order = default_var_exec_order;
 
     if (trainable)
       grad_exec_order.insert(grad_exec_order.begin(), calcGradient_order);
@@ -377,8 +385,10 @@ std::vector<Weight *> Manager::requestWeights(
      * order with the max exec order where it will be used for clipping and then
      * applied to the weight.
      */
-    if (Weight::isGradientClipByGlobalNorm(clip_by_global_norm))
+    if (Weight::isGradientClipByGlobalNorm(clip_by_global_norm)) {
       grad_exec_order.push_back(TensorPool::PERSIST_END_ORDER);
+      var_exec_order.push_back(TensorPool::PERSIST_END_ORDER);
+    }
 
     Tensor *var = nullptr, *grad = nullptr;
     bool is_dependent = !shared_names.empty();
@@ -610,18 +620,27 @@ bool Manager::isSecondLastAccess(const std::string &name,
  */
 std::vector<Tensor *> Manager::requestWeightOptimizerVariables(
   const std::vector<TensorDim> &dims, const std::string &name,
-  const TensorLifespan &lifespan, Tensor::Initializer initializer) {
+  const TensorLifespan &lifespan, bool is_grad_clip,
+  Tensor::Initializer initializer) {
   auto const exec_order = weight_pool.getExecutionOrder(name);
 
   std::vector<Tensor *> ret;
   ret.reserve(dims.size());
 
+  std::vector<unsigned int> exec;
+  exec.reserve(1);
+  if (is_grad_clip) {
+    exec.emplace_back(TensorPool::PERSIST_END_ORDER);
+  } else {
+    exec.emplace_back(getMinMaxTensorExecutionOrder(name, true).second);
+  }
+
   /// @note this is assuming weight optimizer variables is treated as weight, if
   /// not, there is room to optimize below behavior
   for (unsigned int idx = 0; idx < dims.size(); idx++)
     ret.push_back(weight_pool.request(name + ":opt" + std::to_string(idx),
-                                      dims[idx], exec_order, lifespan,
-                                      initializer));
+                                      // dims[idx], exec_order, lifespan,
+                                      dims[idx], exec, lifespan, initializer));
 
   return ret;
 }
