@@ -33,12 +33,18 @@
 #include <basic_planner.h>
 #include <bn_layer.h>
 #include <graph_node.h>
+#include <grucell.h>
 #include <layer_node.h>
 #include <layer_normalization_layer.h>
+#include <loss/cross_entropy_sigmoid_loss_layer.h>
+#include <loss/cross_entropy_softmax_loss_layer.h>
+#include <loss/mse_loss_layer.h>
 #include <manager.h>
 #include <multiout_layer.h>
 #include <nntrainer_log.h>
 #include <optimized_v1_planner.h>
+#include <optimized_v2_planner.h>
+#include <optimized_v3_planner.h>
 #include <tensor_pool.h>
 #include <tensor_wrap_specs.h>
 #include <util_func.h>
@@ -146,7 +152,7 @@ void Manager::deallocateWeights() { weight_pool.deallocate(); }
 static Tensor *requestTensor_(const TensorSpecV2 &spec,
                               const GraphNode::ExecutionOrder &exec_order,
                               const std::string &scope, TensorPool &tp,
-                              bool expose) {
+                              bool expose, bool trainable) {
   using RT = TensorSpecV2::RequestType;
   using LS = TensorLifespan;
   NNTR_THROW_IF(spec.request_type == RT::MAYBE_MODIFYING_VIEW,
@@ -206,10 +212,10 @@ Var_Grad *Manager::requestTensor(const VarGradSpecV2 &spec,
        "requestInputs() requestTensors() instead";
 
   Tensor *var = requestTensor_(spec.variable_spec, exec_order, scope,
-                               tensor_pool, expose_var);
+                               tensor_pool, expose_var, false);
   Tensor *grad = spec.gradient_spec
                    ? requestTensor_(*spec.gradient_spec, exec_order, scope,
-                                    tensor_pool, expose_grad)
+                                    tensor_pool, expose_grad, false)
                    : nullptr;
 
   /// @note as only supporting identify_as == TensorGroupType::output, only
@@ -524,8 +530,17 @@ Manager::requestInputs(const GraphNode &node,
   if (node.getType() == ActivationLayer::type or
       node.getType() == MultiOutLayer::type or
       node.getType() == BatchNormalizationLayer::type or
-      node.getType() == LayerNormalizationLayer::type)
+      node.getType() == LayerNormalizationLayer::type or !node.getTrainable())
     var_common_spec.ls = TensorLifespan::FORWARD_FUNC_LIFESPAN;
+
+  if (node.getType() == MSELossLayer::type or
+      node.getType() == CrossEntropySoftmaxLossLayer::type or
+      node.getType() == CrossEntropySigmoidLossLayer::type)
+    var_common_spec.ls = TensorLifespan::FORWARD_DERIV_LIFESPAN;
+
+  if (node.getType() == GRUCellLayer::type) {
+    grad_common_spec.ls = TensorLifespan::CALC_GRAD_DERIV_LIFESPAN;
+  }
 
   std::vector<Var_Grad *> ret;
   size_t current_size = inputs_v2.size();
@@ -557,9 +572,9 @@ Manager::requestInputs(const GraphNode &node,
 
     inputs_v2.emplace_back(std::make_unique<Var_Grad>(
       requestTensor_(var_spec, node.getExecutionOrder(), node.getName(),
-                     tensor_pool, false),
+                     tensor_pool, false, node.getTrainable()),
       requestTensor_(grad_spec, node.getExecutionOrder(), node.getName(),
-                     tensor_pool, false)));
+                     tensor_pool, false, node.getTrainable())));
   }
 
   ret.reserve(inputs_dim.size());
@@ -670,7 +685,7 @@ void Manager::flushCacheExcept(unsigned int order) {
 void Manager::finalizeTensorPool(TensorPool &pool, unsigned int start,
                                  unsigned int end) {
   if (enable_optimizations)
-    pool.finalize(OptimizedV1Planner(), start, end);
+    pool.finalize(OptimizedV3Planner(), start, end);
   else
     pool.finalize(BasicPlanner(), start, end);
 }
