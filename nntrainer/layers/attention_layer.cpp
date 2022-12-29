@@ -11,14 +11,17 @@
  *
  */
 
+#include <cmath>
+
 #include <attention_layer.h>
 #include <layer_context.h>
 #include <nntrainer_error.h>
 #include <nntrainer_log.h>
+#include <node_exporter.h>
 
 namespace nntrainer {
 
-AttentionLayer::AttentionLayer() {
+AttentionLayer::AttentionLayer() : attention_props(props::ScaledDotProduct()) {
   wt_idx.fill(std::numeric_limits<unsigned>::max());
 }
 
@@ -84,8 +87,11 @@ void AttentionLayer::forwarding(RunLayerContext &context, bool training) {
   Tensor &score = context.getTensor(wt_idx[AttentionParams::score]);
 
   query.dotBatched(key, score, false, true); /** dot 1 */
-  sm.run_fn(score, weights);                 /** softmax */
-  weights.dotBatched(value, output);         /** dot 2 */
+  if (std::get<props::ScaledDotProduct>(attention_props).get()) {
+    score.multiply_i(1 / sqrt((float)key.getDim().width()));
+  }
+  sm.run_fn(score, weights);         /** softmax */
+  weights.dotBatched(value, output); /** dot 2 */
 }
 
 void AttentionLayer::calcDerivative(RunLayerContext &context) {
@@ -114,6 +120,10 @@ void AttentionLayer::calcDerivative(RunLayerContext &context) {
   Tensor dscore;
   sm.run_prime_fn(weights, dscore, dweight);
 
+  if (std::get<props::ScaledDotProduct>(attention_props).get()) {
+    dscore.multiply_i(1 / sqrt((float)key.getDim().width()));
+  }
+
   /** derivative for dot 1 */
   dquery.dot_batched_deriv_wrt_1(key, dscore, false, true);
   query.dot_batched_deriv_wrt_2(dkey, dscore, false, true,
@@ -121,7 +131,8 @@ void AttentionLayer::calcDerivative(RunLayerContext &context) {
 }
 
 void AttentionLayer::setProperty(const std::vector<std::string> &values) {
-  if (!values.empty()) {
+  auto remain_props = loadProperties(values, attention_props);
+  if (!remain_props.empty()) {
     std::string msg = "[AttentionLayer] Unknown Layer Properties count " +
                       std::to_string(values.size());
     throw exception::not_supported(msg);
