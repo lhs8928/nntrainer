@@ -20,3 +20,4 @@ subdir('AlexNet/jni')
 if get_option('enable-tflite-backbone')
   subdir('SimpleShot')
 endif
+subdir('Transformer')

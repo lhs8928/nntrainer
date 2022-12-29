@@ -166,6 +166,71 @@ makeMultiHeadAttention_disable_need_weights() {
   return nn;
 }
 
+static std::unique_ptr<NeuralNetwork>
+makeMultiHeadAttention_disable_need_weights_disassemble_mha() {
+  std::unique_ptr<NeuralNetwork> nn(new NeuralNetwork());
+  nn->setProperty({"batch_size=3"});
+  const unsigned int num_heads = 2;
+
+  std::vector<LayerRepresentation> graph = {};
+  graph.push_back({"input", {"name=input_2", "input_shape=1:2:6"}});
+  graph.push_back({"input", {"name=input_1", "input_shape=1:2:6"}});
+  graph.push_back({"input", {"name=input_0", "input_shape=1:3:6"}});
+
+  std::string concat_input = "";
+
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back(
+      {"fully_connected",
+       {"name=multi_head_attention/v_fc" + std::to_string(num_heads - 1 - i),
+        "input_layers=input_2", "unit=3", "disable_bias=true"}});
+    graph.push_back(
+      {"fully_connected",
+       {"name=multi_head_attention/k_fc" + std::to_string(num_heads - 1 - i),
+        "input_layers=input_1", "unit=3", "disable_bias=true"}});
+    graph.push_back(
+      {"fully_connected",
+       {"name=multi_head_attention/q_fc" + std::to_string(num_heads - 1 - i),
+        "input_layers=input_0", "unit=3", "disable_bias=true"}});
+    graph.push_back(
+      {"attention",
+       {"name=multi_head_attention/attention" +
+          std::to_string(num_heads - 1 - i),
+        "input_layers=multi_head_attention/q_fc" +
+          std::to_string(num_heads - 1 - i) + ", multi_head_attention/v_fc" +
+          std::to_string(num_heads - 1 - i) + ", multi_head_attention/k_fc" +
+          std::to_string(num_heads - 1 - i),
+        "scaled_dot_product=true"}});
+    concat_input += "multi_head_attention/attention" + std::to_string(i);
+    if (i != num_heads - 1) {
+      concat_input += ",";
+    }
+  }
+  graph.push_back({"concat",
+                   {"name=multi_head_attention/concat",
+                    "input_layers=" + concat_input, "axis=3"}});
+  graph.push_back({"fully_connected",
+                   {"name=multi_head_attention/fc",
+                    "input_layers=multi_head_attention/concat", "unit=6",
+                    "disable_bias=true"}});
+  graph.push_back(
+    {"identity",
+     {"name=multi_head_attention", "input_layers=multi_head_attention/fc"}});
+
+  graph.push_back({"mse", {"name=loss", "input_layers=multi_head_attention"}});
+
+  auto outer_graph = makeGraph(graph);
+
+  for (auto &node : outer_graph) {
+    nn->addLayer(node);
+  }
+
+  nn->setOptimizer(ml::train::createOptimizer("sgd", {"learning_rate = 0.1"}));
+  nn->setProperty({"input_layers=input_0, input_1, input_2"});
+
+  return nn;
+}
+
 static std::unique_ptr<NeuralNetwork> makeMultiHeadAttention() {
   std::unique_ptr<NeuralNetwork> nn(new NeuralNetwork());
   nn->setProperty({"batch_size=3"});
@@ -322,6 +387,109 @@ static std::unique_ptr<NeuralNetwork> makeTransformerEncoderLayer() {
 }
 
 static std::unique_ptr<NeuralNetwork>
+makeTransformerEncoderLayer_disassemble_mha() {
+  std::unique_ptr<NeuralNetwork> nn(new NeuralNetwork());
+  nn->setProperty({"batch_size=3"});
+
+  const unsigned int num_heads = 2;
+
+  std::vector<LayerRepresentation> graph = {};
+
+  std::string concat_input = "";
+  graph.push_back({"input", {"name=encoder_input", "input_shape=1:5:6"}});
+  graph.push_back({"multiout", {"name=encoder_layer1/multi_out1"}});
+
+  concat_input = "";
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back({"fully_connected",
+                     {"name=encoder_layer1/multi_head_attention/v_fc" +
+                        std::to_string(num_heads - 1 - i),
+                      "input_layers=encoder_layer1/multi_out1(" +
+                        std::to_string(2 * num_heads + i) + ")",
+                      "unit=3"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back({"fully_connected",
+                     {"name=encoder_layer1/multi_head_attention/k_fc" +
+                        std::to_string(num_heads - 1 - i),
+                      "input_layers=encoder_layer1/multi_out1(" +
+                        std::to_string(num_heads + i) + ")",
+                      "unit=3"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back(
+      {"fully_connected",
+       {"name=encoder_layer1/multi_head_attention/q_fc" +
+          std::to_string(num_heads - 1 - i),
+        "input_layers=encoder_layer1/multi_out1(" + std::to_string(i) + ")",
+        "unit=3"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back({"attention",
+                     {"name=encoder_layer1/multi_head_attention/attention" +
+                        std::to_string(num_heads - 1 - i),
+                      "input_layers=encoder_layer1/multi_head_attention/q_fc" +
+                        std::to_string(num_heads - 1 - i) +
+                        ", encoder_layer1/multi_head_attention/v_fc" +
+                        std::to_string(num_heads - 1 - i) +
+                        ", encoder_layer1/multi_head_attention/k_fc" +
+                        std::to_string(num_heads - 1 - i),
+                      "scaled_dot_product=true"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    concat_input +=
+      "encoder_layer1/multi_head_attention/attention" + std::to_string(i);
+    if (i != num_heads - 1) {
+      concat_input += ",";
+    }
+  }
+  graph.push_back({"concat",
+                   {"name=encoder_layer1/multi_head_attention/concat",
+                    "input_layers=" + concat_input, "axis=3"}});
+  graph.push_back(
+    {"fully_connected",
+     {"name=encoder_layer1/multi_head_attention/fc",
+      "input_layers=encoder_layer1/multi_head_attention/concat", "unit=6"}});
+  graph.push_back({"identity",
+                   {"name=encoder_layer1/multi_head_attention",
+                    "input_layers=encoder_layer1/multi_head_attention/fc"}});
+
+  graph.push_back(
+    {"addition",
+     {"name=encoder_layer1/add1", "input_layers=encoder_layer1/multi_out1(" +
+                                    std::to_string(3 * num_heads) +
+                                    "), encoder_layer1/multi_head_attention"}});
+  graph.push_back({"layer_normalization",
+                   {"name=encoder_layer1/ln1", "axis=3", "epsilon=1e-5"}});
+  graph.push_back({"multiout", {"name=encoder_layer1/multi_out2"}});
+  graph.push_back(
+    {"fully_connected",
+     {"name=encoder_layer1/fc1", "input_layers=encoder_layer1/multi_out2(0)",
+      "unit=7", "activation=relu"}});
+  graph.push_back({"fully_connected", {"name=encoder_layer1/fc2", "unit=6"}});
+  graph.push_back(
+    {"addition",
+     {"name=add2",
+      "input_layers=encoder_layer1/multi_out2(1), encoder_layer1/fc2"}});
+  graph.push_back(
+    {"layer_normalization", {"name=ln2", "axis=3", "epsilon=1e-5"}});
+  graph.push_back({"multiout", {"name=encoder_output"}});
+
+  graph.push_back({"mse", {"name=loss"}});
+
+  auto outer_graph = makeGraph(graph);
+
+  for (auto &node : outer_graph) {
+    nn->addLayer(node);
+  }
+
+  nn->setOptimizer(ml::train::createOptimizer("sgd", {"learning_rate = 0.1"}));
+  nn->setProperty({"input_layers=encoder_input", "label_layers=loss"});
+
+  return nn;
+}
+
+static std::unique_ptr<NeuralNetwork>
 makeTransformerEncoderLayer_float_attn_mask() {
   std::unique_ptr<NeuralNetwork> nn(new NeuralNetwork());
   nn->setProperty({"batch_size=3"});
@@ -356,8 +524,8 @@ static std::unique_ptr<NeuralNetwork> makeTransformerDecoderLayer() {
   nn->setProperty({"batch_size=3"});
 
   auto outer_graph = makeGraph({
-    {"input", {"name=input_0", "input_shape=1:5:6"}},
-    {"input", {"name=input_1", "input_shape=1:4:6"}},
+    {"input", {"name=input_1", "input_shape=1:5:6"}},
+    {"input", {"name=input_0", "input_shape=1:4:6"}},
     {"multi_head_attention",
      {"name=masked_multi_head_attention",
       "input_layers=input_0, input_0, input_0", "num_heads=2"}},
@@ -381,7 +549,172 @@ static std::unique_ptr<NeuralNetwork> makeTransformerDecoderLayer() {
   }
 
   nn->setOptimizer(ml::train::createOptimizer("sgd", {"learning_rate = 0.1"}));
-  nn->setProperty({"input_layers=input_0, input_1", "label_layers=loss"});
+  nn->setProperty({"input_layers=input_1, input_0", "label_layers=loss"});
+
+  return nn;
+}
+
+static std::unique_ptr<NeuralNetwork>
+makeTransformerDecoderLayer_disassemble_mha() {
+  std::unique_ptr<NeuralNetwork> nn(new NeuralNetwork());
+  nn->setProperty({"batch_size=3"});
+
+  const unsigned int num_heads = 2;
+
+  std::vector<LayerRepresentation> graph = {};
+  graph.push_back({"input", {"name=decoder_input", "input_shape=1:4:6"}});
+  graph.push_back({"multiout", {"name=decoder_layer1/multi_out1"}});
+
+  std::string concat_input = "";
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back({"fully_connected",
+                     {"name=decoder_layer1/masked_multi_head_attention/v_fc" +
+                        std::to_string(num_heads - 1 - i),
+                      "input_layers=decoder_layer1/multi_out1(" +
+                        std::to_string(2 * num_heads + i) + ")",
+                      "unit=3"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back({"fully_connected",
+                     {"name=decoder_layer1/masked_multi_head_attention/k_fc" +
+                        std::to_string(num_heads - 1 - i),
+                      "input_layers=decoder_layer1/multi_out1(" +
+                        std::to_string(num_heads + i) + ")",
+                      "unit=3"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back(
+      {"fully_connected",
+       {"name=decoder_layer1/masked_multi_head_attention/q_fc" +
+          std::to_string(num_heads - 1 - i),
+        "input_layers=decoder_layer1/multi_out1(" + std::to_string(i) + ")",
+        "unit=3"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back(
+      {"attention",
+       {"name=decoder_layer1/masked_multi_head_attention/attention" +
+          std::to_string(num_heads - 1 - i),
+        "input_layers=decoder_layer1/masked_multi_head_attention/q_fc" +
+          std::to_string(num_heads - 1 - i) +
+          ", decoder_layer1/masked_multi_head_attention/v_fc" +
+          std::to_string(num_heads - 1 - i) +
+          ", decoder_layer1/masked_multi_head_attention/k_fc" +
+          std::to_string(num_heads - 1 - i),
+        "scaled_dot_product=true"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    concat_input += "decoder_layer1/masked_multi_head_attention/attention" +
+                    std::to_string(i);
+    if (i != num_heads - 1) {
+      concat_input += ",";
+    }
+  }
+  graph.push_back({"concat",
+                   {"name=decoder_layer1/masked_multi_head_attention/concat",
+                    "input_layers=" + concat_input, "axis=3"}});
+  graph.push_back(
+    {"fully_connected",
+     {"name=decoder_layer1/masked_multi_head_attention/fc",
+      "input_layers=decoder_layer1/masked_multi_head_attention/concat",
+      "unit=6"}});
+  graph.push_back(
+    {"identity",
+     {"name=decoder_layer1/masked_multi_head_attention",
+      "input_layers=decoder_layer1/masked_multi_head_attention/fc"}});
+
+  graph.push_back({"addition",
+                   {"name=decoder_layer1/add1",
+                    "input_layers=decoder_layer1/multi_out1(" +
+                      std::to_string(3 * num_heads) +
+                      "), decoder_layer1/masked_multi_head_attention"}});
+  graph.push_back({"layer_normalization",
+                   {"name=decoder_layer1/ln1", "axis=3", "epsilon=1e-5"}});
+  graph.push_back({"multiout", {"name=decoder_layer1/multi_out2"}});
+
+  concat_input = "";
+
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back({"fully_connected",
+                     {"name=decoder_layer1/multi_head_attention/v_fc" +
+                        std::to_string(num_heads - 1 - i),
+                      "input_layers=encoder_layer1/multi_out1(1)", "unit=3"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back({"fully_connected",
+                     {"name=decoder_layer1/multi_head_attention/k_fc" +
+                        std::to_string(num_heads - 1 - i),
+                      "input_layers=encoder_layer1/multi_out1(0)", "unit=3"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back({"fully_connected",
+                     {"name=decoder_layer1/multi_head_attention/q_fc" +
+                        std::to_string(num_heads - 1 - i),
+                      "input_layers=decoder_layer1/multi_out2(0)", "unit=3"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back({"attention",
+                     {"name=decoder_layer1/multi_head_attention/attention" +
+                        std::to_string(num_heads - 1 - i),
+                      "input_layers=decoder_layer1/multi_head_attention/q_fc" +
+                        std::to_string(num_heads - 1 - i) +
+                        ", decoder_layer1/multi_head_attention/v_fc" +
+                        std::to_string(num_heads - 1 - i) +
+                        ", decoder_layer1/multi_head_attention/k_fc" +
+                        std::to_string(num_heads - 1 - i),
+                      "scaled_dot_product=true"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    concat_input +=
+      "decoder_layer1/multi_head_attention/attention" + std::to_string(i);
+    if (i != num_heads - 1) {
+      concat_input += ",";
+    }
+  }
+  graph.push_back({"concat",
+                   {"name=decoder_layer1/multi_head_attention/concat",
+                    "input_layers=" + concat_input, "axis=3"}});
+  graph.push_back(
+    {"fully_connected",
+     {"name=decoder_layer1/multi_head_attention/fc",
+      "input_layers=decoder_layer1/multi_head_attention/concat", "unit=6"}});
+  graph.push_back({"identity",
+                   {"name=decoder_layer1/multi_head_attention",
+                    "input_layers=decoder_layer1/multi_head_attention/fc"}});
+
+  graph.push_back(
+    {"addition",
+     {"name=decoder_layer1/add2", "input_layers=decoder_layer1/multi_out2(1), "
+                                  "decoder_layer1/multi_head_attention"}});
+  graph.push_back({"layer_normalization",
+                   {"name=decoder_layer1/ln2", "axis=3", "epsilon=1e-5"}});
+  graph.push_back({"multiout", {"name=decoder_layer1/multi_out3"}});
+  graph.push_back(
+    {"fully_connected",
+     {"name=decoder_layer1/fc1", "input_layers=decoder_layer1/multi_out3(0)",
+      "unit=7", "activation=relu"}});
+  graph.push_back({"fully_connected", {"name=decoder_layer1/fc2", "unit=6"}});
+  graph.push_back(
+    {"addition",
+     {"name=add3",
+      "input_layers=decoder_layer1/multi_out3(1), decoder_layer1/fc2"}});
+  graph.push_back({"layer_normalization",
+                   {"name=decoder_layer1/ln3", "axis=3", "epsilon=1e-5"}});
+
+  graph.push_back({"mse", {"name=loss"}});
+
+  graph.push_back({"input", {"name=encoder_input", "input_shape=1:5:6"}});
+  graph.push_back({"multiout", {"name=encoder_layer1/multi_out1"}});
+
+  auto outer_graph = makeGraph(graph);
+
+  for (auto &node : outer_graph) {
+    nn->addLayer(node);
+  }
+
+  nn->setOptimizer(ml::train::createOptimizer("sgd", {"learning_rate = 0.1"}));
+  nn->setProperty(
+    {"input_layers=encoder_input, decoder_input", "label_layers=loss"});
 
   return nn;
 }
@@ -392,10 +725,10 @@ makeTransformerDecoderLayer_float_attn_mask() {
   nn->setProperty({"batch_size=3"});
 
   auto outer_graph = makeGraph({
-    {"input", {"name=input_0", "input_shape=1:5:6"}},
-    {"input", {"name=input_1", "input_shape=1:4:6"}},
-    {"input", {"name=input_2", "input_shape=2:5:5"}},
-    {"input", {"name=input_3", "input_shape=2:5:4"}},
+    {"input", {"name=input_1", "input_shape=1:5:6"}},
+    {"input", {"name=input_0", "input_shape=1:4:6"}},
+    {"input", {"name=input_3", "input_shape=2:4:5"}},
+    {"input", {"name=input_2", "input_shape=2:4:4"}},
     {"multi_head_attention",
      {"name=masked_multi_head_attention",
       "input_layers=input_0, input_0, input_0, input_2", "num_heads=2"}},
@@ -420,7 +753,7 @@ makeTransformerDecoderLayer_float_attn_mask() {
 
   nn->setOptimizer(ml::train::createOptimizer("sgd", {"learning_rate = 0.1"}));
   nn->setProperty(
-    {"input_layers=input_0, input_1, input_2, input_3", "label_layers=loss"});
+    {"input_layers=input_1, input_0, input_3, input_2", "label_layers=loss"});
 
   return nn;
 }
@@ -529,6 +862,254 @@ static std::unique_ptr<NeuralNetwork> makeTransformer_single_layer() {
   });
 
   for (auto &node : encoder_output) {
+    nn->addLayer(node);
+  }
+
+  nn->setOptimizer(ml::train::createOptimizer("sgd", {"learning_rate = 0.1"}));
+  nn->setProperty(
+    {"input_layers=encoder_input, decoder_input", "label_layers=loss"});
+
+  return nn;
+}
+
+static std::unique_ptr<NeuralNetwork>
+makeTransformer_single_layer_disassemble_mha() {
+  std::unique_ptr<NeuralNetwork> nn(new NeuralNetwork());
+  nn->setProperty({"batch_size=3"});
+
+  const unsigned int num_heads = 2;
+
+  std::vector<LayerRepresentation> graph = {};
+  graph.push_back({"input", {"name=decoder_input", "input_shape=1:4:6"}});
+  graph.push_back({"multiout", {"name=decoder_layer1/multi_out1"}});
+
+  std::string concat_input = "";
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back({"fully_connected",
+                     {"name=decoder_layer1/masked_multi_head_attention/v_fc" +
+                        std::to_string(num_heads - 1 - i),
+                      "input_layers=decoder_layer1/multi_out1(" +
+                        std::to_string(2 * num_heads + i) + ")",
+                      "unit=3"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back({"fully_connected",
+                     {"name=decoder_layer1/masked_multi_head_attention/k_fc" +
+                        std::to_string(num_heads - 1 - i),
+                      "input_layers=decoder_layer1/multi_out1(" +
+                        std::to_string(num_heads + i) + ")",
+                      "unit=3"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back(
+      {"fully_connected",
+       {"name=decoder_layer1/masked_multi_head_attention/q_fc" +
+          std::to_string(num_heads - 1 - i),
+        "input_layers=decoder_layer1/multi_out1(" + std::to_string(i) + ")",
+        "unit=3"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back(
+      {"attention",
+       {"name=decoder_layer1/masked_multi_head_attention/attention" +
+          std::to_string(num_heads - 1 - i),
+        "input_layers=decoder_layer1/masked_multi_head_attention/q_fc" +
+          std::to_string(num_heads - 1 - i) +
+          ", decoder_layer1/masked_multi_head_attention/v_fc" +
+          std::to_string(num_heads - 1 - i) +
+          ", decoder_layer1/masked_multi_head_attention/k_fc" +
+          std::to_string(num_heads - 1 - i),
+        "scaled_dot_product=true"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    concat_input += "decoder_layer1/masked_multi_head_attention/attention" +
+                    std::to_string(i);
+    if (i != num_heads - 1) {
+      concat_input += ",";
+    }
+  }
+  graph.push_back({"concat",
+                   {"name=decoder_layer1/masked_multi_head_attention/concat",
+                    "input_layers=" + concat_input, "axis=3"}});
+  graph.push_back(
+    {"fully_connected",
+     {"name=decoder_layer1/masked_multi_head_attention/fc",
+      "input_layers=decoder_layer1/masked_multi_head_attention/concat",
+      "unit=6"}});
+  graph.push_back(
+    {"identity",
+     {"name=decoder_layer1/masked_multi_head_attention",
+      "input_layers=decoder_layer1/masked_multi_head_attention/fc"}});
+
+  graph.push_back({"addition",
+                   {"name=decoder_layer1/add1",
+                    "input_layers=decoder_layer1/multi_out1(" +
+                      std::to_string(3 * num_heads) +
+                      "), decoder_layer1/masked_multi_head_attention"}});
+  graph.push_back({"layer_normalization",
+                   {"name=decoder_layer1/ln1", "axis=3", "epsilon=1e-5"}});
+  graph.push_back({"multiout", {"name=decoder_layer1/multi_out2"}});
+
+  concat_input = "";
+
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back({"fully_connected",
+                     {"name=decoder_layer1/multi_head_attention/v_fc" +
+                        std::to_string(num_heads - 1 - i),
+                      "input_layers=encoder_output(1)", "unit=3"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back({"fully_connected",
+                     {"name=decoder_layer1/multi_head_attention/k_fc" +
+                        std::to_string(num_heads - 1 - i),
+                      "input_layers=encoder_output(0)", "unit=3"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back({"fully_connected",
+                     {"name=decoder_layer1/multi_head_attention/q_fc" +
+                        std::to_string(num_heads - 1 - i),
+                      "input_layers=decoder_layer1/multi_out2(0)", "unit=3"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back({"attention",
+                     {"name=decoder_layer1/multi_head_attention/attention" +
+                        std::to_string(num_heads - 1 - i),
+                      "input_layers=decoder_layer1/multi_head_attention/q_fc" +
+                        std::to_string(num_heads - 1 - i) +
+                        ", decoder_layer1/multi_head_attention/v_fc" +
+                        std::to_string(num_heads - 1 - i) +
+                        ", decoder_layer1/multi_head_attention/k_fc" +
+                        std::to_string(num_heads - 1 - i),
+                      "scaled_dot_product=true"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    concat_input +=
+      "decoder_layer1/multi_head_attention/attention" + std::to_string(i);
+    if (i != num_heads - 1) {
+      concat_input += ",";
+    }
+  }
+  graph.push_back({"concat",
+                   {"name=decoder_layer1/multi_head_attention/concat",
+                    "input_layers=" + concat_input, "axis=3"}});
+  graph.push_back(
+    {"fully_connected",
+     {"name=decoder_layer1/multi_head_attention/fc",
+      "input_layers=decoder_layer1/multi_head_attention/concat", "unit=6"}});
+  graph.push_back({"identity",
+                   {"name=decoder_layer1/multi_head_attention",
+                    "input_layers=decoder_layer1/multi_head_attention/fc"}});
+
+  graph.push_back(
+    {"addition",
+     {"name=decoder_layer1/add2", "input_layers=decoder_layer1/multi_out2(1), "
+                                  "decoder_layer1/multi_head_attention"}});
+  graph.push_back({"layer_normalization",
+                   {"name=decoder_layer1/ln2", "axis=3", "epsilon=1e-5"}});
+  graph.push_back({"multiout", {"name=decoder_layer1/multi_out3"}});
+  graph.push_back(
+    {"fully_connected",
+     {"name=decoder_layer1/fc1", "input_layers=decoder_layer1/multi_out3(0)",
+      "unit=7", "activation=relu"}});
+  graph.push_back({"fully_connected", {"name=decoder_layer1/fc2", "unit=6"}});
+  graph.push_back(
+    {"addition",
+     {"name=add3",
+      "input_layers=decoder_layer1/multi_out3(1), decoder_layer1/fc2"}});
+  graph.push_back({"layer_normalization",
+                   {"name=decoder_layer1/ln3", "axis=3", "epsilon=1e-5"}});
+
+  graph.push_back(
+    {"layer_normalization",
+     {"name=decoder_layer_normalization", "axis=3", "epsilon=1e-5"}});
+
+  graph.push_back({"mse", {"name=loss"}});
+
+  graph.push_back({"input", {"name=encoder_input", "input_shape=1:5:6"}});
+  graph.push_back({"multiout", {"name=encoder_layer1/multi_out1"}});
+
+  concat_input = "";
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back({"fully_connected",
+                     {"name=encoder_layer1/multi_head_attention/v_fc" +
+                        std::to_string(num_heads - 1 - i),
+                      "input_layers=encoder_layer1/multi_out1(" +
+                        std::to_string(2 * num_heads + i) + ")",
+                      "unit=3"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back({"fully_connected",
+                     {"name=encoder_layer1/multi_head_attention/k_fc" +
+                        std::to_string(num_heads - 1 - i),
+                      "input_layers=encoder_layer1/multi_out1(" +
+                        std::to_string(num_heads + i) + ")",
+                      "unit=3"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back(
+      {"fully_connected",
+       {"name=encoder_layer1/multi_head_attention/q_fc" +
+          std::to_string(num_heads - 1 - i),
+        "input_layers=encoder_layer1/multi_out1(" + std::to_string(i) + ")",
+        "unit=3"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    graph.push_back({"attention",
+                     {"name=encoder_layer1/multi_head_attention/attention" +
+                        std::to_string(num_heads - 1 - i),
+                      "input_layers=encoder_layer1/multi_head_attention/q_fc" +
+                        std::to_string(num_heads - 1 - i) +
+                        ", encoder_layer1/multi_head_attention/v_fc" +
+                        std::to_string(num_heads - 1 - i) +
+                        ", encoder_layer1/multi_head_attention/k_fc" +
+                        std::to_string(num_heads - 1 - i),
+                      "scaled_dot_product=true"}});
+  }
+  for (unsigned int i = 0; i < num_heads; ++i) {
+    concat_input +=
+      "encoder_layer1/multi_head_attention/attention" + std::to_string(i);
+    if (i != num_heads - 1) {
+      concat_input += ",";
+    }
+  }
+  graph.push_back({"concat",
+                   {"name=encoder_layer1/multi_head_attention/concat",
+                    "input_layers=" + concat_input, "axis=3"}});
+  graph.push_back(
+    {"fully_connected",
+     {"name=encoder_layer1/multi_head_attention/fc",
+      "input_layers=encoder_layer1/multi_head_attention/concat", "unit=6"}});
+  graph.push_back({"identity",
+                   {"name=encoder_layer1/multi_head_attention",
+                    "input_layers=encoder_layer1/multi_head_attention/fc"}});
+
+  graph.push_back(
+    {"addition",
+     {"name=encoder_layer1/add1", "input_layers=encoder_layer1/multi_out1(" +
+                                    std::to_string(3 * num_heads) +
+                                    "), encoder_layer1/multi_head_attention"}});
+  graph.push_back({"layer_normalization",
+                   {"name=encoder_layer1/ln1", "axis=3", "epsilon=1e-5"}});
+  graph.push_back({"multiout", {"name=encoder_layer1/multi_out2"}});
+  graph.push_back(
+    {"fully_connected",
+     {"name=encoder_layer1/fc1", "input_layers=encoder_layer1/multi_out2(0)",
+      "unit=7", "activation=relu"}});
+  graph.push_back({"fully_connected", {"name=encoder_layer1/fc2", "unit=6"}});
+  graph.push_back(
+    {"addition",
+     {"name=add2",
+      "input_layers=encoder_layer1/multi_out2(1), encoder_layer1/fc2"}});
+  graph.push_back(
+    {"layer_normalization", {"name=ln2", "axis=3", "epsilon=1e-5"}});
+  graph.push_back(
+    {"layer_normalization",
+     {"name=encoder_layer_normalization", "axis=3", "epsilon=1e-5"}});
+  graph.push_back({"multiout", {"name=encoder_output"}});
+
+  auto outer_graph = makeGraph(graph);
+
+  for (auto &node : outer_graph) {
     nn->addLayer(node);
   }
 
@@ -686,6 +1267,349 @@ static std::unique_ptr<NeuralNetwork> makeTransformer_stack_layer() {
   });
 
   for (auto &node : encoder_output) {
+    nn->addLayer(node);
+  }
+
+  nn->setOptimizer(ml::train::createOptimizer("sgd", {"learning_rate = 0.1"}));
+  nn->setProperty(
+    {"input_layers=encoder_input, decoder_input", "label_layers=loss"});
+
+  return nn;
+}
+
+static std::unique_ptr<NeuralNetwork>
+makeTransformer_stack_layer_disassemble_mha() {
+  const unsigned int num_encoder_layer = 2;
+  const unsigned int num_decoder_layer = 2;
+  const unsigned int batch_size = 3;
+  const unsigned int num_heads = 2;
+  const unsigned int encoder_timestep = 5;
+  const unsigned int decoder_timestep = 4;
+  const unsigned int model_dim = 6;
+  const unsigned int fc_unit = 7;
+
+  std::unique_ptr<NeuralNetwork> nn(new NeuralNetwork());
+  nn->setProperty({"batch_size=" + std::to_string(batch_size)});
+
+  std::vector<LayerRepresentation> graph = {};
+  graph.push_back({"input",
+                   {"name=decoder_input",
+                    "input_shape=1:" + std::to_string(decoder_timestep) + ":" +
+                      std::to_string(model_dim)}});
+
+  for (unsigned int i = 0; i < num_decoder_layer; ++i) {
+    graph.push_back(
+      {"multiout", {"name=decoder_layer" + std::to_string(i) + "/multi_out1"}});
+
+    // mha
+    std::string concat_input = "";
+    for (unsigned int j = 0; j < num_heads; ++j) {
+      graph.push_back(
+        {"fully_connected",
+         {"name=decoder_layer" + std::to_string(i) +
+            "/masked_multi_head_attention/v_fc" +
+            std::to_string(num_heads - 1 - j),
+          "input_layers=decoder_layer" + std::to_string(i) + "/multi_out1(" +
+            std::to_string(2 * num_heads + j) + ")",
+          "unit=" + std::to_string(model_dim / num_heads)}});
+    }
+    for (unsigned int j = 0; j < num_heads; ++j) {
+      graph.push_back({"fully_connected",
+                       {"name=decoder_layer" + std::to_string(i) +
+                          "/masked_multi_head_attention/k_fc" +
+                          std::to_string(num_heads - 1 - j),
+                        "input_layers=decoder_layer" + std::to_string(i) +
+                          "/multi_out1(" + std::to_string(num_heads + j) + ")",
+                        "unit=" + std::to_string(model_dim / num_heads)}});
+    }
+    for (unsigned int j = 0; j < num_heads; ++j) {
+      graph.push_back({"fully_connected",
+                       {"name=decoder_layer" + std::to_string(i) +
+                          "/masked_multi_head_attention/q_fc" +
+                          std::to_string(num_heads - 1 - j),
+                        "input_layers=decoder_layer" + std::to_string(i) +
+                          "/multi_out1(" + std::to_string(j) + ")",
+                        "unit=" + std::to_string(model_dim / num_heads)}});
+    }
+    for (unsigned int j = 0; j < num_heads; ++j) {
+      graph.push_back(
+        {"attention",
+         {"name=decoder_layer" + std::to_string(i) +
+            "/masked_multi_head_attention/attention" +
+            std::to_string(num_heads - 1 - j),
+          "input_layers=decoder_layer" + std::to_string(i) +
+            "/masked_multi_head_attention/q_fc" +
+            std::to_string(num_heads - 1 - j) + ", decoder_layer" +
+            std::to_string(i) + "/masked_multi_head_attention/v_fc" +
+            std::to_string(num_heads - 1 - j) + ", decoder_layer" +
+            std::to_string(i) + "/masked_multi_head_attention/k_fc" +
+            std::to_string(num_heads - 1 - j),
+          "scaled_dot_product=true"}});
+    }
+    for (unsigned int j = 0; j < num_heads; ++j) {
+      concat_input += "decoder_layer" + std::to_string(i) +
+                      "/masked_multi_head_attention/attention" +
+                      std::to_string(j);
+      if (j != num_heads - 1) {
+        concat_input += ",";
+      }
+    }
+    graph.push_back({"concat",
+                     {"name=decoder_layer" + std::to_string(i) +
+                        "/masked_multi_head_attention/concat",
+                      "input_layers=" + concat_input, "axis=3"}});
+    graph.push_back({"fully_connected",
+                     {"name=decoder_layer" + std::to_string(i) +
+                        "/masked_multi_head_attention/fc",
+                      "input_layers=decoder_layer" + std::to_string(i) +
+                        "/masked_multi_head_attention/concat",
+                      "unit=" + std::to_string(model_dim)}});
+    graph.push_back({"identity",
+                     {"name=decoder_layer" + std::to_string(i) +
+                        "/masked_multi_head_attention",
+                      "input_layers=decoder_layer" + std::to_string(i) +
+                        "/masked_multi_head_attention/fc"}});
+
+    graph.push_back(
+      {"addition",
+       {"name=decoder_layer" + std::to_string(i) + "/add1",
+        "input_layers=decoder_layer" + std::to_string(i) + "/multi_out1(" +
+          std::to_string(3 * num_heads) + "), decoder_layer" +
+          std::to_string(i) + "/masked_multi_head_attention"}});
+    graph.push_back({"layer_normalization",
+                     {"name=decoder_layer" + std::to_string(i) + "/ln1",
+                      "axis=3", "epsilon=1e-5"}});
+
+    graph.push_back(
+      {"multiout", {"name=decoder_layer" + std::to_string(i) + "/multi_out2"}});
+
+    concat_input = "";
+
+    for (unsigned int j = 0; j < num_heads; ++j) {
+      graph.push_back(
+        {"fully_connected",
+         {"name=decoder_layer" + std::to_string(num_decoder_layer - 1 - i) +
+            "/multi_head_attention/v_fc" + std::to_string(num_heads - 1 - j),
+          "input_layers=encoder_output(" +
+            std::to_string(2 * (num_decoder_layer - i) * num_heads - 1 - j) +
+            ")",
+          "unit=" + std::to_string(model_dim / num_heads)}});
+    }
+    for (unsigned int j = 0; j < num_heads; ++j) {
+      graph.push_back(
+        {"fully_connected",
+         {"name=decoder_layer" + std::to_string(num_decoder_layer - 1 - i) +
+            "/multi_head_attention/k_fc" + std::to_string(num_heads - 1 - j),
+          "input_layers=encoder_output(" +
+            std::to_string(2 * (num_decoder_layer - i) * num_heads - 1 -
+                           num_heads - j) +
+            ")",
+          "unit=" + std::to_string(model_dim / num_heads)}});
+    }
+    for (unsigned int j = 0; j < num_heads; ++j) {
+      graph.push_back(
+        {"fully_connected",
+         {"name=decoder_layer" + std::to_string(num_decoder_layer - 1 - i) +
+            "/multi_head_attention/q_fc" + std::to_string(num_heads - 1 - j),
+          "input_layers=decoder_layer" +
+            std::to_string(num_decoder_layer - 1 - i) + "/multi_out2(" +
+            std::to_string(j) + ")",
+          "unit=" + std::to_string(model_dim / num_heads)}});
+    }
+    for (unsigned int j = 0; j < num_heads; ++j) {
+      graph.push_back(
+        {"attention",
+         {"name=decoder_layer" + std::to_string(num_decoder_layer - 1 - i) +
+            "/multi_head_attention/attention" +
+            std::to_string(num_heads - 1 - j),
+          "input_layers=decoder_layer" +
+            std::to_string(num_decoder_layer - 1 - i) +
+            "/multi_head_attention/q_fc" + std::to_string(num_heads - 1 - j) +
+            ", decoder_layer" + std::to_string(num_decoder_layer - 1 - i) +
+            "/multi_head_attention/v_fc" + std::to_string(num_heads - 1 - j) +
+            ", decoder_layer" + std::to_string(num_decoder_layer - 1 - i) +
+            "/multi_head_attention/k_fc" + std::to_string(num_heads - 1 - j),
+          "scaled_dot_product=true"}});
+    }
+    for (unsigned int j = 0; j < num_heads; ++j) {
+      concat_input += "decoder_layer" +
+                      std::to_string(num_decoder_layer - 1 - i) +
+                      "/multi_head_attention/attention" + std::to_string(j);
+      if (j != num_heads - 1) {
+        concat_input += ",";
+      }
+    }
+    graph.push_back(
+      {"concat",
+       {"name=decoder_layer" + std::to_string(num_decoder_layer - 1 - i) +
+          "/multi_head_attention/concat",
+        "input_layers=" + concat_input, "axis=3"}});
+    graph.push_back(
+      {"fully_connected",
+       {"name=decoder_layer" + std::to_string(num_decoder_layer - 1 - i) +
+          "/multi_head_attention/fc",
+        "input_layers=decoder_layer" +
+          std::to_string(num_decoder_layer - 1 - i) +
+          "/multi_head_attention/concat",
+        "unit=" + std::to_string(model_dim)}});
+    graph.push_back(
+      {"identity",
+       {"name=decoder_layer" + std::to_string(num_decoder_layer - 1 - i) +
+          "/multi_head_attention",
+        "input_layers=decoder_layer" +
+          std::to_string(num_decoder_layer - 1 - i) +
+          "/multi_head_attention/fc"}});
+
+    graph.push_back(
+      {"addition",
+       {"name=decoder_layer" + std::to_string(i) + "/add2",
+        "input_layers=decoder_layer" + std::to_string(i) + "/multi_out2(" +
+          std::to_string(num_heads) + "), decoder_layer" + std::to_string(i) +
+          "/multi_head_attention"}});
+    graph.push_back({"layer_normalization",
+                     {"name=decoder_layer" + std::to_string(i) + "/ln2",
+                      "axis=3", "epsilon=1e-5"}});
+    graph.push_back(
+      {"multiout", {"name=decoder_layer" + std::to_string(i) + "/multi_out3"}});
+
+    graph.push_back(
+      {"fully_connected",
+       {"name=decoder_layer" + std::to_string(i) + "/fc1",
+        "input_layers=decoder_layer" + std::to_string(i) + "/multi_out3(0)",
+        "unit=" + std::to_string(fc_unit), "activation=relu"}});
+    graph.push_back({"fully_connected",
+                     {"name=decoder_layer" + std::to_string(i) + "/fc2",
+                      "unit=" + std::to_string(model_dim)}});
+    graph.push_back(
+      {"addition",
+       {"name=decoder_layer" + std::to_string(i) + "/add3",
+        "input_layers=decoder_layer" + std::to_string(i) +
+          "/multi_out3(1), decoder_layer" + std::to_string(i) + "/fc2"}});
+    graph.push_back({"layer_normalization",
+                     {"name=decoder_layer" + std::to_string(i) + "/ln3",
+                      "axis=3", "epsilon=1e-5"}});
+  }
+
+  graph.push_back(
+    {"layer_normalization",
+     {"name=decoder_layer_normalization", "axis=3", "epsilon=1e-5"}});
+
+  graph.push_back({"mse", {"name=loss"}});
+
+  // encoder
+
+  graph.push_back({"input",
+                   {"name=encoder_input",
+                    "input_shape=1:" + std::to_string(encoder_timestep) + ":" +
+                      std::to_string(model_dim)}});
+
+  for (unsigned int i = 0; i < num_encoder_layer; ++i) {
+    graph.push_back(
+      {"multiout", {"name=encoder_layer" + std::to_string(i) + "/multi_out1"}});
+
+    std::string concat_input = "";
+    for (unsigned int j = 0; j < num_heads; ++j) {
+      graph.push_back(
+        {"fully_connected",
+         {"name=encoder_layer" + std::to_string(i) +
+            "/multi_head_attention/v_fc" + std::to_string(num_heads - 1 - j),
+          "input_layers=encoder_layer" + std::to_string(i) + "/multi_out1(" +
+            std::to_string(2 * num_heads + j) + ")",
+          "unit=" + std::to_string(model_dim / num_heads)}});
+    }
+    for (unsigned int j = 0; j < num_heads; ++j) {
+      graph.push_back(
+        {"fully_connected",
+         {"name=encoder_layer" + std::to_string(i) +
+            "/multi_head_attention/k_fc" + std::to_string(num_heads - 1 - j),
+          "input_layers=encoder_layer" + std::to_string(i) + "/multi_out1(" +
+            std::to_string(num_heads + j) + ")",
+          "unit=" + std::to_string(model_dim / num_heads)}});
+    }
+    for (unsigned int j = 0; j < num_heads; ++j) {
+      graph.push_back(
+        {"fully_connected",
+         {"name=encoder_layer" + std::to_string(i) +
+            "/multi_head_attention/q_fc" + std::to_string(num_heads - 1 - j),
+          "input_layers=encoder_layer" + std::to_string(i) + "/multi_out1(" +
+            std::to_string(j) + ")",
+          "unit=" + std::to_string(model_dim / num_heads)}});
+    }
+    for (unsigned int j = 0; j < num_heads; ++j) {
+      graph.push_back(
+        {"attention",
+         {"name=encoder_layer" + std::to_string(i) +
+            "/multi_head_attention/attention" +
+            std::to_string(num_heads - 1 - j),
+          "input_layers=encoder_layer" + std::to_string(i) +
+            "/multi_head_attention/q_fc" + std::to_string(num_heads - 1 - j) +
+            ", encoder_layer" + std::to_string(i) +
+            "/multi_head_attention/v_fc" + std::to_string(num_heads - 1 - j) +
+            ", encoder_layer" + std::to_string(i) +
+            "/multi_head_attention/k_fc" + std::to_string(num_heads - 1 - j),
+          "scaled_dot_product=true"}});
+    }
+    for (unsigned int j = 0; j < num_heads; ++j) {
+      concat_input += "encoder_layer" + std::to_string(i) +
+                      "/multi_head_attention/attention" + std::to_string(j);
+      if (j != num_heads - 1) {
+        concat_input += ",";
+      }
+    }
+    graph.push_back({"concat",
+                     {"name=encoder_layer" + std::to_string(i) +
+                        "/multi_head_attention/concat",
+                      "input_layers=" + concat_input, "axis=3"}});
+    graph.push_back(
+      {"fully_connected",
+       {"name=encoder_layer" + std::to_string(i) + "/multi_head_attention/fc",
+        "input_layers=encoder_layer" + std::to_string(i) +
+          "/multi_head_attention/concat",
+        "unit=" + std::to_string(model_dim)}});
+    graph.push_back(
+      {"identity",
+       {"name=encoder_layer" + std::to_string(i) + "/multi_head_attention",
+        "input_layers=encoder_layer" + std::to_string(i) +
+          "/multi_head_attention/fc"}});
+
+    graph.push_back(
+      {"addition",
+       {"name=encoder_layer" + std::to_string(i) + "/add1",
+        "input_layers=encoder_layer" + std::to_string(i) + "/multi_out1(" +
+          std::to_string(3 * num_heads) + "), encoder_layer" +
+          std::to_string(i) + "/multi_head_attention"}});
+    graph.push_back({"layer_normalization",
+                     {"name=encoder_layer" + std::to_string(i) + "/ln1",
+                      "axis=3", "epsilon=1e-5"}});
+    graph.push_back(
+      {"multiout", {"name=encoder_layer" + std::to_string(i) + "/multi_out2"}});
+
+    graph.push_back(
+      {"fully_connected",
+       {"name=encoder_layer" + std::to_string(i) + "/fc1",
+        "input_layers=encoder_layer" + std::to_string(i) + "/multi_out2(0)",
+        "unit=" + std::to_string(fc_unit), "activation=relu"}});
+    graph.push_back({"fully_connected",
+                     {"name=encoder_layer" + std::to_string(i) + "/fc2",
+                      "unit=" + std::to_string(model_dim)}});
+    graph.push_back(
+      {"addition",
+       {"name=encoder_layer" + std::to_string(i) + "/add2",
+        "input_layers=encoder_layer" + std::to_string(i) +
+          "/multi_out2(1), encoder_layer" + std::to_string(i) + "/fc2"}});
+    graph.push_back({"layer_normalization",
+                     {"name=encoder_layer" + std::to_string(i) + "/ln2",
+                      "axis=3", "epsilon=1e-5"}});
+  }
+
+  graph.push_back(
+    {"layer_normalization",
+     {"name=encoder_layer_normalization", "axis=3", "epsilon=1e-5"}});
+  graph.push_back({"multiout", {"name=encoder_output"}});
+
+  auto outer_graph = makeGraph(graph);
+
+  for (auto &node : outer_graph) {
     nn->addLayer(node);
   }
 
@@ -882,6 +1806,9 @@ GTEST_PARAMETER_TEST(
     mkModelTc_V2(makeMultiHeadAttention_disable_need_weights,
                  "multi_head_attention_disable_need_weights",
                  ModelTestOption::ALL_V2),
+    mkModelTc_V2(makeMultiHeadAttention_disable_need_weights_disassemble_mha,
+                 "multi_head_attention_disable_need_weights_disassemble_mha",
+                 ModelTestOption::ALL_V2),
     mkModelTc_V2(makeMultiHeadAttention, "multi_head_attention",
                  ModelTestOption::ALL_V2),
     mkModelTc_V2(makeMultiHeadAttention_kdim_vdim,
@@ -900,6 +1827,9 @@ GTEST_PARAMETER_TEST(
                  ModelTestOption::ALL_V2),
     mkModelTc_V2(makeTransformerEncoderLayer, "transformer_encoder_layer",
                  ModelTestOption::ALL_V2),
+    mkModelTc_V2(makeTransformerEncoderLayer_disassemble_mha,
+                 "transformer_encoder_layer_disassemble_mha",
+                 ModelTestOption::ALL_V2),
     mkModelTc_V2(makeTransformerEncoderLayer_float_attn_mask,
                  "transformer_encoder_layer_float_attn_mask",
                  ModelTestOption::ALL_V2),
@@ -908,6 +1838,9 @@ GTEST_PARAMETER_TEST(
                  "transformer_encoder_layer_pseudo_bool_attn_mask",
                  ModelTestOption::ALL_V2),
     mkModelTc_V2(makeTransformerDecoderLayer, "transformer_decoder_layer",
+                 ModelTestOption::ALL_V2),
+    mkModelTc_V2(makeTransformerDecoderLayer_disassemble_mha,
+                 "transformer_decoder_layer_disassemble_mha",
                  ModelTestOption::ALL_V2),
     mkModelTc_V2(makeTransformerDecoderLayer_float_attn_mask,
                  "transformer_decoder_layer_float_attn_mask",
@@ -918,8 +1851,12 @@ GTEST_PARAMETER_TEST(
                  ModelTestOption::ALL_V2),
     mkModelTc_V2(makeTransformer_single_layer, "transformer_single",
                  ModelTestOption::ALL_V2),
+    mkModelTc_V2(makeTransformer_single_layer_disassemble_mha,
+                 "transformer_single_disassemble_mha", ModelTestOption::ALL_V2),
     mkModelTc_V2(makeTransformer_stack_layer, "transformer_stack",
                  ModelTestOption::ALL_V2),
+    mkModelTc_V2(makeTransformer_stack_layer_disassemble_mha,
+                 "transformer_stack_disassemble_mha", ModelTestOption::ALL_V2),
     mkModelTc_V2(makeTransformer_float_attn_mask, "transformer_float_attn_mask",
                  ModelTestOption::ALL_V2),
     mkModelTc_V2(makeTransformer_float_attn_mask,
