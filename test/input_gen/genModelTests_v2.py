@@ -189,7 +189,7 @@ class TransformerDecoderLayer(torch.nn.Module):
         self.provide_attention_mask = provide_attention_mask
 
     def forward(self, inputs, labels):
-        tgt, memory, tgt_mask, memory_mask = (inputs[0], inputs[1], inputs[-2], inputs[-1]) if self.provide_attention_mask else (inputs[0], inputs[1], None, None)
+        memory, tgt, memory_mask, tgt_mask = (inputs[0], inputs[1], inputs[-2], inputs[-1]) if self.provide_attention_mask else (inputs[0], inputs[1], None, None)
         output = self.decoder_layer(tgt, memory, tgt_mask, memory_mask)
 
         loss = self.loss(output, labels[0])
@@ -197,8 +197,8 @@ class TransformerDecoderLayer(torch.nn.Module):
         return output, loss
 
     def input_label_reader(input_dims, label_dims, input_dtypes):
-        tgt_dim, memory_dim, *mask_dims = input_dims
-        tgt_dtype, memory_dtype, *mask_dtypes = input_dtypes
+        memory_dim, tgt_dim, *mask_dims = input_dims
+        memory_dtype, tgt_dtype, *mask_dtypes = input_dtypes
         if mask_dims != []:
             if mask_dtypes[0] == bool:
                 # Since nntrainer does not support bool type tensor yet, convert mask to float type
@@ -214,7 +214,7 @@ class TransformerDecoderLayer(torch.nn.Module):
                 masks = _rand_like(mask_dims, -1e9, mask_dtypes)
         else:
             masks = []
-        inputs = _rand_like([tgt_dim, memory_dim], dtype=[tgt_dtype, memory_dtype] if tgt_dtype is not None and memory_dtype is not None else float) + masks
+        inputs = _rand_like([memory_dim, tgt_dim], dtype=[memory_dtype, tgt_dtype] if memory_dtype is not None and tgt_dtype is not None else float) + masks
         labels = _rand_like(label_dims, dtype=float)
         return inputs, labels
 
@@ -311,31 +311,40 @@ class NonTrainableFC(torch.nn.Module):
         return out, loss
 
 if __name__ == "__main__":
-    record_v2(
-        ReduceMeanLast(),
-        iteration=2,
-        input_dims=[(3, 2,)],
-        label_dims=[(3, 1,)],
-        name="reduce_mean_last",
-    )
+    # record_v2(
+    #     ReduceMeanLast(),
+    #     iteration=2,
+    #     input_dims=[(3, 2,)],
+    #     label_dims=[(3, 1,)],
+    #     name="reduce_mean_last",
+    # )
 
-    record_v2(
-        MolAttention(query_size=6),
-        iteration=2,
-        input_dims=[(3,6), (3,4,6), (3,1,5), (3)],
-        input_dtype=[float, float, float, int],
-        label_dims=[(3,1,6), (3,1,5)],
-        name="mol_attention_masked",
-    )
+    # record_v2(
+    #     MolAttention(query_size=6),
+    #     iteration=2,
+    #     input_dims=[(3,6), (3,4,6), (3,1,5), (3)],
+    #     input_dtype=[float, float, float, int],
+    #     label_dims=[(3,1,6), (3,1,5)],
+    #     name="mol_attention_masked",
+    # )
 
-    record_v2(
-        MolAttention(query_size=6),
-        iteration=2,
-        input_dims=[(3,6), (3,4,6), (3,1,5)],
-        input_dtype=[float, float, float],
-        label_dims=[(3,1,6), (3,1,5)],
-        name="mol_attention",
-    )
+    # record_v2(
+    #     MolAttention(query_size=6),
+    #     iteration=2,
+    #     input_dims=[(3,6), (3,4,6), (3,1,5)],
+    #     input_dtype=[float, float, float],
+    #     label_dims=[(3,1,6), (3,1,5)],
+    #     name="mol_attention",
+    # )
+
+    # record_v2(
+    #     MultiHeadAttention(embed_dim=6, num_heads=2, bias=False, need_weights=False),
+    #     iteration=2,
+    #     input_dims=[(3,3,6), (3,2,6), (3,2,6)],
+    #     label_dims=[(3,3,6)],
+    #     input_dtype=[float, float, float],
+    #     name="multi_head_attention_disable_need_weights",
+    # )
 
     record_v2(
         MultiHeadAttention(embed_dim=6, num_heads=2, bias=False, need_weights=False),
@@ -343,65 +352,74 @@ if __name__ == "__main__":
         input_dims=[(3,3,6), (3,2,6), (3,2,6)],
         label_dims=[(3,3,6)],
         input_dtype=[float, float, float],
-        name="multi_head_attention_disable_need_weights",
+        name="multi_head_attention_disable_need_weights_disassemble_mha",
     )
 
-    record_v2(
-        MultiHeadAttention(embed_dim=6, num_heads=2),
-        iteration=2,
-        input_dims=[(3,3,6), (3,2,6), (3,2,6)],
-        label_dims=[(3,3,6), (3,3,2)],
-        input_dtype=[float, float, float],
-        name="multi_head_attention",
-    )
+    # record_v2(
+    #     MultiHeadAttention(embed_dim=6, num_heads=2),
+    #     iteration=2,
+    #     input_dims=[(3,3,6), (3,2,6), (3,2,6)],
+    #     label_dims=[(3,3,6), (3,3,2)],
+    #     input_dtype=[float, float, float],
+    #     name="multi_head_attention",
+    # )
 
-    record_v2(
-        MultiHeadAttention(embed_dim=6, num_heads=2, kdim=4, vdim=5),
-        iteration=2,
-        input_dims=[(3,3,6), (3,2,4), (3,2,5)],
-        label_dims=[(3,3,6), (3,3,2)],
-        input_dtype=[float, float, float],
-        name="multi_head_attention_kdim_vdim",
-    )
+    # record_v2(
+    #     MultiHeadAttention(embed_dim=6, num_heads=2, kdim=4, vdim=5),
+    #     iteration=2,
+    #     input_dims=[(3,3,6), (3,2,4), (3,2,5)],
+    #     label_dims=[(3,3,6), (3,3,2)],
+    #     input_dtype=[float, float, float],
+    #     name="multi_head_attention_kdim_vdim",
+    # )
 
-    record_v2(
-        MultiHeadAttention(embed_dim=6, num_heads=2, provide_attention_mask=True),
-        iteration=2,
-        input_dims=[(3,3,6), (3,2,6), (3,2,6), (6,3,2)],
-        label_dims=[(3,3,6), (3,3,2)],
-        input_dtype=[float, float, float, float],
-        input_label_reader=MultiHeadAttention.input_label_reader,
-        name="multi_head_attention_float_attn_mask",
-    )
+    # record_v2(
+    #     MultiHeadAttention(embed_dim=6, num_heads=2, provide_attention_mask=True),
+    #     iteration=2,
+    #     input_dims=[(3,3,6), (3,2,6), (3,2,6), (6,3,2)],
+    #     label_dims=[(3,3,6), (3,3,2)],
+    #     input_dtype=[float, float, float, float],
+    #     input_label_reader=MultiHeadAttention.input_label_reader,
+    #     name="multi_head_attention_float_attn_mask",
+    # )
 
-    # @todo: change this pseudo bool type tensor to actual bool tensor
-    record_v2(
-        MultiHeadAttention(embed_dim=6, num_heads=2, provide_attention_mask=True),
-        iteration=2,
-        input_dims=[(3,3,6), (3,2,6), (3,2,6), (6,3,2)],
-        label_dims=[(3,3,6), (3,3,2)],
-        input_dtype=[float, float, float, bool],
-        input_label_reader=MultiHeadAttention.input_label_reader,
-        name="multi_head_attention_pseudo_bool_attn_mask",
-    )
+    # # @todo: change this pseudo bool type tensor to actual bool tensor
+    # record_v2(
+    #     MultiHeadAttention(embed_dim=6, num_heads=2, provide_attention_mask=True),
+    #     iteration=2,
+    #     input_dims=[(3,3,6), (3,2,6), (3,2,6), (6,3,2)],
+    #     label_dims=[(3,3,6), (3,3,2)],
+    #     input_dtype=[float, float, float, bool],
+    #     input_label_reader=MultiHeadAttention.input_label_reader,
+    #     name="multi_head_attention_pseudo_bool_attn_mask",
+    # )
 
-    record_v2(
-        MultiHeadAttention(embed_dim=6, num_heads=2),
-        iteration=2,
-        input_dims=[(3,3,6)],
-        label_dims=[(3,3,6), (3,3,3)],
-        input_dtype=[float],
-        name="multi_head_attention_self_attention",
-    )
+    # record_v2(
+    #     MultiHeadAttention(embed_dim=6, num_heads=2),
+    #     iteration=2,
+    #     input_dims=[(3,3,6)],
+    #     label_dims=[(3,3,6), (3,3,3)],
+    #     input_dtype=[float],
+    #     name="multi_head_attention_self_attention",
+    # )
 
-    record_v2(
-        PositionalEncoding(d_model=6, max_len=7),
-        iteration=1,
-        input_dims=[(3,5,6)],
-        input_dtype=[float],
-        label_dims=[(3,5,6)],
-        name="positional_encoding",
-    )
+    # record_v2(
+    #     PositionalEncoding(d_model=6, max_len=7),
+    #     iteration=1,
+    #     input_dims=[(3,5,6)],
+    #     input_dtype=[float],
+    #     label_dims=[(3,5,6)],
+    #     name="positional_encoding",
+    # )
+
+    # record_v2(
+    #     TransformerEncoderLayer(d_model=6, nhead=2, dim_feedforward=7),
+    #     iteration=2,
+    #     input_dims=[(3,5,6)],
+    #     label_dims=[(3,5,6)],
+    #     input_dtype=[float],
+    #     name="transformer_encoder_layer",
+    # )
 
     record_v2(
         TransformerEncoderLayer(d_model=6, nhead=2, dim_feedforward=7),
@@ -409,57 +427,75 @@ if __name__ == "__main__":
         input_dims=[(3,5,6)],
         label_dims=[(3,5,6)],
         input_dtype=[float],
-        name="transformer_encoder_layer",
+        name="transformer_encoder_layer_disassemble_mha",
     )
 
-    record_v2(
-        TransformerEncoderLayer(d_model=6, nhead=2, dim_feedforward=7, provide_attention_mask=True),
-        iteration=2,
-        input_dims=[(3,5,6), (6,5,5)],
-        label_dims=[(3,5,6)],
-        input_dtype=[float, float],
-        input_label_reader=TransformerEncoderLayer.input_label_reader,
-        name="transformer_encoder_layer_float_attn_mask",
-    )
+    # record_v2(
+    #     TransformerEncoderLayer(d_model=6, nhead=2, dim_feedforward=7, provide_attention_mask=True),
+    #     iteration=2,
+    #     input_dims=[(3,5,6), (6,5,5)],
+    #     label_dims=[(3,5,6)],
+    #     input_dtype=[float, float],
+    #     input_label_reader=TransformerEncoderLayer.input_label_reader,
+    #     name="transformer_encoder_layer_float_attn_mask",
+    # )
 
-    record_v2(
-        TransformerEncoderLayer(d_model=6, nhead=2, dim_feedforward=7, provide_attention_mask=True),
-        iteration=2,
-        input_dims=[(3,5,6), (6,5,5)],
-        label_dims=[(3,5,6)],
-        input_dtype=[float, bool],
-        input_label_reader=TransformerEncoderLayer.input_label_reader,
-        name="transformer_encoder_layer_pseudo_bool_attn_mask",
-    )
+    # record_v2(
+    #     TransformerEncoderLayer(d_model=6, nhead=2, dim_feedforward=7, provide_attention_mask=True),
+    #     iteration=2,
+    #     input_dims=[(3,5,6), (6,5,5)],
+    #     label_dims=[(3,5,6)],
+    #     input_dtype=[float, bool],
+    #     input_label_reader=TransformerEncoderLayer.input_label_reader,
+    #     name="transformer_encoder_layer_pseudo_bool_attn_mask",
+    # )
+
+    # record_v2(
+    #     TransformerDecoderLayer(d_model=6, nhead=2, dim_feedforward=7),
+    #     iteration=2,
+    #     input_dims=[(3,5,6), (3,4,6)],
+    #     label_dims=[(3,4,6)],
+    #     input_dtype=[float, float],
+    #     name="transformer_decoder_layer",
+    # )
 
     record_v2(
         TransformerDecoderLayer(d_model=6, nhead=2, dim_feedforward=7),
         iteration=2,
         input_dims=[(3,5,6), (3,4,6)],
-        label_dims=[(3,5,6)],
+        label_dims=[(3,4,6)],
         input_dtype=[float, float],
-        name="transformer_decoder_layer",
+        name="transformer_decoder_layer_disassemble_mha",
     )
 
-    record_v2(
-        TransformerDecoderLayer(d_model=6, nhead=2, dim_feedforward=7, provide_attention_mask=True),
-        iteration=2,
-        input_dims=[(3,5,6), (3,4,6), (6,5,5), (6,5,4)],
-        label_dims=[(3,5,6)],
-        input_dtype=[float, float, float, float],
-        input_label_reader=TransformerDecoderLayer.input_label_reader,
-        name="transformer_decoder_layer_float_attn_mask",
-    )
+    # record_v2(
+    #     TransformerDecoderLayer(d_model=6, nhead=2, dim_feedforward=7, provide_attention_mask=True),
+    #     iteration=2,
+    #     input_dims=[(3,5,6), (3,4,6), (6,4,5), (6,4,4)],
+    #     label_dims=[(3,4,6)],
+    #     input_dtype=[float, float, float, float],
+    #     input_label_reader=TransformerDecoderLayer.input_label_reader,
+    #     name="transformer_decoder_layer_float_attn_mask",
+    # )
 
-    record_v2(
-        TransformerDecoderLayer(d_model=6, nhead=2, dim_feedforward=7, provide_attention_mask=True),
-        iteration=2,
-        input_dims=[(3,5,6), (3,4,6), (6,5,5), (6,5,4)],
-        label_dims=[(3,5,6)],
-        input_dtype=[float, float, bool, bool],
-        input_label_reader=TransformerDecoderLayer.input_label_reader,
-        name="transformer_decoder_layer_pseudo_bool_attn_mask",
-    )
+    # record_v2(
+    #     TransformerDecoderLayer(d_model=6, nhead=2, dim_feedforward=7, provide_attention_mask=True),
+    #     iteration=2,
+    #     input_dims=[(3,5,6), (3,4,6), (6,4,5), (6,4,4)],
+    #     label_dims=[(3,4,6)],
+    #     input_dtype=[float, float, bool, bool],
+    #     input_label_reader=TransformerDecoderLayer.input_label_reader,
+    #     name="transformer_decoder_layer_pseudo_bool_attn_mask",
+    # )
+
+    # record_v2(
+    #     Transformer(d_model=6, nhead=2, num_encoder_layers=1, num_decoder_layers=1, dim_feedforward=7),
+    #     iteration=2,
+    #     input_dims=[(3,5,6), (3,4,6)],
+    #     label_dims=[(3,4,6)],
+    #     input_dtype=[float, float],
+    #     name="transformer_single",
+    # )
 
     record_v2(
         Transformer(d_model=6, nhead=2, num_encoder_layers=1, num_decoder_layers=1, dim_feedforward=7),
@@ -467,8 +503,17 @@ if __name__ == "__main__":
         input_dims=[(3,5,6), (3,4,6)],
         label_dims=[(3,4,6)],
         input_dtype=[float, float],
-        name="transformer_single",
+        name="transformer_single_disassemble_mha",
     )
+
+    # record_v2(
+    #     Transformer(d_model=6, nhead=2, num_encoder_layers=2, num_decoder_layers=2, dim_feedforward=7),
+    #     iteration=2,
+    #     input_dims=[(3,5,6), (3,4,6)],
+    #     label_dims=[(3,4,6)],
+    #     input_dtype=[float, float],
+    #     name="transformer_stack",
+    # )
 
     record_v2(
         Transformer(d_model=6, nhead=2, num_encoder_layers=2, num_decoder_layers=2, dim_feedforward=7),
@@ -476,59 +521,59 @@ if __name__ == "__main__":
         input_dims=[(3,5,6), (3,4,6)],
         label_dims=[(3,4,6)],
         input_dtype=[float, float],
-        name="transformer_stack",
+        name="transformer_stack_disassemble_mha",
     )
 
-    record_v2(
-        Transformer(d_model=6, nhead=2, num_encoder_layers=2, num_decoder_layers=2, dim_feedforward=7, provide_attention_mask=True),
-        iteration=2,
-        input_dims=[(3,5,6), (3,4,6), (6,5,5), (6,4,4), (6,4,5)],
-        label_dims=[(3,4,6)],
-        input_dtype=[float, float, float, float, float],
-        input_label_reader=Transformer.input_label_reader,
-        name="transformer_float_attn_mask",
-    )
+    # record_v2(
+    #     Transformer(d_model=6, nhead=2, num_encoder_layers=2, num_decoder_layers=2, dim_feedforward=7, provide_attention_mask=True),
+    #     iteration=2,
+    #     input_dims=[(3,5,6), (3,4,6), (6,5,5), (6,4,4), (6,4,5)],
+    #     label_dims=[(3,4,6)],
+    #     input_dtype=[float, float, float, float, float],
+    #     input_label_reader=Transformer.input_label_reader,
+    #     name="transformer_float_attn_mask",
+    # )
 
-    record_v2(
-        Transformer(d_model=6, nhead=2, num_encoder_layers=2, num_decoder_layers=2, dim_feedforward=7, provide_attention_mask=True),
-        iteration=2,
-        input_dims=[(3,5,6), (3,4,6), (6,5,5), (6,4,4), (6,4,5)],
-        label_dims=[(3,4,6)],
-        input_dtype=[float, float, bool, bool, bool],
-        input_label_reader=Transformer.input_label_reader,
-        name="transformer_pseudo_bool_attn_mask",
-    )
+    # record_v2(
+    #     Transformer(d_model=6, nhead=2, num_encoder_layers=2, num_decoder_layers=2, dim_feedforward=7, provide_attention_mask=True),
+    #     iteration=2,
+    #     input_dims=[(3,5,6), (3,4,6), (6,5,5), (6,4,4), (6,4,5)],
+    #     label_dims=[(3,4,6)],
+    #     input_dtype=[float, float, bool, bool, bool],
+    #     input_label_reader=Transformer.input_label_reader,
+    #     name="transformer_pseudo_bool_attn_mask",
+    # )
 
-    fc_relu_decay = FCRelu(decay=True)
-    record_v2(
-        fc_relu_decay,
-        iteration=2,
-        input_dims=[(3,3)],
-        input_dtype=[float],
-        label_dims=[(3,2)],
-        name="fc_relu_decay",
-        optimizer=fc_relu_decay.getOptimizer()
-    )
+    # non_trainable_fc_idx1 = NonTrainableFC(idx=1)
+    # record_v2(
+    #     non_trainable_fc_idx1,
+    #     iteration=2,
+    #     input_dims=[(3,3)],
+    #     input_dtype=[float],
+    #     label_dims=[(3,2)],
+    #     name="non_trainable_fc_idx1"
+    # )
 
-    non_trainable_fc_idx1 = NonTrainableFC(idx=1)
-    record_v2(
-        non_trainable_fc_idx1,
-        iteration=2,
-        input_dims=[(3,3)],
-        input_dtype=[float],
-        label_dims=[(3,2)],
-        name="non_trainable_fc_idx1"
-    )
-
-    non_trainable_fc_idx2 = NonTrainableFC(idx=2)
-    record_v2(
-        non_trainable_fc_idx2,
-        iteration=2,
-        input_dims=[(3,3)],
-        input_dtype=[float],
-        label_dims=[(3,2)],
-        name="non_trainable_fc_idx2"
-    )
+    # non_trainable_fc_idx2 = NonTrainableFC(idx=2)
+    # record_v2(
+    #     non_trainable_fc_idx2,
+    #     iteration=2,
+    #     input_dims=[(3,3)],
+    #     input_dtype=[float],
+    #     label_dims=[(3,2)],
+    #     name="non_trainable_fc_idx2"
+    # )
     
+    # fc_relu_decay = FCRelu(decay=True)
+    # record_v2(
+    #     fc_relu_decay,
+    #     iteration=2,
+    #     input_dims=[(3,3)],
+    #     input_dtype=[float],
+    #     label_dims=[(3,2)],
+    #     name="fc_relu_decay",
+    #     optimizer=fc_relu_decay.getOptimizer()
+    # )
+
     # Function to check the created golden test file
-    inspect_file("fc_relu_decay.nnmodelgolden")
+    # inspect_file("fc_relu_decay.nnmodelgolden")
