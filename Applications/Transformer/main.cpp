@@ -18,7 +18,7 @@ const unsigned int fc_unit = 2048;
 
 bool swap = false;
 bool optimize = true;
-bool optimize_attention = false;
+bool optimize_attention = true;
 bool training = true;
 
 std::shared_ptr<ml::train::Model> genModel() {
