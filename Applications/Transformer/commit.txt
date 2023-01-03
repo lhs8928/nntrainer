@@ -1,0 +1,4 @@
+This commit based on
+1. lhs8928/inplace_precede_concat_layer(c5817ab6)
+2. jihochu:trace(04a1ed2a)
+3. jihochu/mem_usage(f01164d3)
