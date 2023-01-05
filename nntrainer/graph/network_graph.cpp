@@ -654,6 +654,16 @@ NetworkGraph::canExecuteInPlace(const std::shared_ptr<LayerNode> &lnode) {
     return InPlace::RESTRICTING;
   }
 
+  if (lnode->getType() == AdditionLayer::type) {
+    for (unsigned int i = 0; i < lnode->getNumInputConnections(); ++i) {
+      if (getLayerNode(lnode->getInputConnectionName(i))->executeInPlace() !=
+          InPlace::RESTRICTING) {
+        return InPlace::NON_RESTRICTING;
+      }
+    }
+    return InPlace::NONE;
+  }
+
   return InPlace::NONE;
 }
 
@@ -743,10 +753,27 @@ NetworkGraph::finalizeContext(const std::shared_ptr<LayerNode> &lnode,
   /// @note try move inplace control to finalize
   if (lnode->executeInPlace() != InPlace::NONE) {
     // setInplaceSharedMemoryConfigByLayer(lnode, shared_var, shared_grad);
+
+    unsigned int add_inplace_idx = 0;
+    if (lnode->getType() == AdditionLayer::type) {
+      for (auto i = 0u, num_node = lnode->getNumInputConnections();
+           i < num_node; ++i) {
+        if (getLayerNode(lnode->getInputConnectionName(i))->executeInPlace() !=
+            InPlace::RESTRICTING) {
+          add_inplace_idx = i;
+          std::string prop = "add_inplace_idx=" + std::to_string(i);
+          lnode->setProperty({prop});
+          break;
+        }
+      }
+    }
+
     for (unsigned int i = 0; i < out_specs.size(); ++i) {
       auto &s = out_specs.at(i);
       s.variable_spec.request_type = TensorSpecV2::RequestType::READ_ONLY_VIEW;
-      if (lnode->getType() == IdentityLayer::type) {
+      if (lnode->getType() == AdditionLayer::type) {
+        s.variable_spec.reference_name = inputs[add_inplace_idx]->getName();
+      } else if (lnode->getType() == IdentityLayer::type) {
         s.variable_spec.reference_name = inputs[i]->getName();
       } else {
         s.variable_spec.reference_name = inputs[0]->getName();
@@ -755,7 +782,10 @@ NetworkGraph::finalizeContext(const std::shared_ptr<LayerNode> &lnode,
       if (s.gradient_spec) {
         s.gradient_spec->request_type =
           TensorSpecV2::RequestType::READ_ONLY_VIEW;
-        if (lnode->getType() == IdentityLayer::type) {
+        if (lnode->getType() == AdditionLayer::type) {
+          s.gradient_spec->reference_name =
+            inputs[add_inplace_idx]->getGradientName();
+        } else if (lnode->getType() == IdentityLayer::type) {
           s.gradient_spec->reference_name = inputs[i]->getGradientName();
         } else {
           s.gradient_spec->reference_name = inputs[0]->getGradientName();

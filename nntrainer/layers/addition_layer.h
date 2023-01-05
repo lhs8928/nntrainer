@@ -15,6 +15,7 @@
 #define __ADDITION_LAYER_H__
 #ifdef __cplusplus
 
+#include <common_properties.h>
 #include <layer_devel.h>
 
 namespace nntrainer {
@@ -28,7 +29,7 @@ public:
   /**
    * @brief     Constructor of Addition Layer
    */
-  AdditionLayer() : Layer() {}
+  AdditionLayer() : Layer(), add_props(props::AddInplaceIdx()) {}
 
   /**
    * @brief     Destructor of Addition Layer
@@ -68,6 +69,11 @@ public:
   bool supportBackwarding() const override { return true; };
 
   /**
+   * @copydoc Layer::supportInPlace()
+   */
+  bool supportInPlace() const override { return true; }
+
+  /**
    * @copydoc Layer::exportTo(Exporter &exporter, ml::train::ExportMethods
    * method)
    */
@@ -85,6 +91,8 @@ public:
   const std::string getType() const override { return AdditionLayer::type; };
 
   inline static const std::string type = "addition";
+
+  std::tuple<props::AddInplaceIdx> add_props;
 };
 
 } // namespace nntrainer

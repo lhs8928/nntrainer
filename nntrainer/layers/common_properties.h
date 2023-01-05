@@ -91,6 +91,17 @@ public:
 };
 
 /**
+ * @brief unit property, unit is used to measure how many weights are there
+ *
+ */
+class AddInplaceIdx : public nntrainer::Property<uint> {
+public:
+  static constexpr const char *key =
+    "add_inplace_idx";            /**< unique key to access */
+  using prop_tag = uint_prop_tag; /**< property type */
+};
+
+/**
  * @brief trainable property, use this to set and check how if certain layer is
  * trainable
  *
@@ -1136,7 +1147,8 @@ public:
 };
 
 /**
- * @brief Transpose query property, indicated that query should be transpose or not
+ * @brief Transpose query property, indicated that query should be transpose or
+ * not
  *
  */
 class TransposeQuery : public nntrainer::Property<bool> {
