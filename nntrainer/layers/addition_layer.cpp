@@ -14,6 +14,7 @@
 #include <addition_layer.h>
 #include <nntrainer_error.h>
 #include <nntrainer_log.h>
+#include <node_exporter.h>
 #include <util_func.h>
 
 #include <layer_context.h>
@@ -29,28 +30,48 @@ void AdditionLayer::finalize(InitLayerContext &context) {
 void AdditionLayer::forwarding(RunLayerContext &context, bool training) {
   Tensor &hidden_ = context.getOutput(SINGLE_INOUT_IDX);
 
-  /** @todo check possibility for in-place of addition layer */
-  for (unsigned int idx = 0; idx < context.getNumInputs(); ++idx) {
-    const Tensor &input_ = context.getInput(idx);
-    if (!idx) {
-      hidden_.copy(input_);
-    } else {
+  if (!context.executeInPlace()) {
+    /** @todo check possibility for in-place of addition layer */
+    for (unsigned int idx = 0; idx < context.getNumInputs(); ++idx) {
+      const Tensor &input_ = context.getInput(idx);
+      if (!idx) {
+        hidden_.copy(input_);
+      } else {
+        hidden_.add_i(input_);
+      }
+    }
+  } else {
+    auto add_inplace_idx = std::get<props::AddInplaceIdx>(add_props).get();
+
+    for (unsigned int idx = 0; idx < context.getNumInputs(); ++idx) {
+      if (idx == add_inplace_idx) {
+        continue;
+      }
+
+      const Tensor &input_ = context.getInput(idx);
       hidden_.add_i(input_);
     }
   }
 }
 
 void AdditionLayer::calcDerivative(RunLayerContext &context) {
+  const Tensor &incoming_derivative =
+    context.getIncomingDerivative(SINGLE_INOUT_IDX);
 
   for (unsigned int idx = 0; idx < context.getNumInputs(); ++idx) {
+    if (context.executeInPlace()) {
+      auto add_inplace_idx = std::get<props::AddInplaceIdx>(add_props).get();
+      if (add_inplace_idx == idx) {
+        continue;
+      }
+    }
+
     /**
      * TODO: replace this with tensor assignment during optimization.
      * Tensor assignement needs to make sure that the previous connected layers
      * are not inplace
      */
     Tensor &outgoing_derivative = context.getOutgoingDerivative(idx);
-    const Tensor &incoming_derivative =
-      context.getIncomingDerivative(SINGLE_INOUT_IDX);
     if (outgoing_derivative.getMultioutGrad()) {
       if (outgoing_derivative.getInitFlag()) {
         outgoing_derivative.add_i(incoming_derivative);
@@ -65,7 +86,8 @@ void AdditionLayer::calcDerivative(RunLayerContext &context) {
 }
 
 void AdditionLayer::setProperty(const std::vector<std::string> &values) {
-  if (!values.empty()) {
+  auto remain_props = loadProperties(values, add_props);
+  if (!remain_props.empty()) {
     std::string msg = "[AdditionLayer] Unknown Layer Properties count " +
                       std::to_string(values.size());
     throw exception::not_supported(msg);
