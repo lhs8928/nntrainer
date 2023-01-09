@@ -750,8 +750,15 @@ NetworkGraph::finalizeContext(const std::shared_ptr<LayerNode> &lnode,
    * node is going to be used with in-place optimizations.
    */
   auto out_specs = init_context.getOutSpecs();
+
+  auto out_names = lnode->getOutputConnections();
+  bool isOutputConcat =
+    std::any_of(out_names.begin(), out_names.end(), [this](auto out_name) {
+      return getLayerNode(out_name)->getType() == ConcatLayer::type;
+    });
+
   /// @note try move inplace control to finalize
-  if (lnode->executeInPlace() != InPlace::NONE) {
+  if (lnode->executeInPlace() != InPlace::NONE || isOutputConcat) {
     // setInplaceSharedMemoryConfigByLayer(lnode, shared_var, shared_grad);
 
     unsigned int add_inplace_idx = 0;
