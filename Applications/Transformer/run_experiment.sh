@@ -1,32 +1,30 @@
 #!/bin/bash
 
-OPTIMIZE=false
-SWAP=true
+function expriment() {
+    OPTIMIZE=$1
+    SWAP=$2
+    exp_num=$3
 
-if [ "$OPTIMIZE" == "true" ]
-then
-    if [ "$SWAP" == "true" ]
+    if [ "$OPTIMIZE" == "true" ]
     then
-        RESULT_PATH=disassemble_mha_enable_swap_result.txt
+        if [ "$SWAP" == "true" ]
+        then
+            RESULT_PATH=disassemble_mha_enable_swap_result_$exp_num.txt
+        else
+            RESULT_PATH=disassemble_mha_disable_swap_result_$exp_num.txt
+        fi
     else
-        RESULT_PATH=disassemble_mha_disable_swap_result.txt
+        if [ "$SWAP" == "true" ]
+        then
+            RESULT_PATH=normal_mha_enable_swap_result_$exp_num.txt
+        else
+            RESULT_PATH=normal_mha_disable_swap_result_$exp_num.txt
+        fi
     fi
-else
-    if [ "$SWAP" == "true" ]
-    then
-        RESULT_PATH=normal_mha_enable_swap_result.txt
-    else
-        RESULT_PATH=normal_mha_disable_swap_result.txt
-    fi
-fi
-
-NNTRAINER_DIR=~/workspace/git/nntrainer
-pushd $NNTRAINER_DIR
-    source venv3_7/bin/activate
 
     rm $RESULT_PATH
     rm -rf build
-    meson build -Dbuildtype=release
+    meson build -Dbuildtype=release 
     ninja -C build
 
     commit_id=$(git log --oneline -1)
@@ -45,7 +43,7 @@ pushd $NNTRAINER_DIR
         sed -i "s/swap = false/swap = true/" Applications/Transformer/main.cpp
     fi
 
-    for ((i = 1; i < 256; i *= 2))
+    for ((i = 1; i < 128; i *= 2))
     do
         batch=$(($i))
         sed -i "s/batch_size = 128/batch_size = $batch/" test/input_gen/transformer.py
@@ -57,6 +55,7 @@ pushd $NNTRAINER_DIR
 
         sed -i "s/batch_size = 128/batch_size = $batch/" Applications/Transformer/main.cpp
         git diff >> $RESULT_PATH
+        export OMP_NUM_THREADS=1
         ninja -C build && Applications/utils/mem_usage.sh build/Applications/Transformer/nntrainer_transformer &>> $RESULT_PATH
         sed -i "s/batch_size = $batch/batch_size = 128/" Applications/Transformer/main.cpp
     done
@@ -71,6 +70,19 @@ pushd $NNTRAINER_DIR
         sed -i "s/optimize = false/optimize = true/" Applications/Transformer/main.cpp
         sed -i "s/optimize = False/optimize = True/" test/input_gen/transLayer_v2.py
     fi
+}
+
+NNTRAINER_DIR=~/workspace/git/nntrainer
+pushd $NNTRAINER_DIR
+
+    for ((en = 1; en <= 3; en++))
+    do
+        exp_num=$(($en))
+        expriment false false $exp_num
+        expriment true false $exp_num
+        expriment false true $exp_num
+        expriment true true $exp_num
+    done
 
 popd
 rm log_nntrainer_2023*

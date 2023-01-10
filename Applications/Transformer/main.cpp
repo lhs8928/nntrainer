@@ -647,7 +647,7 @@ int main() {
     model->setDataset(ml::train::DatasetModeType::MODE_TRAIN,
                       std::move(train_dataset));
 
-    model->train({"epochs=3"});
+    model->train({"epochs=1"});
   }
 
   return 0;
