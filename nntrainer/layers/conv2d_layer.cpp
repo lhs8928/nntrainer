@@ -55,7 +55,7 @@ static void col2im(const Tensor &col_matrix, const TensorDim &kdim,
                    const std::array<unsigned, 4> &padding,
                    const std::array<props::Stride, CONV2D_DIM> &mstride,
                    const std::array<props::Dilation, CONV2D_DIM> &dilation,
-                   Tensor &image) {
+                   Tensor &image, bool initImage = true) {
   auto [pt, pb, pl, pr] = padding;
 
   unsigned k_height = kdim.height();
@@ -79,7 +79,9 @@ static void col2im(const Tensor &col_matrix, const TensorDim &kdim,
   /// image considering padding
   unsigned im_eff_height = im_height + pt + pb;
   unsigned im_eff_width = im_width + pl + pr;
-  image.setZero();
+  if (initImage) {
+    image.setZero();
+  }
 
   int h_stride_end = im_eff_height - eff_k_height - pt;
   int w_stride_end = im_eff_width - eff_k_width - pl;
@@ -473,7 +475,15 @@ void Conv2DLayer::calcDerivative(RunLayerContext &context) {
       deriv_sub.reshape(
         {filter_size, derivative.width() * derivative.height()});
       filter_kernel.dot(deriv_sub, result, true, false);
-      col2im(result, filter_dim, padding, stride, dilation, in_deriv_sub);
+      bool init_in_deriv_sub =
+        input_derivative.getMultioutGrad() && input_derivative.getInitFlag()
+          ? false
+          : true;
+      col2im(result, filter_dim, padding, stride, dilation, in_deriv_sub,
+             init_in_deriv_sub);
+    }
+    if (input_derivative.getMultioutGrad() && !input_derivative.getInitFlag()) {
+      input_derivative.setInitFlag(true);
     }
   };
 
