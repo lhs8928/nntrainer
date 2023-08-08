@@ -126,8 +126,50 @@ static void *infer_(void *data) {
   return NULL;
 }
 
+static int copy_model_conf_from_res_to_data() {
+  char res_model_conf_path[PATH_MAX];
+  char data_model_conf_path[PATH_MAX];
+  char c;
+  FILE *res_model_conf_file;
+  FILE *data_model_conf_file;
+
+  util_get_resource_path("model.ini", res_model_conf_path, false);
+  res_model_conf_file = fopen(res_model_conf_path, "r");
+  if (res_model_conf_file == NULL) {
+    LOG_E("Error opening model conf file in resource directory");
+    return APP_ERROR_INVALID_PARAMETER;
+  }
+
+  util_get_data_path("model.ini", data_model_conf_path);
+  data_model_conf_file = fopen(data_model_conf_path, "w");
+  if (data_model_conf_file == NULL) {
+    LOG_E("Error opening model conf file in data directory");
+    return APP_ERROR_INVALID_PARAMETER;
+  }
+
+  c = fgetc(res_model_conf_file);
+  while (c != EOF) {
+    fputc(c, data_model_conf_file);
+    c = fgetc(res_model_conf_file);
+  }
+
+  fclose(res_model_conf_file);
+  fclose(data_model_conf_file);
+
+  LOG_D("Copying model conf file from resource directory to data directory "
+        "finished successfully");
+
+  return APP_ERROR_NONE;
+}
+
 static int init_page_(appdata_s *ad, const char *path) {
   int status = APP_ERROR_NONE;
+
+  status = copy_model_conf_from_res_to_data();
+  if (status != APP_ERROR_NONE) {
+    LOG_E("initiating canvas failed");
+    return status;
+  }
 
   LOG_D("moved to %s", path);
 

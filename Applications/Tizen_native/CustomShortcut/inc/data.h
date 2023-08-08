@@ -127,6 +127,14 @@ int util_parse_route(const char *source, char **route, char **data);
 int util_get_resource_path(const char *file, char *full_path, bool shared);
 
 /**
+ * @brief get full data path for given file.
+ * @param[in] file relative file path from data path
+ * @param[out] full_path path of the output file
+ * @retval APP_ERROR_NONE if no error
+ */
+int util_get_data_path(const char *file, char *full_path);
+
+/**
  * @brief save cairo surface to a drawing.
  * @param cr_surface cairo surface to save
  * @param dst destination name, it is save to the data path

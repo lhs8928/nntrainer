@@ -409,7 +409,7 @@ void *data_run_model(void *data) {
   }
 
   LOG_D("start running model");
-  util_get_resource_path("model.ini", model_conf_path, false);
+  util_get_data_path("model.ini", model_conf_path);
   util_get_data_path("label.dat", label_path);
 
   LOG_D("opening file");
@@ -627,7 +627,7 @@ int run_inference_pipeline_(appdata_s *ad, const char *filesrc) {
     return status;
   }
 
-  status = util_get_resource_path("model.ini", trainer_model_path, false);
+  status = util_get_data_path("model.ini", trainer_model_path);
   if (status != APP_ERROR_NONE) {
     LOG_E("error getting data path, reason: %d", status);
     return status;
