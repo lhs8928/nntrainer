@@ -95,12 +95,10 @@ void MemoryPool::allocate() {
   if (mem_pool != nullptr)
     throw std::runtime_error("Memory pool is already allocated");
 
-  std::cout << "allocate memory pool : calloc"<< std::endl;
   mem_pool = calloc(pool_size, 1);
   if (mem_pool == nullptr)
     throw std::runtime_error(
       "Failed to allocate memory: " + std::to_string(pool_size) + "bytes");
-  std::cout << "allocate memory pool : calloc done"<< std::endl;  
 
 #ifdef PROFILE
   static long long seq = 0;

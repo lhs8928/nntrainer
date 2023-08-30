@@ -12,13 +12,13 @@
  */
 
 #include <algorithm>
+#include <fstream>
+#include <iostream>
 #include <memory>
 #include <nntrainer_error.h>
+#include <sstream>
 #include <stdexcept>
 #include <vector>
-#include <iostream>
-#include <fstream>
-#include <sstream>
 
 #include <optimized_v1_planner.h>
 
@@ -136,18 +136,16 @@ size_t OptimizedV1Planner::planLayout(
 
   size_t memory_req = 0;
 
-  std::ifstream iFile (name, std::ios::binary | std::ios::in);
-  if(iFile.good()){
-    std::cout << "file good ------ " << name <<std::endl;    
+  std::ifstream iFile(name, std::ios::binary | std::ios::in);
+  if (iFile.good()) {
     memory_offset.resize(memory_size.size());
-    iFile.read(reinterpret_cast<char*>(&memory_offset[0]), memory_offset.size()*sizeof(size_t));
-    iFile.read(reinterpret_cast<char*>(&memory_req), sizeof(size_t));
-    std::cout << "file good : " <<memory_req << std::endl;
+    iFile.read(reinterpret_cast<char *>(&memory_offset[0]),
+               memory_offset.size() * sizeof(size_t));
+    iFile.read(reinterpret_cast<char *>(&memory_req), sizeof(size_t));
 
     iFile.close();
 
   } else {
-    std::cout << "file not good ------ " << name <<std::endl;        
     /** create memory requests structure array for easier management */
     std::vector<MemoryRequest> requests;
     requests.reserve(memory_size.size());
@@ -210,13 +208,12 @@ size_t OptimizedV1Planner::planLayout(
       memory_req = std::max(memory_req, req.offset + req.size);
       sorted_req.push_back(&req);
     }
-    
+
     std::ofstream wFile;
     wFile.open(name, std::ios::out | std::ios::binary);
     wFile.write(reinterpret_cast<char *>(&memory_offset[0]),
                 memory_offset.size() * sizeof(size_t));
     wFile.write(reinterpret_cast<char *>(&memory_req), sizeof(size_t));
-    std::cout << "file is not good "<< memory_req << std::endl;
     wFile.close();
   }
 

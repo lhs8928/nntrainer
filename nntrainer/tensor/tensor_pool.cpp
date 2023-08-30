@@ -117,7 +117,7 @@ Tensor *TensorPool::view(const std::string &name, const std::string &reference,
 void TensorPool::finalize(const MemoryPlanner &planner,
                           unsigned int start_order, unsigned int end_order,
                           std::string name) {
-  std::cout << name << " start Tensor Pool finalize"<< std::endl;  
+  // std::cout << name << " start Tensor Pool finalize"<< std::endl;
   mem_pool->clear();
   unsigned int bytes_requested = 0;
   /** if execution order is PERSIST_END_ORDER, then we think it has another
@@ -202,8 +202,6 @@ void TensorPool::finalize(const MemoryPlanner &planner,
     bytes_requested += spec.tensor->bytes();
   }
 
-  std::cout << name << " before planLayout done"<< std::endl;
-
   /** 4. finalizeLayout for the memory pool. */
   if (bytes_requested > 0) {
     double efficiency = mem_pool->planLayout(planner, name);
@@ -228,28 +226,22 @@ void TensorPool::allocate() {
   if (minMemoryRequirement() == 0)
     return;
   mem_pool->allocate();
-  
-  std::cout << "syncDependents start" << std::endl;
+
+  // std::cout << "syncDependents start" << std::endl;
   /** set the pointers using the token for all the tensors */
-  unsigned int count =0;
+  unsigned int count = 0;
   for (auto &spec : pool) {
-    std::cout << count ++ << std::endl;
+    // std::cout <<"----- "<< count ++ << std::endl;
     auto details = std::get_if<SourceDetails>(&spec.details);
     if (!details || details->token == 0) {
       continue;
     }
     spec.tensor->setData(mem_pool->getMemory(details->token), 0, true);
-    std::cout << "syncDependents count start: " << count << std::endl;
     syncDependents(spec);
-    std::cout << "syncDependents count end: " << count << std::endl;    
   }
-
-  std::cout << "syncDependents Done" << std::endl;
 
   if (cache_loader)
     cache_loader->init();
-  
-  std::cout << "cache_loader done" << std::endl;  
 }
 
 /**
