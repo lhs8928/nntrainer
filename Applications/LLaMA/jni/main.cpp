@@ -243,15 +243,17 @@ std::vector<LayerHandle> createFeedForwardLayer(const int layer_id, int dim,
   std::vector<LayerHandle> layers;
 
   hidden_dim = 2 * multiplier * hidden_dim / 3;
-
   hidden_dim = MULTIPLE_OF * ((hidden_dim + MULTIPLE_OF - 1) / MULTIPLE_OF);
+
+  layers.push_back(createLayer(
+    "multiout",
+    {withKey("name", "layer" + std::to_string(layer_id) + "/ff_multiout")}));
 
   layers.push_back(
     createLayer("fully_connected",
                 {withKey("name", "layer" + std::to_string(layer_id) + "_ffn_1"),
                  withKey("unit", hidden_dim), withKey("disable_bias", "true"),
                  withKey("input_layers", input_name)}));
-
   layers.push_back(
     createLayer("fully_connected",
                 {withKey("name", "layer" + std::to_string(layer_id) + "_ffn_2"),
@@ -366,6 +368,7 @@ ModelHandle createLLaMA() {
 
   for (auto &layer : layers) {
     model->addLayer(layer);
+    std::cout << layer->getName() <<std::endl;
   }
 
   return model;
@@ -396,6 +399,8 @@ void createAndRun(unsigned int epochs, unsigned int batch_size) {
   if (status) {
     throw std::invalid_argument("model compilation failed!");
   }
+
+  std::cout << "compile finished"<<std::endl;
 
   status = model->initialize();
   if (status) {
@@ -485,6 +490,7 @@ int main(int argc, char *argv[]) {
     //    auto &app_context = nntrainer::AppContext::Global();
     app_context.registerFactory(
       nntrainer::createLayer<custom::RotaryEmbeddingLayer>);
+
   } catch (std::invalid_argument &e) {
     std::cerr << "failed to register factory, reason: " << e.what()
               << std::endl;

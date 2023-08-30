@@ -23,6 +23,7 @@
 namespace nntrainer {
 
 template <typename T = float>
+
 std::vector<std::vector<std::complex<T>>> *
 precompute_freqs_cis(int dim, int seq_len, float theta = 10000.0) {
   std::vector<float> freqs(dim / 2);
@@ -48,6 +49,7 @@ std::tuple<T, T>
 apply_rotary_emb(T real, T imag,
                  std::vector<std::vector<std::complex<T>>> *freqs, int i,
                  int j) {
+
   std::complex<T> input_complex(real, imag);
   std::complex<T> output_complex = input_complex * (*freqs)[i][(int)j / 2];
   return std::make_tuple(output_complex.real(), output_complex.imag());
@@ -226,12 +228,23 @@ void MultiHeadAttentionLayer::finalize(InitLayerContext &context) {
 
   if (activation_type.data_type == TensorDim::DataType::FP32) {
     sm.setActiFunc(ActivationType::ACT_SOFTMAX);
+    
+    int seq_len = query_dim.height();
+    int dimension = query_dim.width();
+    
+    freqs_cis = precompute_freqs_cis<float>(dimension, seq_len);
+    
   } else if (activation_type.data_type == TensorDim::DataType::FP16) {
 #ifdef ENABLE_FP16
     sm.setActiFunc<_FP16>(ActivationType::ACT_SOFTMAX);
+    int seq_len = query_dim.height();
+    int dimension = query_dim.width();
+    
+    freqs_cis_fp16 = precompute_freqs_cis<_FP16>(dimension, seq_len);
 #else
     throw std::invalid_argument("Error: enable-fp16 is not enabled");
 #endif
+
   }
 
   // sm.setActiFunc(ActivationType::ACT_SOFTMAX);
