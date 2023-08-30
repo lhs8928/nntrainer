@@ -150,7 +150,6 @@ void Manager::reinitialize() {
 void Manager::allocateWeights(unsigned int max_exec_order_) {
   if (!weight_pool.isAllocated()) {
     finalizeTensorPool(weight_pool, 0, max_exec_order_, "./weight_pool");
-    std::cout << "weight pool finalizeTensorPool Done" << std::endl;
     weight_pool.allocate();
   }
 }
