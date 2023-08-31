@@ -128,7 +128,67 @@ private:
    */
   float epsilon;
 
-  std::vector<std::vector<std::complex<float>>> *freqs_cis;
+  inline static std::vector<std::vector<std::complex<float>>> *freqs_cis = {};
+
+  template <typename T = float>
+  void precompute_freqs_cis(int dim, int seq_len, float theta = 10000.0) {
+    if (freqs_cis == nullptr) {
+      std::vector<float> freqs(dim / 2);
+      for (int i = 0; i < dim / 2; ++i) {
+        freqs[i] = 1.0 / (std::pow(theta, (2 * i) / static_cast<float>(dim)));
+      }
+
+      auto cis = new std::vector<std::vector<std::complex<T>>>();
+      cis->assign(1024, std::vector<std::complex<T>>(dim / 2, 0));
+
+      for (int i = 0; i < seq_len; ++i) {
+        for (int j = 0; j < dim / 2; ++j) {
+          float angle = i * freqs[j];
+          (*cis)[i][j] = static_cast<std::complex<T>>(std::polar(1.0f, angle));
+        }
+      }
+
+      freqs_cis = cis;
+    }
+  }
+
+  template <typename T = float>
+  std::tuple<T, T> apply_rotary_emb(T real, T imag, int i, int j) {
+    std::complex<float> input_complex(static_cast<float>(real),
+                                      static_cast<float>(imag));
+    std::complex<float> output_complex =
+      input_complex * (*freqs_cis)[i][(int)j / 2];
+    return std::make_tuple(static_cast<T>(output_complex.real()),
+                           static_cast<T>(output_complex.imag()));
+  }
+
+  template <typename T = float>
+  Tensor apply_rotary_emb_tensor(Tensor in, unsigned int dim,
+                                 unsigned int from) {
+    Tensor out(in.getDim());
+    for (int b = 0; b < (int)in.batch(); b++) {
+      for (int c = 0; c < (int)in.channel(); c++) {
+        for (int h = 0; h < (int)in.height(); h++) {
+          for (int w = 0; w < (int)in.width(); w = w + 2) {
+#ifdef ENABLE_FP16
+            _FP16 real = in.getValue<_FP16>(b, c, h, w);
+            _FP16 imag = in.getValue<_FP16>(b, c, h, w + 1);
+            std::tie(real, imag) =
+              apply_rotary_emb<_FP16>(real, imag, from + h, w % dim);
+#else
+            float real = in.getValue(b, c, h, w);
+            float imag = in.getValue(b, c, h, w + 1);
+            std::tie(real, imag) =
+              apply_rotary_emb<float>(real, imag, from + h, w % dim);
+#endif
+            out.setValue(b, c, h, w, real);
+            out.setValue(b, c, h, w + 1, imag);
+          }
+        }
+      }
+    }
+    return out;
+  }
 
   /**
    * @brief calculate common derivative
