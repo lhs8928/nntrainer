@@ -42,7 +42,7 @@ int const NUM_VOCAB = 96000;
 int MAX_SEQ_LEN = 1024;
 int NUM_TO_GENERATE = 1;
 
-constexpr unsigned int INIT_SEQ_LEN = 30;
+constexpr unsigned int INIT_SEQ_LEN = 3;
 unsigned int batch_size = 1;
 unsigned int epoch = 1;
 
@@ -51,7 +51,7 @@ float training_loss = 0.0;
 float validation_loss = 0.0;
 bool swap = false;
 
-bool optimize = false;
+bool optimize = true;
 
 /**
  * @brief make "key=value" from key and value
@@ -160,6 +160,7 @@ std::vector<LayerHandle> createAttentionLayer(const int layer_id, int seq_len,
         "rotary_embedding",
         {withKey("name", "layer" + std::to_string(layer_id) + "_q_rotary_" +
                            std::to_string(i)),
+         //  withKey("print", "true"),
          withKey("input_layers", "layer" + std::to_string(layer_id) +
                                    "_q_reshape_" + std::to_string(i))}));
 
@@ -373,7 +374,7 @@ void createAndRun(unsigned int epochs, unsigned int batch_size) {
   model->setProperty({withKey("batch_size", batch_size),
                       withKey("epochs", epochs),
                       // #ifdef ENABLE_FP16
-                      withKey("model_tensor_type", "FP16-FP16"),
+                      // withKey("model_tensor_type", "FP16-FP16"),
                       // #endif
                       withKey("save_path", "test_model.bin")});
 
@@ -392,8 +393,9 @@ void createAndRun(unsigned int epochs, unsigned int batch_size) {
 
   // model->summarize(std::cout, ML_TRAIN_SUMMARY_MODEL);
 
-  std::string weight_path =
-    optimize ? "./llama_v2_att.bin" : "./summarization_v2_fp16.bin";
+  std::string weight_path = optimize
+                              ? "/home/hs89lee/2ndHDD/llama_v2_updated.bin"
+                              : "/home/hs89lee/2ndHDD/llama_updated_mha.bin";
   model->load(weight_path);
 
   std::vector<float *> input;
@@ -403,9 +405,68 @@ void createAndRun(unsigned int epochs, unsigned int batch_size) {
 
   float *input_sample = (float *)malloc(sizeof(float) * data_size);
   // float init_data[INIT_SEQ_LEN] = {5058, 10832};
-  float init_data[INIT_SEQ_LEN] = {
-    0,  1,  2,  3,  4,  5,   6,   7,   8,   9,   10,  20,  30,  40,
-    50, 60, 70, 80, 90, 100, 200, 300, 400, 500, 600, 700, 800, 900};
+  // float init_data[INIT_SEQ_LEN] = {
+  //   0,  1,  2,  3,  4,  5,   6,   7,   8,   9,   10,  20,  30,  40,
+  //   50, 60, 70, 80, 90, 100, 200, 300, 400, 500, 600, 700, 800, 900};
+
+  // float init_data[INIT_SEQ_LEN] = {7571, 3701, 3794, 14982, 423, 587, 4615,
+  // 422, 7077, 706, 484, 7478, 1392, 656, 257, 1907, 2641, 262, 25762, 286};
+
+  // float init_data[INIT_SEQ_LEN] = {1648, 4286, 39, 12330, 6835};
+
+  float init_data[INIT_SEQ_LEN] = {1648, 4286, 39};
+
+  // float init_data[INIT_SEQ_LEN] = { 1648,  4286,    39, 12330,  6835,  7840,
+  // 50444,   679,  1260, 10224, 663, 17124,  1783,  1014, 40994,  3097,  1324,
+  // 277,  8422,  5192, 288, 82847,   330,   277, 14989, 26464,  2011,   484,
+  // 641, 15764, 321,  2047,  1117,    27,   592, 18835, 72083, 18735,   288,
+  // 28383, 329,  1579,    26,    93, 56094, 49342,   311,  2137,   288, 14989,
+  // 641,  2139, 10326,   412,   277,   885,    29,    26, 22953, 10019,
+  // 663, 28669,   321, 35595, 56502,  2255,  3848,    27, 13126, 50444,
+  // 679,  1260,  3080,   728,  1929,  1783,   288, 28383,   330, 13042,
+  // 15888,    35,    30,    30, 55580,   467,   288,  1579,    26,    93,
+  // 56094,  1206,  7738, 64975, 13889,   329, 23171,  1909,    25,   288,
+  // 15500,   330,  7840,  8264,    27,  2268,  6835,  7840, 28383, 12017,
+  // 277,  1579,    26,    93, 56094,  7738, 64975, 13889,   329, 23171,
+  // 1909,  2776,   499, 18835, 72083,   322,   288, 82847,   433,  3085,
+  // 22,  2268,  6835,  7840, 50631,  5486,   288, 22569,    39,  2046,
+  // 25007,   288, 50444,   679,  1260,  3080,   728,  1929,    27,  2268,
+  // 38035,   898,  1260, 14615,  1324,   611, 26522,   592, 33948, 78076,
+  // 288, 18835, 72083,   641,  7560,   321,   277, 49478,  9835,    25,
+  // 329,  1248,   641,  1350,  7242, 17312,    27,   592, 15500,   330,
+  // 7840,    25, 85873,   277,  4267,    25,  8264,   467,   288, 28383,
+  // 641, 29914,   311,  1783,   501,  5685,   288,  1579,    26,    93,
+  // 56094,   321,  3505,  2046, 52358,  2047,    26,  3516, 16195,   554,
+  // 412,   288, 13042,    25,  2877,   288,  1881,   330, 25977,   426,
+  // 6618,    25,  2047,    26,  3516,  6067,   329, 12782,    27, 14084,
+  // 330,  8244, 17053,   288, 17674,   322, 28669,    25,  1004,  1263,
+  // 679,  7300,   321,   288, 28319,   330,   288, 13042,    25,   288,
+  // 28383, 38291,   288, 14989,   321, 35595, 56502,   329,  1574, 16366,
+  // 6835,  7840,  5553,    27,  9312, 49543, 15243,   679, 14264,   499,
+  // 16697,  1324,   288, 17674,   321,  8931,  4381,  1092,   330,   288,
+  // 10544,  7009,  1640,   428, 91085,    27, 47723,  4694,   467,   288,
+  // 28383,   641, 29914,   311,  1783, 12608,   288,  1579,    26,    93,
+  // 56094,   321,  3505,  2060,  2011,  2047,    26,  3516,  1151,   425,
+  // 3061,   667,   288, 15500,   330,  7840,  1811,   467,   288,  1579,
+  // 26,    93, 56094,   898, 20635,  4929, 82423,   322,   288,  3691,
+  // 27, 19113,  1911,  5870,   501,  5486,   288, 28383,   330,   277,
+  // 13042,   321, 14282,   288, 82847,    25,  2046,  8455,   288, 11756,
+  // 426,  1083, 21155, 37853,   554,   329,  8422,  1909,    25,  2137,
+  // 277, 28249, 17974,  1598,  1911,  5870,   663,  2785, 28383, 50343,
+  // 288,  1579,    26,    93, 56094,   554,    96, 12753,  2938,   329,
+  // 19807,   501,   641,  2046,    95,  4948,   329, 71906,  5835, 15600,
+  // 14416,  3848,   554,    96, 17674,  4148,   596,   277, 17508,  1099,
+  // 412,   288,  8089, 49543,  4753,  3220,   288, 44915, 18735, 11151,
+  // 100,  1130, 13042,   845,    66,    38,    34,    31,    34,    27,
+  // 60685,  4285,  5213,   458,    36,    26,  6132,    26,  1214,  1579,
+  // 26,    93, 56094, 76955, 58893, 11055, 51646, 54343,   288, 14989,
+  // 1324,   288,  8972, 86227,  1573, 24947,  5681,   426,  6618,  1573,
+  // 1783, 45497,   288, 28383,   907,   330,   288, 82847,   426,   277,
+  // 13042,   663, 32635,   321,   552,  2504, 13298, 31517,    27, 11151,
+  // 22569, 59262,  8264,   467, 58893, 11055, 35184,   288,  8867,   412,
+  // 2060,   426, 33586,   329, 22371,  1941,   288,  1431,  2046, 14074,
+  // 4920, 92896, 15600,   212,  9384, 61438,   611,    27,   212,  1648,
+  // 5231,    39};
 
   if (optimize) {
     for (unsigned int i = 0; i < INIT_SEQ_LEN; ++i) {
@@ -434,7 +495,16 @@ void createAndRun(unsigned int epochs, unsigned int batch_size) {
         model->incremental_inference(1, input, label, INIT_SEQ_LEN, i - 1);
 
       nntrainer::Tensor output_tensor({batch_size, 1, 1, NUM_VOCAB}, output[0]);
-      std::cerr << output_tensor.argmax()[0] << "\n";
+
+      // if (i >= INIT_SEQ_LEN) {
+      //   std::cerr << output_tensor.argmax()[0] << "\n";
+      // }
+
+      // if (i > INIT_SEQ_LEN - 100) {
+      //   std::cerr << output_tensor << "\n";
+      // }
+
+      std::cerr << output_tensor << "\n";
 
       if (i < INIT_SEQ_LEN) {
         ((uint *)(input_sample))[0] = init_data[i];
@@ -460,6 +530,15 @@ int main(int argc, char *argv[]) {
 
   try {
     app_context.registerFactory(nntrainer::createLayer<custom::RMSNormLayer>);
+  } catch (std::invalid_argument &e) {
+    std::cerr << "failed to register factory, reason: " << e.what()
+              << std::endl;
+    return 1;
+  }
+
+  try {
+    app_context.registerFactory(
+      nntrainer::createLayer<custom::RotaryEmbeddingLayer>);
   } catch (std::invalid_argument &e) {
     std::cerr << "failed to register factory, reason: " << e.what()
               << std::endl;

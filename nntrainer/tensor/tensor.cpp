@@ -127,7 +127,8 @@ public:
   SrcSharedTensor() : src(nullptr), off(0) {}
 
   SrcSharedTensor(const Tensor *tensor, size_t offset) :
-    src(tensor), off(offset) {}
+    src(tensor),
+    off(offset) {}
 
   /**
    * @brief   Get the allocated src tensor
@@ -2548,14 +2549,14 @@ Tensor &Tensor::apply(std::function<Tensor &(Tensor, Tensor &)> f,
 }
 
 void Tensor::print(std::ostream &out) const {
-  printInstance(out, this);
+  // printInstance(out, this);
   if (getDataType() == ml::train::TensorDim::DataType::FP32) {
     const float *data = getData<float>();
     unsigned int len = size();
-    out << "data addr: " << data << '\n';
-    out << dim;
+    // out << "data addr: " << data << '\n';
+    // out << dim;
 
-    if (len > 10000) {
+    if (len > 1000000000) {
       out << '[' << data[0] << ' ' << data[1] << ' ' << data[2] << " ... "
           << data[len - 3] << ' ' << data[len - 2] << ' ' << data[len - 1]
           << ']' << std::endl;
@@ -2572,11 +2573,11 @@ void Tensor::print(std::ostream &out) const {
               out << std::setw(10) << std::setprecision(10)
                   << this->getValue<float>(k, l, i, j) << " ";
             }
-            out << std::endl;
+            // out << std::endl;
           }
-          out << std::endl;
+          // out << std::endl;
         }
-        out << "-------" << std::endl;
+        // out << "-------" << std::endl;
       }
     } else {
       for (unsigned int k = 0; k < batch(); k++) {
@@ -2586,11 +2587,11 @@ void Tensor::print(std::ostream &out) const {
               out << std::setw(10) << std::setprecision(10)
                   << this->getValue<float>(k, l, i, j) << " ";
             }
-            out << std::endl;
+            // out << std::endl;
           }
-          out << std::endl;
+          // out << std::endl;
         }
-        out << "-------" << std::endl;
+        // out << "-------" << std::endl;
       }
       out.copyfmt(init);
     }

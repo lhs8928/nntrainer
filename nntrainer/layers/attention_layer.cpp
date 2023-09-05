@@ -21,7 +21,9 @@
 
 namespace nntrainer {
 
-AttentionLayer::AttentionLayer() {
+AttentionLayer::AttentionLayer() :
+  attention_props(props::ScaledDotProduct(), props::CausalMask()),
+  sm(ActivationType::ACT_SOFTMAX) {
   wt_idx.fill(std::numeric_limits<unsigned>::max());
 }
 
@@ -83,6 +85,7 @@ void AttentionLayer::forwarding(RunLayerContext &context, bool training) {
   if (std::get<props::ScaledDotProduct>(attention_props).get()) {
     weights.multiply_i(1 / sqrt((float)key.getDim().width()));
   }
+
   if (std::get<props::CausalMask>(attention_props).get()) {
     unsigned int mask_size = weights.getDim().width();
     unsigned int mask_dim_height = mask_size;
