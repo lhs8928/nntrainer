@@ -1,3 +1,9 @@
+res_path = meson.current_source_dir() / '..' / 'res'
+nntr_llama_resdir = nntr_app_resdir / 'LLaMA'
+run_command('cp', '-lr', res_path,  nntr_llama_resdir)
+
+run_command('cp', '-lr', res_path / 'merges.txt', res_path / 'vocab.json',  meson.build_root())
+
 transpose_src = files('transpose_layer.cpp')
 transpose_layer = shared_library('transpose',
   transpose_src,

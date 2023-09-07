@@ -68,6 +68,14 @@ public:
    * @copydoc Layer::incremental_forwarding(RunLayerContext &context, unsigned
    * int from, unsigned int to, bool training)
    */
+  void initial_incremental_forwarding(RunLayerContext &context,
+                                      unsigned int from, unsigned int to,
+                                      bool training);
+
+  /**
+   * @copydoc Layer::incremental_forwarding(RunLayerContext &context, unsigned
+   * int from, unsigned int to, bool training)
+   */
   void incremental_forwarding(RunLayerContext &context, unsigned int from,
                               unsigned int to, bool training) override;
 
@@ -186,8 +194,8 @@ private:
                 } else {
                   transformed_value = in.getValue<float>(b, c, h, span - half_);
                 }
-                value = value * (*freqs_cos)[from][k] +
-                        transformed_value * (*freqs_sin)[from][k];
+                value = value * (*freqs_cos)[from + h][k] +
+                        transformed_value * (*freqs_sin)[from + h][k];
 
                 out.setValue(b, c, h, span, value);
               }

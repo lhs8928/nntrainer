@@ -766,14 +766,16 @@ NeuralNetwork::inference(unsigned int batch_size,
   return output;
 }
 
-sharedConstTensors NeuralNetwork::incremental_inference(
-  sharedConstTensors X, unsigned int init_seq_len, unsigned int cur_step) {
-  return incremental_inference(X, {}, init_seq_len, cur_step);
+sharedConstTensors
+NeuralNetwork::incremental_inference(sharedConstTensors X,
+                                     unsigned int init_seq_len,
+                                     unsigned int from, unsigned int to) {
+  return incremental_inference(X, {}, init_seq_len, from, to);
 }
 
 sharedConstTensors NeuralNetwork::incremental_inference(
   sharedConstTensors X, sharedConstTensors label, unsigned int init_seq_len,
-  unsigned int cur_step) {
+  unsigned int from, unsigned int to) {
   if (model_graph.getBatchSize() != X[0]->batch()) {
     model_graph.setBatchSize(X[0]->batch());
   }
@@ -782,7 +784,7 @@ sharedConstTensors NeuralNetwork::incremental_inference(
   if (!validateInput(X))
     throw std::invalid_argument("Input validation failed.");
 
-  if (cur_step == 0) {
+  if (from == 0) {
     allocate(ExecutionMode::INFERENCE);
   }
 
@@ -790,7 +792,7 @@ sharedConstTensors NeuralNetwork::incremental_inference(
   PROFILE_TIME_REGISTER_EVENT(nn_foward, "nn_forward");
   PROFILE_TIME_START(nn_foward);
 
-  out = incremental_forwarding(cur_step, cur_step + 1, X, label, false);
+  out = incremental_forwarding(from, to, X, label, false);
 
   PROFILE_TIME_END(nn_foward);
 
@@ -804,7 +806,7 @@ sharedConstTensors NeuralNetwork::incremental_inference(
 std::vector<float *> NeuralNetwork::incremental_inference(
   unsigned int batch_size, const std::vector<float *> &input,
   const std::vector<float *> &label, unsigned int init_seq_len,
-  unsigned int cur_step) {
+  unsigned int from, unsigned int to) {
   sharedConstTensors input_tensors, output_tensors;
   auto in_dim = getInputDimension();
 
@@ -826,10 +828,10 @@ std::vector<float *> NeuralNetwork::incremental_inference(
                     label_dim[idx], 0)));
     }
     output_tensors = incremental_inference(input_tensors, label_tensors,
-                                           init_seq_len, cur_step);
+                                           init_seq_len, from, to);
   } else {
     output_tensors =
-      incremental_inference(input_tensors, init_seq_len, cur_step);
+      incremental_inference(input_tensors, init_seq_len, from, to);
   }
 
   std::vector<float *> output;

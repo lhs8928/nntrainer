@@ -19,8 +19,8 @@
 #include <node_exporter.h>
 #include <util_func.h>
 
-#include <iostream>
 #include <fstream>
+#include <iostream>
 
 namespace nntrainer {
 
@@ -90,7 +90,8 @@ void EmbeddingLayer::forwarding(RunLayerContext &context, bool training) {
   Tensor &weight = context.getWeight(weight_idx);
   Tensor &hidden_ = context.getOutput(SINGLE_INOUT_IDX);
   Tensor &input_ = context.getInput(SINGLE_INOUT_IDX);
-  TensorDim out_tensor_dim = TensorDim({1, 1, 1, out_dim}, hidden_.getTensorType());
+  TensorDim out_tensor_dim =
+    TensorDim({1, 1, 1, out_dim}, hidden_.getTensorType());
 
   for (unsigned int b = 0; b < input_.batch(); ++b) {
     float *in_data =
@@ -131,43 +132,56 @@ void EmbeddingLayer::forwarding(RunLayerContext &context, bool training) {
       // std::copy(weight_data, weight_data + out_dim, out_data);
     }
   }
-/* hidden_.print(std::cout);  
-std::ofstream f;
-f.open("./fp16_file");
-hidden_.save(f);
-f.close(); */
+  /* hidden_.print(std::cout);
+  std::ofstream f;
+  f.open("./fp16_file");
+  hidden_.save(f);
+  f.close(); */
 }
 
-// void EmbeddingLayer::incremental_forwarding(RunLayerContext &context,
-//                                             unsigned int from, unsigned int to,
-//                                             bool training) {
-//   /// @todo get input and output dimension from input_ and hidden itself
-//   unsigned int in_dim = std::get<props::InDim>(embedding_props);
-//   unsigned int out_dim = std::get<props::OutDim>(embedding_props);
+void EmbeddingLayer::incremental_forwarding(RunLayerContext &context,
+                                            unsigned int from, unsigned int to,
+                                            bool training) {
+  /// @todo get input and output dimension from input_ and hidden itself
+  unsigned int in_dim = std::get<props::InDim>(embedding_props);
+  unsigned int out_dim = std::get<props::OutDim>(embedding_props);
 
-//   Tensor &weight = context.getWeight(weight_idx);
-//   Tensor &hidden_ = context.getOutput(SINGLE_INOUT_IDX);
-//   Tensor &input_ = context.getInput(SINGLE_INOUT_IDX);
-//   TensorDim out_tensor_dim =
-//     TensorDim({1, 1, 1, out_dim}, hidden_.getTensorType());
+  forwarding(context, training);
+  return;
+  if (from) {
+    NNTR_THROW_IF(to - from != 1, std::invalid_argument)
+      << "incremental step size is not 1";
+    from = 0;
+    to = 1;
+  }
 
-//   for (unsigned int b = 0; b < input_.batch(); ++b) {
-//     float *in_data =
-//       input_.getAddress<float>(b * input_.getDim().getFeatureLen());
+  Tensor &weight = context.getWeight(weight_idx);
+  Tensor &hidden_ = context.getOutput(SINGLE_INOUT_IDX);
+  Tensor &input_ = context.getInput(SINGLE_INOUT_IDX);
+  TensorDim out_tensor_dim =
+    TensorDim({1, 1, 1, out_dim}, hidden_.getTensorType());
 
-//     Tensor batchsliced_hidden = hidden_.getBatchSlice(b, 1);
-//     uint embed_idx = ((uint *)(in_data))[0];
-//     if (embed_idx >= in_dim) {
-//       throw std::invalid_argument("input word index is greater than in_dim");
-//     }
+  for (unsigned int b = 0; b < input_.batch(); ++b) {
+    float *in_data =
+      input_.getAddress<float>(b * input_.getDim().getFeatureLen());
 
-//     Tensor cur_weight =
-//       weight.getSharedDataTensor(out_tensor_dim, out_dim * embed_idx);
-//     Tensor out_tensor =
-//       batchsliced_hidden.getSharedDataTensor(out_tensor_dim, 0);
-//     out_tensor.copyData(cur_weight);
-//   }
-// }
+    Tensor batchsliced_hidden = hidden_.getBatchSlice(b, 1);
+    for (unsigned int i = from; i < to; ++i) {
+      uint embed_idx = static_cast<uint>(in_data[i]);
+
+      if (embed_idx >= in_dim) {
+        std::cerr << embed_idx << " " << in_dim << "\n";
+        throw std::invalid_argument("input word index is greater than in_dim");
+      }
+
+      Tensor cur_weight =
+        weight.getSharedDataTensor(out_tensor_dim, out_dim * embed_idx);
+      Tensor out_tensor =
+        batchsliced_hidden.getSharedDataTensor(out_tensor_dim, 0);
+      out_tensor.copyData(cur_weight);
+    }
+  }
+}
 
 void EmbeddingLayer::calcDerivative(RunLayerContext &context) {
   throw exception::not_supported(

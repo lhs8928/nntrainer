@@ -42,7 +42,7 @@ int const MULTIPLE_OF = 256;
 
 float const NORM_EPS = 0.000001;
 int const NUM_VOCAB = 96000;
-int MAX_SEQ_LEN = 1024;
+unsigned int MAX_SEQ_LEN = 1024;
 
 int NUM_TO_GENERATE = 100;
 
@@ -342,7 +342,9 @@ ModelHandle createLLaMA() {
        withKey("input_shape", "1:1:" + std::to_string(INIT_SEQ_LEN))}));
   } else {
     layers.push_back(createLayer(
-      "input", {withKey("name", "input0"), withKey("input_shape", "1:1:1")}));
+      "input",
+      {withKey("name", "input0"),
+       withKey("input_shape", "1:1:" + std::to_string(INIT_SEQ_LEN))}));
   }
 
   layers.push_back(ml::train::layer::Embedding(
@@ -392,7 +394,7 @@ void run(std::string text) {
 
   unsigned int input_len = init_input.size();
 
-  int data_size = batch_size * input_len;
+  int data_size = batch_size * INIT_SEQ_LEN;
 
   float *input_sample = (float *)malloc(sizeof(float) * data_size);
 
@@ -411,17 +413,44 @@ void run(std::string text) {
     }
   } else {
 
-    input_sample[0] = static_cast<float>(init_input[0]);
+    for (unsigned int i = 0; i < input_len; ++i) {
+      input_sample[i] = static_cast<float>(init_input[i]);
+    }
 
     input.push_back(input_sample);
 
-    for (unsigned int i = 1; i < input_len + NUM_TO_GENERATE; ++i) {
+    std::vector<int64_t> token_ids;
 
+    auto output = g_model->incremental_inference(1, input, label, MAX_SEQ_LEN,
+                                                 0, input_len);
+
+    nntrainer::Tensor output_tensor({batch_size, 1, MAX_SEQ_LEN, NUM_VOCAB},
+                                    output[0]);
+
+    nntrainer::Tensor output_step = output_tensor.getSharedDataTensor(
+      {batch_size, 1, 1, NUM_VOCAB}, (input_len - 1) * batch_size * NUM_VOCAB);
+    std::vector<unsigned int> ids = output_step.argmax();
+    input_sample[0] = static_cast<float>(ids[0]);
+
+    token_ids.push_back(static_cast<int64_t>(ids[0]));
+    auto decoded_str = tokenizer.decode(token_ids);
+    std::cout << decoded_str << " ";
+    std::cout.flush();
+
+    for (unsigned int i = input_len + 1; i < input_len + NUM_TO_GENERATE; ++i) {
       auto output =
-        g_model->incremental_inference(1, input, label, MAX_SEQ_LEN, i - 1);
+        g_model->incremental_inference(1, input, label, MAX_SEQ_LEN, i - 1, i);
 
       nntrainer::Tensor output_tensor({batch_size, 1, 1, NUM_VOCAB}, output[0]);
       std::vector<unsigned int> ids = output_tensor.argmax();
+
+      input_sample[0] = static_cast<float>(ids[0]);
+
+      std::vector<int64_t> token_ids;
+      token_ids.push_back(static_cast<int64_t>(ids[0]));
+      auto decoded_str = tokenizer.decode(token_ids);
+      std::cout << decoded_str << " ";
+      std::cout.flush();
 
 #ifdef ENABLE_FP16
       for (auto o : output) {
@@ -429,29 +458,29 @@ void run(std::string text) {
       }
 #endif
 
-      std::vector<int64_t> token_ids;
-      if (i < input_len) {
-        if (i == 1) {
-          std::cout << "### Input : (" << input_len << " words)" << std::endl;
-        }
-        std::cout << " Progress Reading: "
-                  << (int)((float)(i) / (float)(input_len)*100.0) << " % \r";
-        std::cout.flush();
-        input_sample[0] = static_cast<float>(init_input[i]);
-        /* std::cout << init_input[i] << " "; */
-      } else {
+      // if (i < input_len) {
+      //   if (i == 1) {
+      //     std::cout << "### Input : (" << input_len << " words)" <<
+      //     std::endl;
+      //   }
+      //   std::cout << " Progress Reading: "
+      //             << (int)((float)(i) / (float)(input_len)*100.0) << " % \r";
+      //   std::cout.flush();
+      //   input_sample[0] = static_cast<float>(init_input[i]);
+      //   /* std::cout << init_input[i] << " "; */
+      // } else {
 
-        if (i == input_len) {
-          std::cout << " Progress Reading: 100 % " << std::endl;
-          std::cout << std::endl << "### Output : " << std::endl;
-        }
-        input_sample[0] = static_cast<float>(ids[0]);
+      //   if (i == input_len) {
+      //     std::cout << " Progress Reading: 100 % " << std::endl;
+      //     std::cout << std::endl << "### Output : " << std::endl;
+      //   }
+      //   input_sample[0] = static_cast<float>(ids[0]);
 
-        token_ids.push_back(static_cast<int64_t>(ids[0]));
-        auto decoded_str = tokenizer.decode(token_ids);
-        std::cout << decoded_str << " ";
-        std::cout.flush();
-      }
+      //   token_ids.push_back(static_cast<int64_t>(ids[0]));
+      //   auto decoded_str = tokenizer.decode(token_ids);
+      //   std::cout << decoded_str << " ";
+      //   std::cout.flush();
+      // }
     }
   }
   std::cout << std::endl;
@@ -463,7 +492,7 @@ void createAndRun(unsigned int epochs, unsigned int batch_size) {
   g_model->setProperty({withKey("batch_size", batch_size),
                         withKey("epochs", epochs),
                         // #ifdef ENABLE_FP16
-                        // withKey("model_tensor_type", "FP16-FP16"),
+                        withKey("model_tensor_type", "FP16-FP16"),
                         // #endif
                         withKey("save_path", "test_model.bin")});
 
