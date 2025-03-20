@@ -73,6 +73,7 @@ nntrainer_common_sources = [
 ]
 
 nntrainer_inc_abs += meson.source_root() / 'subprojects' / 'ruy'
+install_subdir(meson.source_root() / 'subprojects' / 'ruy' / 'ruy', install_dir: nntrainer_includedir)
 
 if get_option('enable-opencl')
   nntrainer_headers += meson.current_source_dir() / 'cl_context.h'
