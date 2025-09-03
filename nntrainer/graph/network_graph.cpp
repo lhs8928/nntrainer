@@ -694,11 +694,6 @@ NetworkGraph::canExecuteInPlace(const std::shared_ptr<LayerNode> &lnode) {
     return inplace_type;
   }
 
-  if (lnode->getType() == InputLayer::type &&
-      !istrequal(getTensorType()[2], "FP32")) {
-    return InPlaceType::NONE;
-  }
-
   if (lnode->getType() == MultiOutLayer::type) {
     return InPlaceType::RESTRICTING;
   }
@@ -812,21 +807,26 @@ NetworkGraph::finalizeContext(const std::shared_ptr<LayerNode> &lnode,
           TensorSpecV2::RequestType::READ_ONLY_VIEW;
         if (lnode->getType() == IdentityLayer::type) {
           s.variable_spec.reference_name = inputs[i]->getName();
+          s.variable_spec.dim.setDataType(inputs[i]->getDim().getDataType());
           s.variable_spec.dim.setFormat(inputs[i]->getDim().getFormat());
         } else if (lnode->getInPlaceDirection() == InPlaceDirection::RIGHT) {
           s.variable_spec.reference_name = inputs[1]->getName();
+          s.variable_spec.dim.setDataType(inputs[1]->getDim().getDataType());
           s.variable_spec.dim.setFormat(inputs[1]->getDim().getFormat());
         } else if (lnode->getType() == WeightLayer::type) {
           WeightSpec w_spec = init_context.getWeightsSpec()[i];
           s.variable_spec.reference_name = std::get<8>(w_spec);
+          s.variable_spec.dim.setDataType(std::get<0>(w_spec).getDataType());
           s.variable_spec.dim.setFormat(std::get<0>(w_spec).getFormat());
         } else if (lnode->getType() == TensorLayer::type) {
           InitLayerContext::TensorSpec t_spec =
             init_context.getTensorsSpec()[i];
           s.variable_spec.reference_name = std::get<3>(t_spec);
+          s.variable_spec.dim.setDataType(std::get<0>(t_spec).getDataType());
           s.variable_spec.dim.setFormat(std::get<0>(t_spec).getFormat());
         } else {
           s.variable_spec.reference_name = inputs[0]->getName();
+          s.variable_spec.dim.setDataType(inputs[0]->getDim().getDataType());
           s.variable_spec.dim.setFormat(inputs[0]->getDim().getFormat());
         }
       }
@@ -835,23 +835,28 @@ NetworkGraph::finalizeContext(const std::shared_ptr<LayerNode> &lnode,
           TensorSpecV2::RequestType::READ_ONLY_VIEW;
         if (lnode->getType() == IdentityLayer::type) {
           s.gradient_spec->reference_name = inputs[i]->getGradientName();
+          s.gradient_spec->dim.setDataType(inputs[i]->getDim().getDataType());
           s.gradient_spec->dim.setFormat(inputs[i]->getDim().getFormat());
         } else if (lnode->getInPlaceDirection() == InPlaceDirection::RIGHT) {
           s.gradient_spec->reference_name = inputs[1]->getGradientName();
+          s.gradient_spec->dim.setDataType(inputs[1]->getDim().getDataType());
           s.gradient_spec->dim.setFormat(inputs[1]->getDim().getFormat());
         } else if (lnode->getType() == WeightLayer::type) {
           WeightSpec w_spec = init_context.getWeightsSpec()[i];
           s.gradient_spec->reference_name =
             std::get<8>(w_spec) + Var_Grad::grad_suffix;
+          s.gradient_spec->dim.setDataType(std::get<0>(w_spec).getDataType());
           s.gradient_spec->dim.setFormat(std::get<0>(w_spec).getFormat());
         } else if (lnode->getType() == TensorLayer::type) {
           InitLayerContext::TensorSpec t_spec =
             init_context.getTensorsSpec()[i];
           s.gradient_spec->reference_name =
             std::get<3>(t_spec) + Var_Grad::grad_suffix;
+          s.gradient_spec->dim.setDataType(std::get<0>(t_spec).getDataType());
           s.gradient_spec->dim.setFormat(std::get<0>(t_spec).getFormat());
         } else {
           s.gradient_spec->reference_name = inputs[0]->getGradientName();
+          s.gradient_spec->dim.setDataType(inputs[0]->getDim().getDataType());
           s.gradient_spec->dim.setFormat(inputs[0]->getDim().getFormat());
         }
       }
