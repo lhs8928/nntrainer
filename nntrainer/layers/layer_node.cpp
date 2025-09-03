@@ -562,6 +562,7 @@ InitLayerContext LayerNode::finalize(const std::vector<TensorDim> &input_dims,
   auto &prop_dims = std::get<std::vector<props::InputShape>>(*layer_node_props);
   auto &prop_in_layers =
     std::get<std::vector<props::InputConnection>>(*layer_node_props);
+  auto &input_dtype = std::get<props::InputDtype>(*layer_node_props);
 
   /** prepare input dimensions */
   if (!input_dims.empty()) {
@@ -575,11 +576,19 @@ InitLayerContext LayerNode::finalize(const std::vector<TensorDim> &input_dims,
            "property";
       for (auto &d : actual_prop_dims) {
         d.setDataType(
-          str_converter<enum_class_prop_tag, nntrainer::TensorDataTypeInfo>::
-            from_string(tensor_type[2]));
+          input_dtype.empty()
+            ? str_converter<enum_class_prop_tag,
+                            nntrainer::TensorDataTypeInfo>::from_string(
+                tensor_type[2])
+            : input_dtype.get());
         d.setFormat(
           str_converter<enum_class_prop_tag, nntrainer::TensorFormatInfo>::
             from_string(tensor_type[0]));
+      }
+    }
+    if (!input_dtype.empty()) {
+      for (auto &d : actual_input_dims) {
+        d.setDataType(input_dtype.get());
       }
     }
   } else {
@@ -595,7 +604,6 @@ InitLayerContext LayerNode::finalize(const std::vector<TensorDim> &input_dims,
       << prop_dims.size();
     actual_input_dims =
       std::vector<TensorDim>(prop_dims.begin(), prop_dims.end());
-    auto &input_dtype = std::get<props::InputDtype>(*layer_node_props);
     const auto dtype =
       input_dtype.empty()
         ? str_converter<enum_class_prop_tag,

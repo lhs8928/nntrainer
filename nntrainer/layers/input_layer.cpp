@@ -71,13 +71,11 @@ void InputLayer::exportTo(Exporter &exporter,
 }
 
 void InputLayer::finalize(InitLayerContext &context) {
-
   std::vector<TensorDim> output_dims = context.getInputDimensions();
   for (auto &d : output_dims) {
     if (d.getDataType() == ml::train::TensorDim::DataType::FP32)
       d.setDataType(context.getActivationDataType());
   }
-
   context.setOutputDimensions(output_dims);
   is_inplace = output_dims == context.getInputDimensions();
 }
