@@ -1066,6 +1066,90 @@ sharedConstTensors NeuralNetwork::inference(sharedConstTensors X,
   return out;
 }
 
+std::vector<IO_TensorType>
+NeuralNetwork::inference(unsigned int batch_size,
+                         const std::vector<IO_TensorType> &input,
+                         const std::vector<IO_TensorType> &label) {
+  sharedConstTensors input_tensors, output_tensors;
+  auto in_dim = getInputDimension();
+
+  input_tensors.reserve(input.size());
+  for (unsigned int idx = 0; idx < in_dim.size(); idx++) {
+    in_dim[idx].batch(batch_size);
+    std::visit(
+      [&input_tensors, &in_dim, idx](auto &&input_ptr) {
+        input_tensors.emplace_back(MAKE_SHARED_TENSOR(
+          Tensor::Map(input_ptr, in_dim[idx].getDataLen() * sizeof(*input_ptr),
+                      in_dim[idx], 0)));
+      },
+      input[idx]);
+  }
+
+  if (!label.empty()) {
+    sharedConstTensors label_tensors;
+    auto label_dim = getOutputDimension();
+    label_tensors.reserve(label.size());
+    for (unsigned int idx = 0; idx < label_dim.size(); idx++) {
+      label_dim[idx].batch(batch_size);
+      std::visit(
+        [&label_tensors, &label_dim, idx](auto &&label_ptr) {
+          label_tensors.emplace_back(MAKE_SHARED_TENSOR(Tensor::Map(
+            label_ptr, label_dim[idx].getDataLen() * sizeof(*label_ptr),
+            label_dim[idx], 0)));
+        },
+        label[idx]);
+    }
+    output_tensors = inference(input_tensors, label_tensors, false);
+  } else {
+    output_tensors = inference(input_tensors, false);
+  }
+
+  std::vector<IO_TensorType> output;
+  output.reserve(output_tensors.size());
+
+  for (auto &out : output_tensors) {
+    auto out_t = *out.get();
+    switch (out_t.getDataType()) {
+    case ml::train::TensorDim::DataType::QINT4:
+    case ml::train::TensorDim::DataType::QINT8:
+      output.push_back(out_t.getData<int8_t>());
+      break;
+    case ml::train::TensorDim::DataType::QINT16:
+      output.push_back(out_t.getData<int16_t>());
+      break;
+    case ml::train::TensorDim::DataType::BCQ:
+      output.push_back(out_t.getData<uint32_t>());
+      break;
+    case ml::train::TensorDim::DataType::UINT4:
+    case ml::train::TensorDim::DataType::UINT8:
+    case ml::train::TensorDim::DataType::Q4_K:
+    case ml::train::TensorDim::DataType::Q6_K:
+    case ml::train::TensorDim::DataType::Q4_0:
+      output.push_back(out_t.getData<uint8_t>());
+      break;
+    case ml::train::TensorDim::DataType::UINT16:
+      output.push_back(out_t.getData<uint16_t>());
+      break;
+    case ml::train::TensorDim::DataType::UINT32:
+      output.push_back(out_t.getData<uint32_t>());
+      break;
+    case ml::train::TensorDim::DataType::FP32:
+      output.push_back(out_t.getData());
+      break;
+#ifdef ENABLE_FP16
+    case ml::train::TensorDim::DataType::FP16:
+      output.push_back(out_t.getData<_FP16>());
+      break;
+#endif
+    default:
+      output.push_back(out_t.getData());
+      break;
+    }
+  }
+
+  return output;
+}
+
 std::vector<float *>
 NeuralNetwork::inference(unsigned int batch_size,
                          const std::vector<float *> &input,
@@ -1141,6 +1225,134 @@ sharedConstTensors NeuralNetwork::incremental_inference(
   model_graph.setInputsLabels({}, {});
 
   return out;
+}
+
+std::vector<IO_TensorType> NeuralNetwork::incremental_inference(
+  unsigned int batch_size, const std::vector<IO_TensorType> &input,
+  const std::vector<IO_TensorType> &label, unsigned int init_seq_len,
+  unsigned int from, unsigned int to, bool output_hidden_state) {
+
+  sharedConstTensors input_tensors, output_tensors;
+  auto in_dim = getInputDimension();
+
+  input_tensors.reserve(input.size());
+  for (unsigned int idx = 0; idx < in_dim.size(); idx++) {
+    in_dim[idx].batch(batch_size);
+    std::visit(
+      [&input_tensors, &in_dim, idx](auto &&input_ptr) {
+        input_tensors.emplace_back(MAKE_SHARED_TENSOR(
+          Tensor::Map(input_ptr, in_dim[idx].getDataLen() * sizeof(*input_ptr),
+                      in_dim[idx], 0)));
+      },
+      input[idx]);
+  }
+
+  if (!label.empty()) {
+    sharedConstTensors label_tensors;
+    auto label_dim = getOutputDimension();
+    label_tensors.reserve(label.size());
+    for (unsigned int idx = 0; idx < label_dim.size(); idx++) {
+      label_dim[idx].batch(batch_size);
+      std::visit(
+        [&label_tensors, &label_dim, idx](auto &&label_ptr) {
+          label_tensors.emplace_back(MAKE_SHARED_TENSOR(Tensor::Map(
+            label_ptr, label_dim[idx].getDataLen() * sizeof(*label_ptr),
+            label_dim[idx], 0)));
+        },
+        label[idx]);
+    }
+    output_tensors = incremental_inference(input_tensors, label_tensors,
+                                           init_seq_len, from, to);
+  } else {
+    output_tensors =
+      incremental_inference(input_tensors, init_seq_len, from, to);
+  }
+
+  std::vector<IO_TensorType> output;
+  output.reserve(output_tensors.size());
+
+  ///@note Always we take the first position of output
+  // unsigned int step = ((to - from) == 0) ? 0 : (to - from) - 1;
+  unsigned int step = 0;
+
+  for (auto &out : output_tensors) {
+    auto out_t = *out.get();
+
+    if (output_hidden_state) {
+      switch (out_t.getDataType()) {
+      case ml::train::TensorDim::DataType::QINT4:
+      case ml::train::TensorDim::DataType::QINT8:
+        output.push_back(out_t.getData<int8_t>());
+        break;
+      case ml::train::TensorDim::DataType::QINT16:
+        output.push_back(out_t.getData<int16_t>());
+        break;
+      case ml::train::TensorDim::DataType::BCQ:
+        output.push_back(out_t.getData<uint32_t>());
+        break;
+      case ml::train::TensorDim::DataType::UINT4:
+      case ml::train::TensorDim::DataType::UINT8:
+      case ml::train::TensorDim::DataType::Q4_K:
+      case ml::train::TensorDim::DataType::Q6_K:
+      case ml::train::TensorDim::DataType::Q4_0:
+        output.push_back(out_t.getData<uint8_t>());
+        break;
+      case ml::train::TensorDim::DataType::UINT16:
+        output.push_back(out_t.getData<uint16_t>());
+        break;
+      case ml::train::TensorDim::DataType::UINT32:
+        output.push_back(out_t.getData<uint32_t>());
+        break;
+      case ml::train::TensorDim::DataType::FP32:
+        output.push_back(out_t.getData());
+        break;
+#ifdef ENABLE_FP16
+      case ml::train::TensorDim::DataType::FP16:
+        output.push_back(out_t.getData<_FP16>());
+        break;
+#endif
+      default:
+        output.push_back(out_t.getData());
+        break;
+      }
+    } else {
+      IO_TensorType last_out_buf_data;
+      size_t width = out_t.width();
+
+      if (out->getDataType() == ml::train::TensorDim::DataType::FP16) {
+#ifdef ENABLE_FP16
+        last_out_buf_data = new _FP16[batch_size * width];
+#else
+        throw std::invalid_argument("Error: enable-fp16 is not set");
+#endif
+      } else if (out->getDataType() == ml::train::TensorDim::DataType::FP32) {
+        last_out_buf_data = new float[batch_size * width];
+      }
+
+      for (unsigned int batch = 0; batch < batch_size; ++batch) {
+        if (out->getDataType() == ml::train::TensorDim::DataType::FP16) {
+#ifdef ENABLE_FP16
+          const _FP16 *out_t_batch_ptr =
+            out_t.getData<_FP16>() + batch * out_t.getDim().getFeatureLen() +
+            step * width;
+          scopy(width, out_t_batch_ptr, 1,
+                std::get<_FP16 *>(last_out_buf_data) + batch * width, 1);
+#else
+          throw std::invalid_argument("Error: enable-fp16 is not set");
+#endif
+        } else if (out->getDataType() == ml::train::TensorDim::DataType::FP32) {
+          const float *out_t_batch_ptr =
+            out_t.getData() + batch * out_t.getDim().getFeatureLen() +
+            step * width;
+          scopy(width, out_t_batch_ptr, 1,
+                std::get<float *>(last_out_buf_data) + batch * width, 1);
+        }
+      }
+      output.push_back(last_out_buf_data);
+    }
+  }
+
+  return output;
 }
 
 std::vector<float *> NeuralNetwork::incremental_inference(

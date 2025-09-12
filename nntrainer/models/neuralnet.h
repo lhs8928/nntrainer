@@ -69,6 +69,7 @@ class DataBuffer;
 using DatasetType = ml::train::DatasetType;
 using DatasetModeType = ml::train::DatasetModeType;
 using RunStats = ml::train::RunStats;
+using IO_TensorType = ml::train::TensorDim::IO_TensorType;
 
 /**
  * @class   NeuralNetwork Class
@@ -366,6 +367,19 @@ public:
    * @param[in] batch batch size of current input
    * @param[in] input inputs as a list of each input data
    * @param[in] label labels as a list of each label data
+   * @retval list of output as IO_TensorType
+   * @note The output memory must not be freed by the caller
+   */
+  std::vector<IO_TensorType> inference(unsigned int batch,
+                                       const std::vector<IO_TensorType> &input,
+                                       const std::vector<IO_TensorType> &label =
+                                         std::vector<IO_TensorType>()) override;
+
+  /**
+   * @brief     Run the inference of the model
+   * @param[in] batch batch size of current input
+   * @param[in] input inputs as a list of each input data
+   * @param[in] label labels as a list of each label data
    * @retval list of output as float *
    * @note The output memory must not be freed by the caller
    */
@@ -413,6 +427,25 @@ public:
    * @note If output_hidden_state is false, the output memory must be freed by
    * the caller after use. Otherwise, the output memory must not be freed by the
    * caller.
+   */
+  std::vector<IO_TensorType> incremental_inference(
+    unsigned int batch, const std::vector<IO_TensorType> &input,
+    const std::vector<IO_TensorType> &label, unsigned int init_seq_len,
+    unsigned int from, unsigned int to,
+    bool output_hidden_state = false) override;
+
+  /**
+   * @brief     Run the incremental inference of the model
+   * @param[in] batch batch size of current input
+   * @param[in] input inputs as a list of each input data
+   * @param[in] label labels as a list of each label data
+   * @param[in] init_seq_len initial sequence length
+   * @param[in] from current working step index
+   * @param[in] to next working step index
+   * @param[in] output_hidden_state return last hidden state if true else return
+   * all hidden state
+   * @retval list of output as float *
+   * @note The output memory must not be freed by the caller
    */
   std::vector<float *>
   incremental_inference(unsigned int batch, const std::vector<float *> &input,
