@@ -667,6 +667,7 @@ cp -r result %{buildroot}%{_datadir}/nntrainer/unittest/
 %{_includedir}/nntrainer/hgemm_transA.h
 %{_includedir}/nntrainer/hgemm_transAB.h
 %{_includedir}/nntrainer/hgemm_transB.h
+
 %endif
 %endif
 %ifarch %arm
