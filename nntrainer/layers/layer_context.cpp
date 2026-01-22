@@ -12,6 +12,8 @@
  * @brief  This is the layer context for each layer
  */
 
+#include <map>
+
 #include "nntrainer_error.h"
 #include <functional>
 #include <memory>
