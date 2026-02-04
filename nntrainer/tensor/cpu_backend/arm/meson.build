@@ -47,9 +47,9 @@ if get_option('enable-fp16')
     
 
 
-    subdir('kai')
-    nntrainer_inc += include_directories('kai')
-    nntrainer_inc_abs += meson.current_source_dir() / 'kai'
+    #subdir('kai')
+    #nntrainer_inc += include_directories('kai')
+    #nntrainer_inc_abs += meson.current_source_dir() / 'kai'
   endif
 endif
 
