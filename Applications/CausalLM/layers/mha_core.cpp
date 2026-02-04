@@ -1476,25 +1476,25 @@ void MHACoreLayer::updateTensorsByInputDimensions(
     std::get<nntrainer::props::MaxTimestep>(mha_core_props).get();
   unsigned int &max_new_tokens =
     std::get<props::MaxNewTokens>(mha_core_props).get();
-  max_position_embeddings =
-    std::get<props::MaxPositionEmbeddings>(mha_core_props).get();
   max_timestep = height + max_new_tokens;
 
-  ml::train::TensorDim kv_dim = input_dimensions[0];
-  kv_dim.width(kv_dim.width() / (num_heads_Q / num_heads_KV));
+  ml::train::TensorDim q_dim = context.getInput(INOUT_INDEX::QUERY).getDim();
+  q_dim.height(input_dimensions[0].height());
 
-  ml::train::TensorDim kv_cache_dim = kv_dim;
-#ifdef ENABLE_FP16
-  kv_cache_dim.setDataType(ml::train::TensorDim::DataType::FP16);
-#else
-  kv_cache_dim.setDataType(ml::train::TensorDim::DataType::UINT16);
-#endif
+  ml::train::TensorDim kv_dim = context.getInput(INOUT_INDEX::KEY).getDim();
+
+  ml::train::TensorDim kv_cache_dim =
+    context.getTensor(tensor_idx[AttentionParams::cache_key]).getDim();
   kv_cache_dim.height(max_timestep);
 
-  context.updateInput(INOUT_INDEX::QUERY, input_dimensions[0]);
+  ml::train::TensorDim output_dim =
+    context.getOutput(INOUT_INDEX::OUTPUT).getDim();
+  output_dim.height(input_dimensions[0].height());
+
+  context.updateInput(INOUT_INDEX::QUERY, q_dim);
   context.updateInput(INOUT_INDEX::KEY, kv_dim);
   context.updateInput(INOUT_INDEX::VALUE, kv_dim);
-  context.updateOutput(0, input_dimensions[0]);
+  context.updateOutput(0, output_dim);
 
   context.updateTensor(tensor_idx[AttentionParams::cache_key], kv_cache_dim);
   context.updateTensor(tensor_idx[AttentionParams::cache_value], kv_cache_dim);

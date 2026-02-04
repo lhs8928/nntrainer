@@ -109,6 +109,10 @@ public:
   void setBatch(nntrainer::RunLayerContext &context,
                 unsigned int batch) override;
 
+  void updateTensorsByInputDimensions(
+    nntrainer::RunLayerContext &context,
+    std::vector<nntrainer::TensorDim> input_dimensions) override;
+
   static constexpr const char *type = "fully_connected";
 
 private:
