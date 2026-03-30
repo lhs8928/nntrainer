@@ -1211,6 +1211,17 @@ extern void dequantize_row_q4_K(const void *x, float *y, int64_t k);
  */
 extern void dequantize_row_q4_0(const void *x, float *y, int64_t k);
 
+#ifdef ENABLE_FP16
+/**
+ * @brief dequantize row of q4_0 data to float
+ *
+ * @param x input to be dequantized from q4_0 to float
+ * @param y dequantized data output
+ * @param k number of elements in x
+ */
+extern void dequantize_row_q4_0(const void *x, _FP16 *y, int64_t k);
+#endif
+
 /**
  * @brief dequantize row of q6_K data to float
  *

@@ -17,6 +17,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <tensor_dim.h>
+
 void nntr_ggml_init();
 
 void nntr_gemm_q4_0_4x8_q8_0(int n, float *__restrict s, size_t bs,
@@ -85,6 +87,11 @@ void nntr_quantize_row_q8_K(const float *__restrict x, void *__restrict y,
 
 void nntr_dequantize_row_q4_0(const void *__restrict x, float *__restrict y,
                               int64_t k);
+
+#ifdef ENABLE_FP16
+void nntr_dequantize_row_q4_0(const void *__restrict x, _FP16 *__restrict y,
+                              int64_t k);
+#endif
 
 void nntr_dequantize_row_q4_K(const void *__restrict x, float *__restrict y,
                               int64_t k);

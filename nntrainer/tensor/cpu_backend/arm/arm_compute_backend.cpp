@@ -452,6 +452,12 @@ void dequantize_row_q4_0(const void *x_raw, float *y, int64_t k) {
   __ggml_dequantize_row_q4_0(x_raw, y, k);
 }
 
+#ifdef ENABLE_FP16
+void dequantize_row_q4_0(const void *x_raw, _FP16 *y, int64_t k) {
+  __ggml_dequantize_row_q4_0(x_raw, y, k);
+}
+#endif
+
 void dequantize_row_q6_K(const void *x, float *y, int64_t k) {
   __ggml_dequantize_row_q6_K(x, y, k);
 }

@@ -487,10 +487,40 @@ void dequantize_row_q4_0_impl(const block_q4_0 *__restrict x,
   }
 }
 
+#ifdef ENABLE_FP16
+void dequantize_row_q4_0_impl(const block_q4_0 *__restrict x,
+                              _FP16 *__restrict y, int64_t k) {
+  static const int qk = QK4_0;
+
+  assert(k % qk == 0);
+
+  const int nb = k / qk;
+
+  for (int i = 0; i < nb; i++) {
+    const float d = nntr_fp16_to_fp32(x[i].d);
+
+    for (int j = 0; j < qk / 2; ++j) {
+      const int x0 = (x[i].qs[j] & 0x0F) - 8;
+      const int x1 = (x[i].qs[j] >> 4) - 8;
+
+      y[i * qk + j + 0] = static_cast<_FP16>(x0 * d);
+      y[i * qk + j + qk / 2] = static_cast<_FP16>(x1 * d);
+    }
+  }
+}
+#endif
+
 void nntr_dequantize_row_q4_0(const void *__restrict x, float *__restrict y,
                               int64_t k) {
   dequantize_row_q4_0_impl((const block_q4_0 *)x, y, k);
 }
+
+#ifdef ENABLE_FP16
+void nntr_dequantize_row_q4_0(const void *__restrict x, _FP16 *__restrict y,
+                              int64_t k) {
+  dequantize_row_q4_0_impl((const block_q4_0 *)x, y, k);
+}
+#endif
 
 // -------- Q8_0 -----------------
 

@@ -541,6 +541,12 @@ void __fallback_dequantize_row_q4_0(const void *x_raw, float *y, int64_t k) {
   throw std::runtime_error("NYI : __fallback_dequantize_row_q4_0");
 }
 
+#ifdef ENABLE_FP16
+void __fallback_dequantize_row_q4_0(const void *x_raw, _FP16 *y, int64_t k) {
+  throw std::runtime_error("NYI : __fallback_dequantize_row_q4_0");
+}
+#endif
+
 void __fallback_dequantize_row_q6_K(const void *x, float *y, int64_t k) {
   throw std::runtime_error("NYI : __fallback_dequantize_row_q6_K");
 }
