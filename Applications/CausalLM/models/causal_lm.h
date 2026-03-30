@@ -115,6 +115,15 @@ protected:
   /**
    * @brief generate
    */
+  std::vector<unsigned int> generate(ml::train::TensorDim::IO_TensorType logits,
+                                     bool do_sample,
+                                     float repetition_penalty = 1,
+                                     unsigned int *input_ids = nullptr,
+                                     unsigned int NUM_INPUT_IDS = 0);
+
+  /**
+   * @brief generate
+   */
   std::vector<unsigned int> generate(float *logits, bool do_sample,
                                      float repetition_penalty = 1,
                                      unsigned int *input_ids = nullptr,

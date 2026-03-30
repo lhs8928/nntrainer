@@ -38,6 +38,7 @@
 #include <mha_core.h>
 #include <nntrainer_error.h>
 #include <tensor.h>
+#include <tensor_dim.h>
 
 #include <causal_lm.h>
 #include <llm_util.hpp>
@@ -262,6 +263,33 @@ void CausalLM::load_kvcache(std::string path, int to_) {
   setKVCachePosition(static_cast<unsigned int>(to_));
 }
 
+std::vector<unsigned int>
+CausalLM::generate(ml::train::TensorDim::IO_TensorType logits, bool do_sample,
+                   float repetition_penalty, unsigned int *input_ids,
+                   unsigned int NUM_INPUT_IDS) {
+  std::vector<unsigned int> ret;
+  float *logits_fp32;
+
+  if (std::holds_alternative<float *>(logits)) {
+    logits_fp32 = std::get<float *>(logits);
+  } else if (std::holds_alternative<_FP16 *>(logits)) {
+    logits_fp32 = new float[NUM_VOCAB];
+    const _FP16 *logits_fp16 = std::get<_FP16 *>(logits);
+    for (size_t i = 0; i < NUM_VOCAB; ++i) {
+      logits_fp32[i] = (float)logits_fp16[i];
+    }
+  }
+
+  ret = generate(logits_fp32, do_sample, repetition_penalty, input_ids,
+                 NUM_INPUT_IDS);
+
+  if (std::holds_alternative<_FP16 *>(logits)) {
+    delete[] logits_fp32;
+  }
+
+  return ret;
+}
+
 std::vector<unsigned int> CausalLM::generate(float *logits, bool do_sample,
                                              float repetition_penalty,
                                              unsigned int *input_ids,
@@ -366,8 +394,8 @@ void CausalLM::run(const WSTR prompt, bool do_sample, const WSTR system_prompt,
   /**
    * INPUT PREPARATION
    */
-  std::vector<float *> input;
-  std::vector<float *> label;
+  std::vector<ml::train::TensorDim::IO_TensorType> input;
+  std::vector<ml::train::TensorDim::IO_TensorType> label;
 
   /**
    * SAVE_KVCACHE ?
@@ -472,7 +500,7 @@ void CausalLM::run(const WSTR prompt, bool do_sample, const WSTR system_prompt,
 
   auto start_prefill = std::chrono::high_resolution_clock::now();
 
-  std::vector<float *> output;
+  std::vector<ml::train::TensorDim::IO_TensorType> output;
 
   if (SAVE_KVCACHE) {
     //@note This is for the save the kv cache. precomputed kv cache should be
@@ -530,7 +558,13 @@ void CausalLM::run(const WSTR prompt, bool do_sample, const WSTR system_prompt,
 
   // output should be deallocated after use
   for (auto &out : output) {
-    delete[] out;
+    if (std::holds_alternative<float *>(out)) {
+      float *out_ptr = std::get<float *>(out);
+      delete[] out_ptr;
+    } else if (std::holds_alternative<_FP16 *>(out)) {
+      _FP16 *out_ptr = std::get<_FP16 *>(out);
+      delete[] out_ptr;
+    }
   }
 
   auto finish_prefill = std::chrono::high_resolution_clock::now();
@@ -574,7 +608,13 @@ void CausalLM::run(const WSTR prompt, bool do_sample, const WSTR system_prompt,
 
     // output should be deallocated after use
     for (auto out : output_interval) {
-      delete[] out;
+      if (std::holds_alternative<float *>(out)) {
+        float *out_ptr = std::get<float *>(out);
+        delete[] out_ptr;
+      } else if (std::holds_alternative<_FP16 *>(out)) {
+        _FP16 *out_ptr = std::get<_FP16 *>(out);
+        delete[] out_ptr;
+      }
     }
 
     // check FINISH

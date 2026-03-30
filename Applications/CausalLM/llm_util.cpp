@@ -12,6 +12,40 @@
  */
 
 #include <llm_util.hpp>
+#include <tensor_dim.h>
+
+std::vector<unsigned int>
+generate_multi_tokens(ml::train::TensorDim::IO_TensorType logits,
+                      unsigned int NUM_VOCAB, unsigned int NUM_TARGET_TOKENS,
+                      float repetition_penalty, unsigned int *input_ids,
+                      unsigned int NUM_INPUT_IDS, unsigned int *bad_words_ids,
+                      unsigned int NUM_BAD_WORDS_IDS) {
+
+  std::vector<unsigned int> ret;
+  float *logits_fp32;
+
+  if (std::holds_alternative<float *>(logits)) {
+    logits_fp32 = std::get<float *>(logits);
+  } else if (std::holds_alternative<_FP16 *>(logits)) {
+    logits_fp32 = new float[NUM_VOCAB];
+    _FP16 *logits_fp16 = std::get<_FP16 *>(logits);
+    for (size_t i = 0; i < NUM_VOCAB; ++i) {
+      logits_fp32[i] = (float)logits_fp16[i];
+    }
+  } else {
+    throw std::invalid_argument("logit data type is not supported");
+  }
+
+  ret = generate_multi_tokens(logits_fp32, NUM_VOCAB, NUM_TARGET_TOKENS,
+                              repetition_penalty, input_ids, NUM_INPUT_IDS,
+                              bad_words_ids, NUM_BAD_WORDS_IDS);
+
+  if (std::holds_alternative<_FP16 *>(logits)) {
+    delete[] logits_fp32;
+  }
+
+  return ret;
+}
 
 std::vector<unsigned int> generate_multi_tokens(
   float *logits, unsigned int NUM_VOCAB, unsigned int NUM_TARGET_TOKENS,

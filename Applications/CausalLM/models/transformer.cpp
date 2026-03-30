@@ -232,6 +232,7 @@ std::pair<Tensor, Tensor> Transformer::constructModel() {
   LayerHandle embedding(createLayer(
     embedding_type,
     {"name=embedding0", "in_dim=" + std::to_string(NUM_VOCAB),
+     "input_shape=1:1:" + std::to_string(INIT_SEQ_LEN), "input_dtype=FP32",
      "weight_dtype=" + EMBEDDING_DTYPE, "out_dim=" + std::to_string(DIM),
      "scale=" + std::to_string(EMBEDDING_SCALE)}));
   Tensor h = embedding(x);

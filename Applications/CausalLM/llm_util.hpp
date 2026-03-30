@@ -88,6 +88,17 @@ T unwrap(std::optional<T> &&value, const std::string &error_msg) {
  * generate multiple tokens
  */
 std::vector<unsigned int> generate_multi_tokens(
+  ml::train::TensorDim::IO_TensorType logits, unsigned int NUM_VOCAB = 0,
+  unsigned int NUM_TARGET_TOKENS = 1, float repetition_penalty = 1,
+  unsigned int *input_ids = nullptr, unsigned int NUM_INPUT_IDS = 0,
+  unsigned int *bad_words_ids = nullptr, unsigned int NUM_BAD_WORDS_IDS = 0);
+
+/**
+ * @brief generate multi tokens from logits
+ * @note This function apply repetition penalty, bad words penalty, and sort to
+ * generate multiple tokens
+ */
+std::vector<unsigned int> generate_multi_tokens(
   float *logits, unsigned int NUM_VOCAB = 0, unsigned int NUM_TARGET_TOKENS = 1,
   float repetition_penalty = 1, unsigned int *input_ids = nullptr,
   unsigned int NUM_INPUT_IDS = 0, unsigned int *bad_words_ids = nullptr,
