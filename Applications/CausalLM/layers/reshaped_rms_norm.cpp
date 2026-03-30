@@ -27,6 +27,13 @@ void ReshapedRMSNormLayer::finalize(nntrainer::InitLayerContext &context) {
   NNTR_THROW_IF(dim[0].width() % feature_size != 0, std::invalid_argument)
     << "feature size must be a divisor of width";
 
+  if (dim[0].getDataType() == ml::train::TensorDim::DataType::FP16) {
+    ml::train::TensorDim in_out_fp32_dim = dim[0];
+    in_out_fp32_dim.setDataType(ml::train::TensorDim::DataType::FP32);
+    input_fp32 = std::make_shared<nntrainer::Tensor>(in_out_fp32_dim);
+    output_fp32 = std::make_shared<nntrainer::Tensor>(in_out_fp32_dim);
+  }
+
   nntrainer::TensorDim gamma_dim(
     1, 1, 1, feature_size,
     nntrainer::TensorDim::TensorType(context.getFormat(),
@@ -93,11 +100,39 @@ void ReshapedRMSNormLayer::incremental_forwarding(
         in_step.getData<float>(), out_step.getData<float>(),
         in_step.getDim().height(), in_step.getDim().width(), epsilon);
 #endif
+      out_step.multiply_i(gamma);
+    } else if (in_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
+      ml::train::TensorDim in_step_fp32_dim = in_step_dim;
+      ml::train::TensorDim out_step_fp32_dim = out_step_dim;
+      in_step_fp32_dim.setDataType(ml::train::TensorDim::DataType::FP32);
+      out_step_fp32_dim.setDataType(ml::train::TensorDim::DataType::FP32);
+
+      nntrainer::Tensor in_step_fp32 = input_fp32->getSharedDataTensor(
+        in_step_fp32_dim, b * in_dim.getFeatureLen(), true);
+      nntrainer::Tensor out_step_fp32 = output_fp32->getSharedDataTensor(
+        out_step_fp32_dim, b * out_dim.getFeatureLen(), true);
+
+      in_step_fp32.reshape(step_reshaped_dim);
+      out_step_fp32.reshape(step_reshaped_dim);
+
+      in_step_fp32.copyData(in_step);
+
+#ifdef ENABLE_FP16
+      nntrainer::rms_norm_wrt_width_fp16_intrinsic(
+        in_step_fp32.getData<float>(), out_step_fp32.getData<float>(),
+        in_step_fp32.getDim().height(), in_step_fp32.getDim().width(), epsilon);
+#else
+      nntrainer::rms_norm_wrt_width_fp32_intrinsic(
+        in_step_fp32.getData<float>(), out_step_fp32.getData<float>(),
+        in_step_fp32.getDim().height(), in_step_fp32.getDim().width(), epsilon);
+#endif
+      out_step_fp32.multiply_i(gamma);
+
+      out_step.copyData(out_step_fp32);
     } else {
       throw std::invalid_argument(
         "Error: not yet implemented for this data type");
     }
-    out_step.multiply_i(gamma);
 
     // reshape again out_step
     out_step.reshape(out_step_dim);
@@ -112,8 +147,22 @@ void ReshapedRMSNormLayer::incremental_forwarding(
 void ReshapedRMSNormLayer::updateTensorsByInputDimensions(
   nntrainer::RunLayerContext &context,
   std::vector<nntrainer::TensorDim> input_dimensions) {
-  context.updateInput(SINGLE_INOUT_IDX, input_dimensions[0]);
-  context.updateOutput(SINGLE_INOUT_IDX, input_dimensions[0]);
+  ml::train::TensorDim input_dim = context.getInput(SINGLE_INOUT_IDX).getDim();
+  ml::train::TensorDim output_dim =
+    context.getOutput(SINGLE_INOUT_IDX).getDim();
+
+  input_dim.height(input_dimensions[0].height());
+  output_dim.height(input_dimensions[0].height());
+
+  context.updateInput(SINGLE_INOUT_IDX, input_dim);
+  context.updateOutput(SINGLE_INOUT_IDX, output_dim);
+
+  if (input_dim.getDataType() == ml::train::TensorDim::DataType::FP16) {
+    ml::train::TensorDim in_out_fp32_dim = input_dim;
+    in_out_fp32_dim.setDataType(ml::train::TensorDim::DataType::FP32);
+    input_fp32 = std::make_shared<nntrainer::Tensor>(in_out_fp32_dim);
+    output_fp32 = std::make_shared<nntrainer::Tensor>(in_out_fp32_dim);
+  }
 }
 
 void ReshapedRMSNormLayer::calcDerivative(nntrainer::RunLayerContext &context) {

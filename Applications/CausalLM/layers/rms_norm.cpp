@@ -23,6 +23,14 @@ static constexpr size_t SINGLE_INOUT_IDX = 0;
 void RMSNormLayer::finalize(nntrainer::InitLayerContext &context) {
   std::vector<nntrainer::TensorDim> dim = context.getInputDimensions();
   context.setOutputDimensions(dim);
+
+  if (dim[0].getDataType() == ml::train::TensorDim::DataType::FP16) {
+    ml::train::TensorDim in_out_fp32_dim = dim[0];
+    in_out_fp32_dim.setDataType(ml::train::TensorDim::DataType::FP32);
+    input_fp32 = std::make_shared<nntrainer::Tensor>(in_out_fp32_dim);
+    output_fp32 = std::make_shared<nntrainer::Tensor>(in_out_fp32_dim);
+  }
+
   nntrainer::TensorDim gamma_dim(
     1, 1, 1, dim[0].width(),
     nntrainer::TensorDim::TensorType(context.getFormat(),
@@ -69,11 +77,30 @@ void RMSNormLayer::incremental_forwarding(nntrainer::RunLayerContext &context,
       auto t = in_step.multiply(in_step).average(3).add(epsilon);
       t.inv_sqrt_i();
       in_step.multiply(t, out_step);
+      out_step.multiply_i(gamma);
+    } else if (in_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
+      ml::train::TensorDim in_step_fp32_dim = in_step_dim;
+      ml::train::TensorDim out_step_fp32_dim = out_step_dim;
+      in_step_fp32_dim.setDataType(ml::train::TensorDim::DataType::FP32);
+      out_step_fp32_dim.setDataType(ml::train::TensorDim::DataType::FP32);
+
+      nntrainer::Tensor in_step_fp32 = input_fp32->getSharedDataTensor(
+        in_step_fp32_dim, b * in_dim.getFeatureLen(), true);
+      nntrainer::Tensor out_step_fp32 = output_fp32->getSharedDataTensor(
+        out_step_fp32_dim, b * out_dim.getFeatureLen(), true);
+
+      in_step_fp32.copyData(in_step);
+
+      auto t = in_step_fp32.multiply(in_step_fp32).average(3).add(epsilon);
+      t.inv_sqrt_i();
+      in_step_fp32.multiply(t, out_step_fp32);
+      out_step_fp32.multiply_i(gamma);
+
+      out_step.copyData(out_step_fp32);
     } else {
       throw std::invalid_argument(
         "Error: not yet implemented for this data type");
     }
-    out_step.multiply_i(gamma);
 
 #ifdef DEBUG
     std::cout << context.getName() << " \n input:" << in_step
@@ -85,8 +112,22 @@ void RMSNormLayer::incremental_forwarding(nntrainer::RunLayerContext &context,
 void RMSNormLayer::updateTensorsByInputDimensions(
   nntrainer::RunLayerContext &context,
   std::vector<nntrainer::TensorDim> input_dimensions) {
-  context.updateInput(SINGLE_INOUT_IDX, input_dimensions[0]);
-  context.updateOutput(SINGLE_INOUT_IDX, input_dimensions[0]);
+  ml::train::TensorDim input_dim = context.getInput(SINGLE_INOUT_IDX).getDim();
+  ml::train::TensorDim output_dim =
+    context.getOutput(SINGLE_INOUT_IDX).getDim();
+
+  input_dim.height(input_dimensions[0].height());
+  output_dim.height(input_dimensions[0].height());
+
+  context.updateInput(SINGLE_INOUT_IDX, input_dim);
+  context.updateOutput(SINGLE_INOUT_IDX, output_dim);
+
+  if (input_dim.getDataType() == ml::train::TensorDim::DataType::FP16) {
+    ml::train::TensorDim in_out_fp32_dim = input_dim;
+    in_out_fp32_dim.setDataType(ml::train::TensorDim::DataType::FP32);
+    input_fp32 = std::make_shared<nntrainer::Tensor>(in_out_fp32_dim);
+    output_fp32 = std::make_shared<nntrainer::Tensor>(in_out_fp32_dim);
+  }
 }
 
 void RMSNormLayer::calcDerivative(nntrainer::RunLayerContext &context) {

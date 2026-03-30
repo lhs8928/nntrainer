@@ -83,7 +83,7 @@ Tensor Gemma3Transformer::createTransformerDecoderBlock(const int layer_id,
     "rms_norm",
     {withKey("name", "layer" + std::to_string(layer_id) + "_attention_norm"),
      withKey("epsilon", std::to_string(NORM_EPS)),
-     withKey("packed", "false")}));
+     withKey("weight_dtype", "fp32")}));
   Tensor normed = attn_norm(input);
 
   Tensor att_out = createAttention(layer_id, INIT_SEQ_LEN, NUM_HEADS, HEAD_DIM,
@@ -93,7 +93,7 @@ Tensor Gemma3Transformer::createTransformerDecoderBlock(const int layer_id,
     "rms_norm", {withKey("name", "layer" + std::to_string(layer_id) +
                                    "_post_attention_norm"),
                  withKey("epsilon", std::to_string(NORM_EPS)),
-                 withKey("packed", "false")}));
+                 withKey("weight_dtype", "fp32")}));
   Tensor post_normed = post_attn_norm(att_out);
 
   LayerHandle post_attn_add(createLayer(
@@ -105,7 +105,7 @@ Tensor Gemma3Transformer::createTransformerDecoderBlock(const int layer_id,
     "rms_norm",
     {withKey("name", "layer" + std::to_string(layer_id) + "pre_ffn_norm"),
      withKey("epsilon", std::to_string(NORM_EPS)),
-     withKey("packed", "false")}));
+     withKey("weight_dtype", "fp32")}));
   Tensor pre_ffn = pre_ffn_norm(post_attn);
 
   Tensor ffn_out = createMlp(layer_id, DIM, INTERMEDIATE_SIZE, pre_ffn);
@@ -114,7 +114,7 @@ Tensor Gemma3Transformer::createTransformerDecoderBlock(const int layer_id,
     "rms_norm",
     {withKey("name", "layer" + std::to_string(layer_id) + "post_ffn_norm"),
      withKey("epsilon", std::to_string(NORM_EPS)),
-     withKey("packed", "false")}));
+     withKey("weight_dtype", "fp32")}));
   Tensor post_ffn = post_ffn_norm(ffn_out);
 
   LayerHandle decoder_output(createLayer(
@@ -159,7 +159,8 @@ Tensor Gemma3Transformer::createAttention(const int layer_id, int seq_len,
   LayerHandle q_norm(createLayer(
     "reshaped_rms_norm",
     {withKey("name", "layer" + std::to_string(layer_id) + "_q_norm"),
-     withKey("packed", "false"), withKey("epsilon", std::to_string(NORM_EPS)),
+     withKey("weight_dtype", "fp32"),
+     withKey("epsilon", std::to_string(NORM_EPS)),
      withKey("feature_size", std::to_string(head_dim))}));
   Tensor q_normed = q_norm(q);
 
@@ -167,7 +168,8 @@ Tensor Gemma3Transformer::createAttention(const int layer_id, int seq_len,
   LayerHandle k_norm(createLayer(
     "reshaped_rms_norm",
     {withKey("name", "layer" + std::to_string(layer_id) + "_k_norm"),
-     withKey("packed", "false"), withKey("epsilon", std::to_string(NORM_EPS)),
+     withKey("weight_dtype", "fp32"),
+     withKey("epsilon", std::to_string(NORM_EPS)),
      withKey("feature_size", std::to_string(head_dim))}));
   Tensor k_normed = k_norm(k);
 

@@ -43,7 +43,8 @@ public:
    * @brief Construct a new custom RMS normalization layer object
    *
    */
-  WIN_EXPORT RMSNormLayer() : Layer(), wt_idx({0}) {}
+  WIN_EXPORT RMSNormLayer() :
+    Layer(), wt_idx({0}), input_fp32(), output_fp32() {}
 
   /**
    * @brief Destroy the custom RMS normalization layer object
@@ -113,6 +114,8 @@ public:
 private:
   std::array<unsigned int, 1> wt_idx;
   std::tuple<props::RMS_NORM_GAMMA_INIT, nntrainer::props::Epsilon> rms_props;
+  std::shared_ptr<nntrainer::Tensor> input_fp32;
+  std::shared_ptr<nntrainer::Tensor> output_fp32;
 };
 
 } // namespace causallm

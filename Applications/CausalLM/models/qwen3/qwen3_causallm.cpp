@@ -47,7 +47,8 @@ Tensor Qwen3Transformer::createAttention(const int layer_id, int seq_len,
   LayerHandle q_norm(createLayer(
     "reshaped_rms_norm",
     {withKey("name", "layer" + std::to_string(layer_id) + "_q_norm"),
-     withKey("packed", "false"), withKey("epsilon", std::to_string(NORM_EPS)),
+     withKey("weight_dtype", "fp32"),
+     withKey("epsilon", std::to_string(NORM_EPS)),
      withKey("feature_size", std::to_string(head_dim))}));
   Tensor q_normed = q_norm(q);
 
@@ -63,7 +64,8 @@ Tensor Qwen3Transformer::createAttention(const int layer_id, int seq_len,
   LayerHandle k_norm(createLayer(
     "reshaped_rms_norm",
     {withKey("name", "layer" + std::to_string(layer_id) + "_k_norm"),
-     withKey("packed", "false"), withKey("epsilon", std::to_string(NORM_EPS)),
+     withKey("weight_dtype", "fp32"),
+     withKey("epsilon", std::to_string(NORM_EPS)),
      withKey("feature_size", std::to_string(head_dim))}));
   Tensor k_normed = k_norm(k);
 

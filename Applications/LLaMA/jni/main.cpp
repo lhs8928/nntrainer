@@ -402,7 +402,7 @@ Tensor createTransformerDecoder(const int layer_id, Tensor input) {
     "rms_norm", {nntrainer::withKey("name", "layer" + std::to_string(layer_id) +
                                               "_attention_norm"),
                  nntrainer::withKey("epsilon", std::to_string(NORM_EPS)),
-                 nntrainer::withKey("packed", "false")}));
+                 nntrainer::withKey("weight_dtype", "fp32")}));
   auto normed = att_norm(input);
 
   auto att_out = createAttentionLayer(layer_id, INIT_SEQ_LEN, NUM_HEADS,
@@ -418,7 +418,7 @@ Tensor createTransformerDecoder(const int layer_id, Tensor input) {
     "rms_norm", {nntrainer::withKey("name", "layer" + std::to_string(layer_id) +
                                               "_ffn_norm"),
                  nntrainer::withKey("epsilon", std::to_string(NORM_EPS)),
-                 nntrainer::withKey("packed", "false")}));
+                 nntrainer::withKey("weight_dtype", "fp32")}));
   auto ffn_normed = ffn_norm(residual);
 
   auto ffn_out =
@@ -450,7 +450,7 @@ std::pair<Tensor, Tensor> buildLLaMAGraph() {
   LayerHandle out_norm(createLayer(
     "rms_norm", {nntrainer::withKey("name", "output_norm"),
                  nntrainer::withKey("epsilon", std::to_string(NORM_EPS)),
-                 nntrainer::withKey("packed", "false")}));
+                 nntrainer::withKey("weight_dtype", "fp32")}));
   h = out_norm(h);
 
   LayerHandle out_fc(createLayer("fully_connected",
