@@ -27,8 +27,9 @@
 #if defined(__ARM_NEON)
 #include <arm_neon.h>
 #endif
-
 namespace nntrainer {
+
+std::shared_ptr<std::vector<float>> C32;
 
 static inline void __copy_f16_from_f32(const float *src, _FP16 *dst,
                                        int64_t k) {
@@ -326,8 +327,10 @@ void __ggml_gemm_q6_K(const unsigned int M, const unsigned int N,
                       const unsigned int lda, const void *B,
                       const unsigned int ldb, _FP16 *C,
                       const unsigned int ldc) {
-  std::vector<float> C32 = std::vector<float>(M * N);
-  float *C32_ptr = C32.data();
+  if (!C32 || C32->empty() || C32->size() < M * N) {
+    C32 = std::make_shared<std::vector<float>>(M * N);
+  }
+  float *C32_ptr = C32->data();
 
   auto &tm = ThreadManager::Global();
 
@@ -385,8 +388,10 @@ static inline void __ggml_q4_0_4x8_q8_0_GEMM_BSTP(
   const unsigned int M, const unsigned int N, const unsigned int K,
   const _FP16 *A, const unsigned int lda, const void *B, const unsigned int ldb,
   _FP16 *C16, const unsigned int ldc) {
-  std::vector<float> C32 = std::vector<float>(M * N);
-  float *C = C32.data();
+  if (!C32 || C32->empty() || C32->size() < M * N) {
+    C32 = std::make_shared<std::vector<float>>(M * N);
+  }
+  float *C = C32->data();
   int NB_COLS = 4;
   auto &tm = ThreadManager::Global();
   unsigned int blocks_per_4_rows = (K + QK8_0 - 1) / QK8_0;
@@ -457,7 +462,10 @@ void __ggml_q4_0_4x8_q8_0_GEMM(const unsigned int M, const unsigned int N,
                                const unsigned int ldb, _FP16 *C,
                                const unsigned int ldc) {
   int NB_COLS = 4;
-  std::vector<float> C32 = std::vector<float>(M * N);
+
+  if (!C32 || C32->empty() || C32->size() < M * N) {
+    C32 = std::make_shared<std::vector<float>>(M * N);
+  }
 
   // q40 GEMV accuracy explodes?
   if (M == 1) { // GEMV
@@ -478,13 +486,14 @@ void __ggml_q4_0_4x8_q8_0_GEMM(const unsigned int M, const unsigned int N,
                    ? M_step_end + NB_COLS - (M_step_end % NB_COLS)
                    : M_step_end;
 
-    nntr_gemv_q4_0_4x8_q8_0(K, (float *)((C32.data()) + M_step_start), N,
+    nntr_gemv_q4_0_4x8_q8_0(K, (float *)((C32->data()) + M_step_start), N,
                             (void *)((char *)B + M_step_start * B_step),
                             QA.data(), M, M_step_end - M_step_start);
   } else {
     return __ggml_q4_0_4x8_q8_0_GEMM_BSTP(M, N, K, A, lda, B, ldb, C, ldc);
   }
-  __copy_f16_from_f32(C32.data(), C, M * N);
+
+  __copy_f16_from_f32(C32->data(), C, M * N);
 }
 
 } // namespace nntrainer
