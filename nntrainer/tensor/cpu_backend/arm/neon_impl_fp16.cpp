@@ -1311,6 +1311,89 @@ void compute_rotary_embedding_value(unsigned int dim, unsigned int half_,
 
 void swiglu(const unsigned int N, __fp16 *X, __fp16 *Y, __fp16 *Z) {
   unsigned int i = 0;
+  float16x8_t neg_alpha_vec = vdupq_n_f16(-1.0f);
+  float16x8_t one = vdupq_n_f16(1.0f);
+
+  for (; N - i >= 32; i += 32) {
+    float16x8_t y0 = vld1q_f16(&Y[i]);
+    float16x8_t y1 = vld1q_f16(&Y[i + 8]);
+    float16x8_t y2 = vld1q_f16(&Y[i + 16]);
+    float16x8_t y3 = vld1q_f16(&Y[i + 24]);
+
+    float16x8_t z0 = vld1q_f16(&Z[i]);
+    float16x8_t z1 = vld1q_f16(&Z[i + 8]);
+    float16x8_t z2 = vld1q_f16(&Z[i + 16]);
+    float16x8_t z3 = vld1q_f16(&Z[i + 24]);
+
+    float16x8_t alpha_y0 = vmulq_f16(y0, neg_alpha_vec);
+    float16x8_t alpha_y1 = vmulq_f16(y1, neg_alpha_vec);
+    float16x8_t alpha_y2 = vmulq_f16(y2, neg_alpha_vec);
+    float16x8_t alpha_y3 = vmulq_f16(y3, neg_alpha_vec);
+
+    float32x4_t exp0_0 = exp_ps(vcvt_f32_f16(vget_low_f16(alpha_y0)));
+    float32x4_t exp0_1 = exp_ps(vcvt_f32_f16(vget_high_f16(alpha_y0)));
+    float16x8_t exp0 = vcombine_f16(vcvt_f16_f32(exp0_0), vcvt_f16_f32(exp0_1));
+    float32x4_t exp1_0 = exp_ps(vcvt_f32_f16(vget_low_f16(alpha_y1)));
+    float32x4_t exp1_1 = exp_ps(vcvt_f32_f16(vget_high_f16(alpha_y1)));
+    float16x8_t exp1 = vcombine_f16(vcvt_f16_f32(exp1_0), vcvt_f16_f32(exp1_1));
+    float32x4_t exp2_0 = exp_ps(vcvt_f32_f16(vget_low_f16(alpha_y2)));
+    float32x4_t exp2_1 = exp_ps(vcvt_f32_f16(vget_high_f16(alpha_y2)));
+    float16x8_t exp2 = vcombine_f16(vcvt_f16_f32(exp2_0), vcvt_f16_f32(exp2_1));
+    float32x4_t exp3_0 = exp_ps(vcvt_f32_f16(vget_low_f16(alpha_y3)));
+    float32x4_t exp3_1 = exp_ps(vcvt_f32_f16(vget_high_f16(alpha_y3)));
+    float16x8_t exp3 = vcombine_f16(vcvt_f16_f32(exp3_0), vcvt_f16_f32(exp3_1));
+
+    exp0 = vaddq_f16(exp0, one);
+    exp1 = vaddq_f16(exp1, one);
+    exp2 = vaddq_f16(exp2, one);
+    exp3 = vaddq_f16(exp3, one);
+
+    exp0 = vdivq_f16(y0, exp0);
+    exp1 = vdivq_f16(y1, exp1);
+    exp2 = vdivq_f16(y2, exp2);
+    exp3 = vdivq_f16(y3, exp3);
+
+    exp0 = vmulq_f16(exp0, z0);
+    exp1 = vmulq_f16(exp1, z1);
+    exp2 = vmulq_f16(exp2, z2);
+    exp3 = vmulq_f16(exp3, z3);
+
+    vst1q_f16(&X[i], exp0);
+    vst1q_f16(&X[i + 8], exp1);
+    vst1q_f16(&X[i + 16], exp2);
+    vst1q_f16(&X[i + 24], exp3);
+  }
+
+  for (; N - i >= 16; i += 16) {
+    float16x8_t y0 = vld1q_f16(&Y[i]);
+    float16x8_t y1 = vld1q_f16(&Y[i + 8]);
+
+    float16x8_t z0 = vld1q_f16(&Z[i]);
+    float16x8_t z1 = vld1q_f16(&Z[i + 8]);
+
+    float16x8_t alpha_y0 = vmulq_f16(y0, neg_alpha_vec);
+    float16x8_t alpha_y1 = vmulq_f16(y1, neg_alpha_vec);
+
+    float32x4_t exp0_0 = exp_ps(vcvt_f32_f16(vget_low_f16(alpha_y0)));
+    float32x4_t exp0_1 = exp_ps(vcvt_f32_f16(vget_high_f16(alpha_y0)));
+    float16x8_t exp0 = vcombine_f16(vcvt_f16_f32(exp0_0), vcvt_f16_f32(exp0_1));
+    float32x4_t exp1_0 = exp_ps(vcvt_f32_f16(vget_low_f16(alpha_y1)));
+    float32x4_t exp1_1 = exp_ps(vcvt_f32_f16(vget_high_f16(alpha_y1)));
+    float16x8_t exp1 = vcombine_f16(vcvt_f16_f32(exp1_0), vcvt_f16_f32(exp1_1));
+
+    exp0 = vaddq_f16(exp0, one);
+    exp1 = vaddq_f16(exp1, one);
+
+    exp0 = vdivq_f16(y0, exp0);
+    exp1 = vdivq_f16(y1, exp1);
+
+    exp0 = vmulq_f16(exp0, z0);
+    exp1 = vmulq_f16(exp1, z1);
+
+    vst1q_f16(&X[i], exp0);
+    vst1q_f16(&X[i + 8], exp1);
+  }
+
   for (; N - i >= 8; i += 8) {
     float16x8_t y0_7 = vld1q_f16(&Y[i]);
     float16x8_t z0_7 = vld1q_f16(&Z[i]);
@@ -1332,6 +1415,30 @@ void swiglu(const unsigned int N, __fp16 *X, __fp16 *Y, __fp16 *Z) {
     ++i;
   }
 }
+
+// void swiglu(const unsigned int N, __fp16 *X, __fp16 *Y, __fp16 *Z) {
+//   unsigned int i = 0;
+//   for (; N - i >= 8; i += 8) {
+//     float16x8_t y0_7 = vld1q_f16(&Y[i]);
+//     float16x8_t z0_7 = vld1q_f16(&Z[i]);
+//     float16x8_t y0_7_minus = vmulq_n_f16(y0_7, -1);
+
+//     float32x4_t exp0_3 = exp_ps(vcvt_f32_f16(vget_low_f16(y0_7_minus)));
+//     float32x4_t exp4_7 = exp_ps(vcvt_f32_f16(vget_high_f16(y0_7_minus)));
+
+//     float16x8_t exp0_7 =
+//       vcombine_f16(vcvt_f16_f32(exp0_3), vcvt_f16_f32(exp4_7));
+//     exp0_7 = vaddq_f16(exp0_7, vmovq_n_f16(1.f));
+//     exp0_7 = vdivq_f16(y0_7, exp0_7);
+//     exp0_7 = vmulq_f16(exp0_7, z0_7);
+
+//     vst1q_f16(&X[i], exp0_7);
+//   }
+//   while (i < N) {
+//     X[i] = (Y[i] / (1.f + std::exp(static_cast<float>(-Y[i])))) * Z[i];
+//     ++i;
+//   }
+// }
 
 __fp16 max_val(const unsigned int N, __fp16 *X) {
   unsigned int i = 0;
