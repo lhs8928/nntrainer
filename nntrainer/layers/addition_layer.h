@@ -101,6 +101,13 @@ public:
   bool skip_prefill = false;
 
   static constexpr const char *type = "addition";
+
+private:
+  /**
+   * @copydoc Layer::getLayerDimensions(InitLayerContext &context)
+   */
+  std::array<std::vector<TensorDim>, 3>
+  getLayerDimensions(InitLayerContext &context) override;
 };
 
 } // namespace nntrainer

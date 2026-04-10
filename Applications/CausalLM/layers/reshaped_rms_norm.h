@@ -124,10 +124,18 @@ private:
   std::tuple<props::RMS_NORM_GAMMA_INIT, nntrainer::props::Epsilon,
              props::FeatureSize, nntrainer::props::SkipPrefill, props::UseGamma>
     rms_props;
+  std::shared_ptr<nntrainer::Tensor> input_fp32;
+  std::shared_ptr<nntrainer::Tensor> output_fp32;
 
   unsigned int feature_size;
   bool skip_prefill = false;
   bool use_gamma;
+
+  /**
+   * @copydoc Layer::getLayerDimensions(InitLayerContext &context)
+   */
+  std::array<std::vector<nntrainer::TensorDim>, 3>
+  getLayerDimensions(nntrainer::InitLayerContext &context) override;
 };
 
 } // namespace causallm

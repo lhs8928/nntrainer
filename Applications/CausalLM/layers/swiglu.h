@@ -109,6 +109,12 @@ public:
 private:
   std::tuple<nntrainer::props::SkipPrefill> swiglu_props;
   bool skip_prefill = false;
+
+  /**
+   * @copydoc Layer::getLayerDimensions(InitLayerContext &context)
+   */
+  std::array<std::vector<nntrainer::TensorDim>, 3>
+  getLayerDimensions(nntrainer::InitLayerContext &context) override;
 };
 
 } // namespace causallm

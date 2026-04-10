@@ -160,6 +160,26 @@ private:
   std::array<unsigned int, 4> weight_idx; /**< indices of the weights */
   bool skip_prefill = false;
 
+  /**
+   * @copydoc Layer::getLayerDimensions(InitLayerContext &context)
+   */
+  std::array<std::vector<nntrainer::TensorDim>, 3>
+  getLayerDimensions(nntrainer::InitLayerContext &context) override;
+
+  /**
+   * @brief     get output, weight and tensor dimensions of embedding layer
+   * @param     context Context of the layer
+   */
+  std::array<std::vector<nntrainer::TensorDim>, 3>
+  getEmbeddingDimensions(nntrainer::InitLayerContext &context);
+
+  /**
+   * @brief     get output, weight and tensor dimensions of lm head layer
+   * @param     context Context of the layer
+   */
+  std::array<std::vector<nntrainer::TensorDim>, 3>
+  getLMheadDimensions(nntrainer::InitLayerContext &context);
+
   WIN_EXPORT void finalize_embedding(nntrainer::InitLayerContext &context);
   WIN_EXPORT void finalize_lmhead(nntrainer::InitLayerContext &context);
   WIN_EXPORT void

@@ -123,6 +123,12 @@ private:
   std::tuple<nntrainer::props::Unit> lmhead_props;
   std::array<unsigned int, 2> weight_idx; /**< indices of the weights */
   bool skip_prefill = false;
+
+  /**
+   * @copydoc Layer::getLayerDimensions(InitLayerContext &context)
+   */
+  std::array<std::vector<nntrainer::TensorDim>, 3>
+  getLayerDimensions(nntrainer::InitLayerContext &context) override;
 };
 } // namespace causallm
 
