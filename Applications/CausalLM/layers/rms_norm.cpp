@@ -22,22 +22,20 @@ namespace causallm {
 static constexpr size_t SINGLE_INOUT_IDX = 0;
 
 void RMSNormLayer::finalize(nntrainer::InitLayerContext &context) {
-  std::vector<nntrainer::TensorDim> dim = context.getInputDimensions();
-  context.setOutputDimensions(dim);
+  [[maybe_unused]] auto [output_dims, weight_dims, tensor_dims] =
+    getLayerDimensions(context);
+
+  context.setOutputDimensions(output_dims);
 
   if (!std::get<nntrainer::props::SkipPrefill>(rms_props).empty())
     skip_prefill = std::get<nntrainer::props::SkipPrefill>(rms_props).get();
 
-  // gamma is unquantized and stored as FP32 in the bin. Request it as FP32
-  // regardless of the activation dtype; declaring it FP16 reinterprets the
-  // on-disk FP32 bytes as FP16 and corrupts gamma (≈FP16-max garbage). The
-  // FP16 forward path casts gamma down to FP16 at the multiply site.
-  nntrainer::TensorDim gamma_dim(
-    1, 1, 1, dim[0].width(),
-    nntrainer::TensorDim::TensorType(context.getFormat(),
-                                     nntrainer::TensorDim::DataType::FP32));
+  // gamma is unquantized and stored as FP32 in the bin. Force request as FP32.
+  weight_dims[RMSParams::gamma].setDataType(nntrainer::TensorDim::DataType::FP32);
+
   wt_idx[RMSParams::gamma] = context.requestWeight(
-    gamma_dim, nntrainer::props::InitializerInfo::Enum::NONE,
+    weight_dims[RMSParams::gamma],
+    nntrainer::props::InitializerInfo::Enum::NONE,
     nntrainer::WeightRegularizer::NONE, 1.0f, 0.0f, "gamma", true);
 }
 

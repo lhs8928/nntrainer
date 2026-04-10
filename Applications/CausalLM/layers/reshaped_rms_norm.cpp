@@ -20,8 +20,6 @@ namespace causallm {
 static constexpr size_t SINGLE_INOUT_IDX = 0;
 
 void ReshapedRMSNormLayer::finalize(nntrainer::InitLayerContext &context) {
-  std::vector<nntrainer::TensorDim> dim = context.getInputDimensions();
-  context.setOutputDimensions(dim);
   feature_size = std::get<props::FeatureSize>(rms_props);
   use_gamma = std::get<props::UseGamma>(rms_props).get();
 
@@ -31,19 +29,18 @@ void ReshapedRMSNormLayer::finalize(nntrainer::InitLayerContext &context) {
   if (!std::get<nntrainer::props::SkipPrefill>(rms_props).empty())
     skip_prefill = std::get<nntrainer::props::SkipPrefill>(rms_props).get();
 
-  NNTR_THROW_IF(dim[0].width() % feature_size != 0, std::invalid_argument)
-    << "feature size must be a divisor of width";
+  [[maybe_unused]] auto [output_dims, weight_dims, tensor_dims] =
+    getLayerDimensions(context);
+
+  context.setOutputDimensions(output_dims);
 
   if (use_gamma) {
     // gamma is unquantized FP32 on disk; request FP32 regardless of activation
     // dtype (FP16 would reinterpret the FP32 bytes and corrupt gamma). The FP16
     // path casts gamma down at the multiply site.
-    nntrainer::TensorDim gamma_dim(
-      1, 1, 1, feature_size,
-      nntrainer::TensorDim::TensorType(context.getFormat(),
-                                       nntrainer::TensorDim::DataType::FP32));
+    weight_dims[RMSParams::gamma].setDataType(nntrainer::TensorDim::DataType::FP32);
     wt_idx[RMSParams::gamma] = context.requestWeight(
-      gamma_dim, nntrainer::props::InitializerInfo::Enum::NONE,
+      weight_dims[RMSParams::gamma], nntrainer::props::InitializerInfo::Enum::NONE,
       nntrainer::WeightRegularizer::NONE, 1.0f, 0.0f, "gamma", true);
   }
 }

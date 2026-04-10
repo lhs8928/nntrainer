@@ -84,14 +84,10 @@ void InputLayer::exportTo(Exporter &exporter,
 }
 
 void InputLayer::finalize(InitLayerContext &context) {
-
-  std::vector<TensorDim> output_dims = context.getInputDimensions();
-  // Preserve the declared input dtype — the previous behaviour of silently
-  // promoting FP32 inputs to the model's activation dtype clobbers integer-
-  // valued inputs (e.g. embedding token IDs) when the model runs at FP16.
-  // Models that want a dtype change should declare it on the input layer
-  // (input_dtype=FP16) instead of relying on an implicit promotion here.
+  [[maybe_unused]] auto [output_dims, weight_dims, tensor_dims] =
+    getLayerDimensions(context);
   context.setOutputDimensions(output_dims);
+
   is_inplace = output_dims == context.getInputDimensions();
 }
 
@@ -104,13 +100,7 @@ void InputLayer::updateTensorsByInputDimensions(
 
 std::array<std::vector<TensorDim>, 3>
 InputLayer::getLayerDimensions(InitLayerContext &context) {
-  TensorDim::DataType output_dtype = context.getActivationDataType();
-
   std::vector<TensorDim> output_dims = context.getInputDimensions();
-  for (auto &d : output_dims) {
-    d.setDataType(output_dtype);
-  }
-
   return {output_dims, {}, {}};
 }
 

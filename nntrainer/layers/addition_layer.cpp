@@ -24,9 +24,12 @@ namespace nntrainer {
 static constexpr size_t SINGLE_INOUT_IDX = 0;
 
 void AdditionLayer::finalize(InitLayerContext &context) {
+  [[maybe_unused]] auto [output_dims, weight_dims, tensor_dims] =
+    getLayerDimensions(context);
+  context.setOutputDimensions(output_dims);
+
   if (!std::get<props::SkipPrefill>(add_props).empty())
     skip_prefill = std::get<props::SkipPrefill>(add_props).get();
-  context.setOutputDimensions({context.getInputDimensions()[0]});
 }
 
 void AdditionLayer::forwarding(RunLayerContext &context, bool training) {
