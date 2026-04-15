@@ -242,6 +242,14 @@ public:
   WIN_EXPORT void finalize(nntrainer::InitLayerContext &context) override;
 
   /**
+   * @copydoc Layer::updateTensorsByInputDimensions(InitLayerContext
+   * &init_context, RunLayerContext &context)
+   */
+  WIN_EXPORT std::vector<nntrainer::TensorDim> updateTensorsByInputDimensions(
+    nntrainer::InitLayerContext &init_context,
+    nntrainer::RunLayerContext &run_context) override;
+
+  /**
    * @brief forwarding function of MhaCore Layer
    *        Please note that forwarding function is used only for training.
    */
@@ -331,7 +339,6 @@ public:
    * @brief Get the current cache index
    */
   WIN_EXPORT unsigned int getCacheIndex() const { return cache_index; }
-
   inline static const std::string type = "mha_core";
 
 private:

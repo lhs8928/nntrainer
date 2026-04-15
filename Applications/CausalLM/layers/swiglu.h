@@ -53,6 +53,14 @@ public:
   WIN_EXPORT void finalize(nntrainer::InitLayerContext &context) override;
 
   /**
+   * @copydoc Layer::updateTensorsByInputDimensions(InitLayerContext
+   * &init_context, RunLayerContext &context)
+   */
+  WIN_EXPORT std::vector<nntrainer::TensorDim> updateTensorsByInputDimensions(
+    nntrainer::InitLayerContext &init_context,
+    nntrainer::RunLayerContext &run_context) override;
+
+  /**
    * @copydoc Layer::forwarding(RunLayerContext &context, bool training)
    */
   WIN_EXPORT void forwarding(nntrainer::RunLayerContext &context,
@@ -99,10 +107,6 @@ public:
       << "[swiglu] Unknown Layer Properties count " +
            std::to_string(values.size());
   };
-
-  WIN_EXPORT void updateTensorsByInputDimensions(
-    nntrainer::RunLayerContext &context,
-    std::vector<nntrainer::TensorDim> input_dimensions) override;
 
   inline static const std::string type = "swiglu";
 

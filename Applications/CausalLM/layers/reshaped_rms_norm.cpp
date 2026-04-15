@@ -45,6 +45,20 @@ void ReshapedRMSNormLayer::finalize(nntrainer::InitLayerContext &context) {
   }
 }
 
+std::vector<nntrainer::TensorDim>
+ReshapedRMSNormLayer::updateTensorsByInputDimensions(
+  nntrainer::InitLayerContext &init_context,
+  nntrainer::RunLayerContext &run_context) {
+  [[maybe_unused]] auto [output_dims, weight_dims, tensor_dims] =
+    getLayerDimensions(init_context);
+
+  run_context.updateInput(SINGLE_INOUT_IDX,
+                          init_context.getInputDimensions()[SINGLE_INOUT_IDX]);
+  run_context.updateOutput(SINGLE_INOUT_IDX, output_dims[SINGLE_INOUT_IDX]);
+
+  return output_dims;
+}
+
 void ReshapedRMSNormLayer::forwarding(nntrainer::RunLayerContext &context,
                                       bool training) {}
 
@@ -138,13 +152,6 @@ void ReshapedRMSNormLayer::incremental_forwarding(
               << "output:" << out_step << std::endl;
 #endif
   }
-}
-
-void ReshapedRMSNormLayer::updateTensorsByInputDimensions(
-  nntrainer::RunLayerContext &context,
-  std::vector<nntrainer::TensorDim> input_dimensions) {
-  context.updateInput(SINGLE_INOUT_IDX, input_dimensions[0]);
-  context.updateOutput(SINGLE_INOUT_IDX, input_dimensions[0]);
 }
 
 void ReshapedRMSNormLayer::calcDerivative(nntrainer::RunLayerContext &context) {
