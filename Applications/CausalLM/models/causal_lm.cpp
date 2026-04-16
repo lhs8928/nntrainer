@@ -268,24 +268,24 @@ CausalLM::generate(ml::train::TensorDim::IO_TensorType logits, bool do_sample,
                    float repetition_penalty, unsigned int *input_ids,
                    unsigned int NUM_INPUT_IDS) {
   std::vector<unsigned int> ret;
-  float *logits_fp32;
+  float *logits_fp32_ptr;
 
   if (std::holds_alternative<float *>(logits)) {
-    logits_fp32 = std::get<float *>(logits);
+    logits_fp32_ptr = std::get<float *>(logits);
   } else if (std::holds_alternative<_FP16 *>(logits)) {
-    logits_fp32 = new float[NUM_VOCAB];
+    if (!logits_fp32) {
+      std::shared_ptr<float[]> buffer(new float[NUM_VOCAB]);
+      logits_fp32 = std::move(buffer);
+    }
+    logits_fp32_ptr = logits_fp32.get();
     const _FP16 *logits_fp16 = std::get<_FP16 *>(logits);
     for (size_t i = 0; i < NUM_VOCAB; ++i) {
-      logits_fp32[i] = (float)logits_fp16[i];
+      logits_fp32_ptr[i] = (float)logits_fp16[i];
     }
   }
 
-  ret = generate(logits_fp32, do_sample, repetition_penalty, input_ids,
+  ret = generate(logits_fp32_ptr, do_sample, repetition_penalty, input_ids,
                  NUM_INPUT_IDS);
-
-  if (std::holds_alternative<_FP16 *>(logits)) {
-    delete[] logits_fp32;
-  }
 
   return ret;
 }

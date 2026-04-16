@@ -39,6 +39,8 @@
 #define WCHAR_P std::string &
 #endif
 
+#include <memory>
+
 #include <kv_cache_manager.h>
 #include <transformer.h>
 
@@ -158,6 +160,8 @@ protected:
   unsigned int global_token_len;
 
   std::mt19937 rng; /**< Random Number Gen */
+
+  std::shared_ptr<float[]> logits_fp32;
 
   /**
    * @brief Externalized KV cache (host-owned). Allocated by allocateKVCache()
