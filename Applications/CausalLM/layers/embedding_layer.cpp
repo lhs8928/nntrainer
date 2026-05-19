@@ -137,16 +137,20 @@ void EmbeddingLayer::incremental_forwarding(nntrainer::RunLayerContext &context,
       } else if (weight.getDataType() == nntrainer::TensorDim::DataType::Q4_0) {
         ///@note this should be replaced with quantizer operation
         int num_blocks_per_row = (weight.width() + 32 - 1) / 32;
+        void *q4_row = (void *)((char *)weight.getData<uint8_t>() +
+                                (18 * num_blocks_per_row) * embed_idx);
         if (out_tensor.getDataType() == nntrainer::TensorDim::DataType::FP32) {
-          nntrainer::dequantize_row_q4_0(
-            (void *)((char *)weight.getData<uint8_t>() +
-                     (18 * num_blocks_per_row) * embed_idx),
-            out_tensor.getData(), out_dim);
+          nntrainer::dequantize_row_q4_0(q4_row, out_tensor.getData(),
+                                         out_dim);
+#ifdef ENABLE_FP16
+        } else if (out_tensor.getDataType() ==
+                   nntrainer::TensorDim::DataType::FP16) {
+          nntrainer::dequantize_row_q4_0(q4_row, out_tensor.getData<_FP16>(),
+                                         out_dim);
+#endif
         } else {
-          nntrainer::dequantize_row_q4_0(
-            (void *)((char *)weight.getData<uint8_t>() +
-                     (18 * num_blocks_per_row) * embed_idx),
-            out_tensor.getData<_FP16>(), out_dim);
+          nntrainer::dequantize_row_q4_0(q4_row, out_tensor.getData(),
+                                         out_dim);
         }
       } else {
         out_tensor.copyData(cur_weight);

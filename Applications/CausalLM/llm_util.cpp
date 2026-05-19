@@ -26,12 +26,14 @@ generate_multi_tokens(ml::train::TensorDim::IO_TensorType logits,
 
   if (std::holds_alternative<float *>(logits)) {
     logits_fp32 = std::get<float *>(logits);
+#ifdef ENABLE_FP16
   } else if (std::holds_alternative<_FP16 *>(logits)) {
     logits_fp32 = new float[NUM_VOCAB];
     _FP16 *logits_fp16 = std::get<_FP16 *>(logits);
     for (size_t i = 0; i < NUM_VOCAB; ++i) {
       logits_fp32[i] = (float)logits_fp16[i];
     }
+#endif
   } else {
     throw std::invalid_argument("logit data type is not supported");
   }
@@ -40,9 +42,11 @@ generate_multi_tokens(ml::train::TensorDim::IO_TensorType logits,
                               repetition_penalty, input_ids, NUM_INPUT_IDS,
                               bad_words_ids, NUM_BAD_WORDS_IDS);
 
+#ifdef ENABLE_FP16
   if (std::holds_alternative<_FP16 *>(logits)) {
     delete[] logits_fp32;
   }
+#endif
 
   return ret;
 }

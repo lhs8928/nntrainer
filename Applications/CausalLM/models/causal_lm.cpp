@@ -272,6 +272,7 @@ CausalLM::generate(ml::train::TensorDim::IO_TensorType logits, bool do_sample,
 
   if (std::holds_alternative<float *>(logits)) {
     logits_fp32_ptr = std::get<float *>(logits);
+#ifdef ENABLE_FP16
   } else if (std::holds_alternative<_FP16 *>(logits)) {
     if (!logits_fp32) {
       std::shared_ptr<float[]> buffer(new float[NUM_VOCAB]);
@@ -282,6 +283,9 @@ CausalLM::generate(ml::train::TensorDim::IO_TensorType logits, bool do_sample,
     for (size_t i = 0; i < NUM_VOCAB; ++i) {
       logits_fp32_ptr[i] = (float)logits_fp16[i];
     }
+#endif
+  } else {
+    throw std::invalid_argument("logit data type is not supported");
   }
 
   ret = generate(logits_fp32_ptr, do_sample, repetition_penalty, input_ids,
@@ -483,7 +487,7 @@ void CausalLM::run(const WSTR prompt, bool do_sample, const WSTR system_prompt,
       cache_inputs.begin(), cache_inputs.end(),
       [](const auto &lhs, const auto &rhs) { return lhs.first < rhs.first; });
 
-    std::vector<float *> inference_inputs;
+    std::vector<ml::train::TensorDim::IO_TensorType> inference_inputs;
     inference_inputs.reserve(1 + cache_inputs.size());
     inference_inputs.push_back(input_sample);
     for (const auto &cache_input : cache_inputs)
@@ -561,9 +565,11 @@ void CausalLM::run(const WSTR prompt, bool do_sample, const WSTR system_prompt,
     if (std::holds_alternative<float *>(out)) {
       float *out_ptr = std::get<float *>(out);
       delete[] out_ptr;
+#ifdef ENABLE_FP16
     } else if (std::holds_alternative<_FP16 *>(out)) {
       _FP16 *out_ptr = std::get<_FP16 *>(out);
       delete[] out_ptr;
+#endif
     }
   }
 
@@ -611,9 +617,11 @@ void CausalLM::run(const WSTR prompt, bool do_sample, const WSTR system_prompt,
       if (std::holds_alternative<float *>(out)) {
         float *out_ptr = std::get<float *>(out);
         delete[] out_ptr;
+#ifdef ENABLE_FP16
       } else if (std::holds_alternative<_FP16 *>(out)) {
         _FP16 *out_ptr = std::get<_FP16 *>(out);
         delete[] out_ptr;
+#endif
       }
     }
 
