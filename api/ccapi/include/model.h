@@ -18,6 +18,7 @@
 
 #if __cplusplus >= MIN_CPP_VERSION
 
+#include <initializer_list>
 #include <map>
 #include <string>
 #include <type_traits>
@@ -400,6 +401,33 @@ public:
   virtual std::vector<float *>
   inference(unsigned int batch, const std::vector<float *> &input,
             const std::vector<float *> &label = std::vector<float *>()) = 0;
+
+  /**
+   * @brief     Run the inference of the model with float pointer inputs
+   * @param[in] batch batch size of current input
+   * @param[in] input inputs as a list of each input data
+   * @retval list of output as float *
+   * @note The output memory must not be freed by the caller
+   */
+  std::vector<float *> inference(unsigned int batch,
+                                 std::initializer_list<float *> input) {
+    return inference(batch, std::vector<float *>(input));
+  }
+
+  /**
+   * @brief     Run the inference of the model with float pointer inputs
+   * @param[in] batch batch size of current input
+   * @param[in] input inputs as a list of each input data
+   * @param[in] label labels as a list of each label data
+   * @retval list of output as float *
+   * @note The output memory must not be freed by the caller
+   */
+  std::vector<float *> inference(unsigned int batch,
+                                 std::initializer_list<float *> input,
+                                 std::initializer_list<float *> label) {
+    return inference(batch, std::vector<float *>(input),
+                     std::vector<float *>(label));
+  }
 
   /**
    * @brief     Run the incremental inference of the model

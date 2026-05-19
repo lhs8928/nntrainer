@@ -140,8 +140,7 @@ void EmbeddingLayer::incremental_forwarding(nntrainer::RunLayerContext &context,
         void *q4_row = (void *)((char *)weight.getData<uint8_t>() +
                                 (18 * num_blocks_per_row) * embed_idx);
         if (out_tensor.getDataType() == nntrainer::TensorDim::DataType::FP32) {
-          nntrainer::dequantize_row_q4_0(q4_row, out_tensor.getData(),
-                                         out_dim);
+          nntrainer::dequantize_row_q4_0(q4_row, out_tensor.getData(), out_dim);
 #ifdef ENABLE_FP16
         } else if (out_tensor.getDataType() ==
                    nntrainer::TensorDim::DataType::FP16) {
@@ -149,8 +148,7 @@ void EmbeddingLayer::incremental_forwarding(nntrainer::RunLayerContext &context,
                                          out_dim);
 #endif
         } else {
-          nntrainer::dequantize_row_q4_0(q4_row, out_tensor.getData(),
-                                         out_dim);
+          nntrainer::dequantize_row_q4_0(q4_row, out_tensor.getData(), out_dim);
         }
       } else {
         out_tensor.copyData(cur_weight);

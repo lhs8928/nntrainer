@@ -577,9 +577,9 @@ InitLayerContext LayerNode::finalize(const std::vector<TensorDim> &input_dims,
       for (auto &d : actual_prop_dims) {
         d.setDataType(
           input_dtype.empty()
-            ? str_converter<enum_class_prop_tag,
-                            nntrainer::TensorDataTypeInfo>::from_string(
-                tensor_type[2])
+            ? str_converter<
+                enum_class_prop_tag,
+                nntrainer::TensorDataTypeInfo>::from_string(tensor_type[2])
             : input_dtype.get());
         d.setFormat(
           str_converter<enum_class_prop_tag, nntrainer::TensorFormatInfo>::
