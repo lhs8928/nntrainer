@@ -113,18 +113,19 @@ protected:
            bool log_output = true) override;
 
 private:
-  unsigned int IMG_SIZE = 384;   /**< Image height/width */
-  unsigned int PATCH_SIZE = 16;  /**< Spatial patch size */
-  unsigned int TUBELET = 2;      /**< Temporal tubelet size */
-  unsigned int NUM_FRAMES = 16;  /**< Number of input frames (dynamic, from VoRA fps=4) */
-  unsigned int IN_CHANS = 3;     /**< Input channels (RGB) */
-  unsigned int GRID_T = 8;       /**< Temporal grid (NUM_FRAMES / TUBELET) */
-  unsigned int GRID_H = 24;      /**< Height grid (IMG_SIZE / PATCH_SIZE) */
-  unsigned int GRID_W = 24;      /**< Width grid (IMG_SIZE / PATCH_SIZE) */
-  unsigned int NUM_PATCHES = 4608; /**< GRID_T * GRID_H * GRID_W */
-  unsigned int PATCH_VEC = 1536; /**< IN_CHANS * TUBELET * PATCH_SIZE^2 */
-  unsigned int PRETRAINED_GRID = 16;  /**< 256 / PATCH_SIZE for rope interp */
-  bool INTERPOLATE_ROPE = true;       /**< V-JEPA 2.1 uses rope interpolation */
+  unsigned int IMG_SIZE = 384;       /**< Image height/width */
+  unsigned int PATCH_SIZE = 16;      /**< Spatial patch size */
+  unsigned int TUBELET = 2;          /**< Temporal tubelet size */
+  unsigned int NUM_FRAMES = 16;      /**< Number of input frames (dynamic, from
+                                          VoRA fps=4) */
+  unsigned int IN_CHANS = 3;         /**< Input channels (RGB) */
+  unsigned int GRID_T = 8;           /**< Temporal grid (NUM_FRAMES / TUBELET) */
+  unsigned int GRID_H = 24;          /**< Height grid (IMG_SIZE / PATCH_SIZE) */
+  unsigned int GRID_W = 24;          /**< Width grid (IMG_SIZE / PATCH_SIZE) */
+  unsigned int NUM_PATCHES = 4608;   /**< GRID_T * GRID_H * GRID_W */
+  unsigned int PATCH_VEC = 1536;     /**< IN_CHANS * TUBELET * PATCH_SIZE^2 */
+  unsigned int PRETRAINED_GRID = 16; /**< 256 / PATCH_SIZE for rope interp */
+  bool INTERPOLATE_ROPE = true;      /**< V-JEPA 2.1 uses rope interpolation */
 
   /** Output from the last run_image() call (NUM_PATCHES * DIM floats). */
   std::vector<float> last_output_;
