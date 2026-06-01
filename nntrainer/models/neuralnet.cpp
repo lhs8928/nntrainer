@@ -1523,6 +1523,9 @@ std::vector<IO_TensorType> NeuralNetwork::incremental_inference(
 #endif
       } else if (out->getDataType() == ml::train::TensorDim::DataType::FP32) {
         last_out_buf_data = new float[batch_size * width];
+      } else {
+        throw std::invalid_argument(
+          "unsupported output data type for incremental_inference");
       }
 
       for (unsigned int batch = 0; batch < batch_size; ++batch) {

@@ -29,7 +29,7 @@
 #endif
 namespace nntrainer {
 
-std::shared_ptr<std::vector<float>> C32;
+thread_local std::shared_ptr<std::vector<float>> C32;
 
 static inline void __copy_f16_from_f32(const float *src, _FP16 *dst,
                                        int64_t k) {

@@ -439,10 +439,10 @@ public:
    * @param[in] to next working step index
    * @param[in] output_hidden_state (NYI) true to return all hidden state,
    * false to return last hidden state
-   * @retval list of output as float *
-   * @note If output_hidden_state is false, the output memory must be freed by
-   * the caller after use. Otherwise, the output memory must not be freed by the
-   * caller.
+   * @retval list of output as IO_TensorType
+   * @note If output_hidden_state is false, the output memory inside each
+   * IO_TensorType variant must be freed by the caller after use. Otherwise,
+   * the output memory must not be freed by the caller.
    */
   virtual std::vector<TensorDim::IO_TensorType>
   incremental_inference(unsigned int batch,

@@ -1416,7 +1416,6 @@ void swiglu(const unsigned int N, __fp16 *X, __fp16 *Y, __fp16 *Z) {
   }
 }
 
-
 __fp16 max_val(const unsigned int N, __fp16 *X) {
   unsigned int i = 0;
   __fp16 ret = X[i];
