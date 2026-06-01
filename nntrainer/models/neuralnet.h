@@ -424,7 +424,7 @@ public:
    * @param[in] to next working step index
    * @param[in] output_hidden_state (NYI) true to return all hidden state,
    * false to return last hidden state only
-   * @retval list of output as float *
+   * @retval list of output as IO_TensorType
    * @note If output_hidden_state is false, the output memory must be freed by
    * the caller after use. Otherwise, the output memory must not be freed by the
    * caller.
