@@ -94,6 +94,10 @@ public:
   exportTo(nntrainer::Exporter &exporter,
            const ml::train::ExportMethods &method) const override;
 
+  /**
+   * @copydoc Layer::updateTensorsByInputDimensions(RunLayerContext &context,
+   * std::vector<TensorDim> input_dimensions)
+   */
   WIN_EXPORT void updateTensorsByInputDimensions(
     nntrainer::RunLayerContext &context,
     std::vector<nntrainer::TensorDim> input_dimensions) override;

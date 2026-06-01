@@ -109,6 +109,10 @@ public:
   void setBatch(nntrainer::RunLayerContext &context,
                 unsigned int batch) override;
 
+  /**
+   * @copydoc Layer::updateTensorsByInputDimensions(RunLayerContext &context,
+   * std::vector<TensorDim> input_dimensions)
+   */
   void updateTensorsByInputDimensions(
     nntrainer::RunLayerContext &context,
     std::vector<nntrainer::TensorDim> input_dimensions) override;
