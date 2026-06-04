@@ -1483,9 +1483,14 @@ void MHACoreLayer::updateTensorsByInputDimensions(
 
   ml::train::TensorDim kv_dim = context.getInput(INOUT_INDEX::KEY).getDim();
 
-  ml::train::TensorDim kv_cache_dim =
-    context.getTensor(tensor_idx[AttentionParams::cache_key]).getDim();
-  kv_cache_dim.height(max_timestep);
+  if (!use_external_cache) {
+    ml::train::TensorDim kv_cache_dim =
+      context.getTensor(tensor_idx[AttentionParams::cache_key]).getDim();
+    kv_cache_dim.height(max_timestep);
+
+    context.updateTensor(tensor_idx[AttentionParams::cache_key], kv_cache_dim);
+    context.updateTensor(tensor_idx[AttentionParams::cache_value], kv_cache_dim);
+  }
 
   ml::train::TensorDim output_dim =
     context.getOutput(INOUT_INDEX::OUTPUT).getDim();
@@ -1495,9 +1500,6 @@ void MHACoreLayer::updateTensorsByInputDimensions(
   context.updateInput(INOUT_INDEX::KEY, kv_dim);
   context.updateInput(INOUT_INDEX::VALUE, kv_dim);
   context.updateOutput(0, output_dim);
-
-  context.updateTensor(tensor_idx[AttentionParams::cache_key], kv_cache_dim);
-  context.updateTensor(tensor_idx[AttentionParams::cache_value], kv_cache_dim);
 }
 
 void MHACoreLayer::calcDerivative(nntrainer::RunLayerContext &context) {}
