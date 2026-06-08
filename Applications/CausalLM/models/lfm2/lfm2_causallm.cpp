@@ -456,6 +456,62 @@ void Lfm2CausalLM::run(const WSTR prompt, bool do_sample,
                       log_output);
 }
 
+void Lfm2CausalLM::run(const WSTR prompt, bool do_sample,
+                        const WSTR system_prompt, const WSTR tail_prompt,
+                        bool log_output) {
+
+  if (!USE_EMBEDDING) {
+    // Standard path: token IDs flow through the embedding layer in the graph
+    CausalLM::run(prompt, do_sample, system_prompt, tail_prompt, log_output);
+    return;
+  }
+
+  // USE_EMBEDDING=true path:
+  // Tokenize the prompt, convert token IDs to embedding vectors via
+  // lookupEmbedding(), then delegate to run_with_embeddings().
+
+  if (!embedding_weight_cached_) {
+    throw std::runtime_error(
+      "run(): embedding weights not cached. Ensure load_weight() has been "
+      "called.");
+  }
+
+  // Construct full prompt text
+  std::string full_prompt = system_prompt + prompt + tail_prompt;
+
+  if (log_output)
+    std::cout << full_prompt << std::endl;
+
+  // Tokenize
+  auto tokens = tokenizer->Encode(full_prompt);
+
+  // Truncate to fit within INIT_SEQ_LEN (run_with_embeddings enforces this)
+  unsigned int text_len =
+    std::min(static_cast<unsigned int>(tokens.size()),
+             static_cast<unsigned int>(INIT_SEQ_LEN));
+
+  // Convert token IDs to embedding vectors: [B * text_len * DIM]
+  std::vector<float> inputs_embeds(
+    static_cast<size_t>(BATCH_SIZE) * text_len * DIM, 0.0f);
+  std::vector<int> seed_tokens(text_len);
+
+  for (unsigned int i = 0; i < text_len; ++i) {
+    unsigned int token_id = static_cast<unsigned int>(tokens[i]);
+    seed_tokens[i] = static_cast<int>(token_id);
+    std::vector<float> embed = lookupEmbedding(token_id);
+    for (unsigned int b = 0; b < BATCH_SIZE; ++b) {
+      std::copy(embed.begin(), embed.end(),
+                inputs_embeds.data() +
+                  static_cast<size_t>(b) * text_len * DIM +
+                  static_cast<size_t>(i) * DIM);
+    }
+  }
+
+  // Delegate to run_with_embeddings
+  run_with_embeddings(inputs_embeds.data(), text_len, seed_tokens, do_sample,
+                      log_output);
+}
+
 void Lfm2CausalLM::run_with_embeddings(const void *inputs_embeds,
                                        size_t n_tokens,
                                        std::vector<int> seed_tokens,

@@ -88,7 +88,7 @@ public:
    * @note Creates model with small dimensions for testing
    */
   static Lfm2CausalLM createTestModel();
-
+  
   /**
    * @brief Run the model with a text prompt.
    *
