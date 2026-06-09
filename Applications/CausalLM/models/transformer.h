@@ -126,6 +126,12 @@ public:
                    const WSTR system_prompt = WSTR(),
                    const WSTR tail_prompt = WSTR(), bool log_output = true);
 
+  /** Producer: FP32 element count run_image expects (0 ⇒ legacy 512² calc). */
+  virtual size_t expectedPixelElems() const { return 0; }
+
+  /** Consumer: token id used as the image placeholder (<0 ⇒ use "<|image|>"). */
+  virtual int imagePlaceholderTokenId() const { return -1; }
+
   /**
    * @brief Get TransformerPerformanceMetrics
    */
