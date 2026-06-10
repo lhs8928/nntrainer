@@ -1761,7 +1761,17 @@ void MHACoreLayer::apply_rotary_emb_tensor_v2(nntrainer::Tensor &in,
                                               bool convert_only) {
   if (!use_rope) {
     if (&in != &out) {
-      out.copyData(in);
+      if (in.getDataType() == ml::train::TensorDim::DataType::FP32 &&
+          out.getDataType() == ml::train::TensorDim::DataType::UINT16) {
+        NNTR_THROW_IF(in.size() != out.size(), std::invalid_argument)
+          << "Size of tensor to copy must match";
+        const float *in_ptr = in.getData<float>();
+        uint16_t *out_ptr = out.getData<uint16_t>();
+        for (size_t i = 0; i < in.size(); ++i)
+          out_ptr[i] = nntrainer::compute_fp32_to_fp16(in_ptr[i]);
+      } else {
+        out.copyData(in);
+      }
     }
     return;
   }

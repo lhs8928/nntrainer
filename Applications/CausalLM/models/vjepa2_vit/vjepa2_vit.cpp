@@ -194,6 +194,7 @@ Tensor VJEPA2ViT::createAttention(const int layer_id, Tensor input) {
      withKey("num_heads_KV", std::to_string(NUM_HEADS)),
      withKey("max_timestep", std::to_string(NUM_PATCHES + 1)),
      withKey("is_causal", "false"), withKey("rope_theta", "0"),
+     withKey("use_rope", "false"),
      // V-JEPA-2 block-0 attention logits reach ~457k, past FP16's 65504 ceiling.
      // The fmlal-widening QK kernel computes the FP16 Q*K products in FP32
      // accumulators, so the wide logits ghtnever overflow — no separate
