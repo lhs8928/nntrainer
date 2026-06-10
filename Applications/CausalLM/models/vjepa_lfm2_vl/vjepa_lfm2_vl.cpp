@@ -22,8 +22,6 @@
 #include <string>
 #include <vector>
 
-#include "video_preprocessor.h"
-
 namespace causallm {
 
 /* -------------------------------------------------------------------------
@@ -354,17 +352,17 @@ void VjepaLfm2ForConditionalGeneration::run_video_bin(
   }
 
   // Load preprocessed frames from .bin file
-  auto frames = VideoPreprocessor::loadPreprocessedFrames(
-    video_bin_path, static_cast<unsigned int>(numFrames), 3,
-    static_cast<unsigned int>(frameHeight),
-    static_cast<unsigned int>(frameWidth));
+  // auto frames = VideoPreprocessor::loadPreprocessedFrames(
+  //   video_bin_path, static_cast<unsigned int>(numFrames), 3,
+  //   static_cast<unsigned int>(frameHeight),
+  //   static_cast<unsigned int>(frameWidth));
 
-  if (log_output) {
-    std::cout << "[VJepaLFM2-VL] Loaded " << frames.size()
-              << " frames from " << video_bin_path << "\n";
-  }
+  // if (log_output) {
+  //   std::cout << "[VJepaLFM2-VL] Loaded " << frames.size()
+  //             << " frames from " << video_bin_path << "\n";
+  // }
 
-  run_video(frames, prompt, do_sample, log_output);
+  // run_video(frames, prompt, do_sample, log_output);
 }
 
 /* -------------------------------------------------------------------------
