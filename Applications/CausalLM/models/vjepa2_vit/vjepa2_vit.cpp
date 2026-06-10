@@ -374,6 +374,72 @@ void VJEPA2ViT::run(const WSTR prompt, bool do_sample, const WSTR system_prompt,
   }
 }
 
+multimodal_pointer
+VJEPA2ViT::run_image(const std::vector<std::vector<float>> &images,
+                     unsigned int original_height,
+                     unsigned int original_width,
+                     bool log_output) {
+  (void)original_height;
+  (void)original_width;
+
+  if (!is_initialized) {
+    throw std::runtime_error("VJEPA2ViT model is not initialized. Please call "
+                             "initialize() before run_image().");
+  }
+
+  if (images.size() != NUM_FRAMES) {
+    throw std::runtime_error(
+      "VJEPA2ViT::run_image: frame count mismatch; got " +
+      std::to_string(images.size()) + ", expected " +
+      std::to_string(NUM_FRAMES));
+  }
+
+  const size_t frame_plane = static_cast<size_t>(IMG_SIZE) * IMG_SIZE;
+  const size_t frame_size = static_cast<size_t>(IN_CHANS) * frame_plane;
+  std::vector<float> video(static_cast<size_t>(IN_CHANS) * NUM_FRAMES *
+                           IMG_SIZE * IMG_SIZE);
+
+  for (unsigned int t = 0; t < NUM_FRAMES; ++t) {
+    if (images[t].size() != frame_size) {
+      throw std::runtime_error(
+        "VJEPA2ViT::run_image: frame " + std::to_string(t) +
+        " size mismatch; got " + std::to_string(images[t].size()) +
+        ", expected " + std::to_string(frame_size));
+    }
+    for (unsigned int c = 0; c < IN_CHANS; ++c) {
+      const size_t src_offset = static_cast<size_t>(c) * frame_plane;
+      const size_t dst_offset =
+        (static_cast<size_t>(c) * NUM_FRAMES + t) * frame_plane;
+      std::copy_n(images[t].data() + src_offset, frame_plane,
+                  video.data() + dst_offset);
+    }
+  }
+
+  std::vector<float> tokens = patchify(video);
+  std::vector<float *> input;
+  input.push_back(tokens.data());
+  std::vector<float *> label;
+
+  std::vector<float *> output = model->incremental_inference(
+    BATCH_SIZE, input, label, NUM_PATCHES, 0, NUM_PATCHES, false);
+
+  const size_t n_out = static_cast<size_t>(BATCH_SIZE) * NUM_PATCHES * DIM;
+  last_output_.assign(output[0], output[0] + n_out);
+
+  if (log_output) {
+    std::cout << "[VJEPA2ViT] features [" << NUM_PATCHES << "x" << DIM
+              << "], first 10 values: ";
+    const int print_count = DIM > 10 ? 10 : static_cast<int>(DIM);
+    for (int i = 0; i < print_count; ++i) {
+      std::cout << "[" << i << "]=" << std::setprecision(9)
+                << last_output_[i] << " ";
+    }
+    std::cout << std::endl;
+  }
+
+  return {last_output_.data(), last_output_.size() * sizeof(float)};
+}
+
 /**
  * @brief Run the encoder on video loaded from a directory of image frames
  *        or a raw binary tensor file.

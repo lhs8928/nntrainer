@@ -40,8 +40,8 @@
 
 #include <lfm2_causallm.h>
 #include <transformer.h>
-#include <vjepa2_vit.h>
-#include <vjepa_projector.h>
+#include <vjepa2_vit/vjepa2_vit.h>
+#include <vjepa2_vit/vjepa_projector.h>
 
 #include <memory>
 #include <string>
@@ -87,7 +87,7 @@ public:
   /**
    * @brief Run the full VL pipeline with a preprocessed .bin video file.
    *
-   * The .bin file is raw float32 in [T, C, H, W] layout.
+   * The .bin file is raw float32 in [C, T, H, W] layout.
    *
    * @param video_bin_path  Path to preprocessed .bin video tensor file
    * @param numFrames       Number of frames in the file

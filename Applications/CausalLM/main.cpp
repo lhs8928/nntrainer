@@ -56,7 +56,7 @@
 #include "qwen3_slim_moe_causallm.h"
 #include "timm_vit/timm_vit_transformer.h"
 #include "vjepa2_vit/vjepa2_vit.h"
-#include "lfm2_causallm.h"
+#include "vjepa_lfm2_vl/vjepa_lfm2_vl.h"
 #include <models/gemma3/function.h>
 #if !defined(_WIN32)
 #include <sys/resource.h>
@@ -189,6 +189,11 @@ std::string resolve_architecture(std::string model_type,
     return "TimmViT";
   }
 
+  if (architecture == "Lfm2VLVJepa21BModel" ||
+      architecture == "vora_lfm2_vl_vjepa2_1_b") {
+    return "Lfm2VLVJepa21BModel";
+  }
+
   if (architecture == "Gemma4ForConditionalGeneration") {
     return "Gemma4ForCausalLM";
   }
@@ -307,6 +312,11 @@ int main(int argc, char *argv[]) {
       return std::make_unique<causallm::Lfm2CausalLM>(cfg, generation_cfg,
                                                       nntr_cfg);
     });
+  causallm::Factory::Instance().registerModel(
+    "Lfm2VLVJepa21BModel", [](json cfg, json generation_cfg, json nntr_cfg) {
+      return std::make_unique<causallm::VjepaLfm2ForConditionalGeneration>(
+        cfg, generation_cfg, nntr_cfg);
+    });
 
   // Validate arguments
   if (argc < 2) {
@@ -418,7 +428,49 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    if (architecture == "VJEPA2ViT") {
+    bool do_sample = generation_cfg.value("do_sample", false);
+
+    if (architecture == "Lfm2VLVJepa21BModel") {
+      causallm::VjepaLfm2ForConditionalGeneration vl_model(
+        cfg, generation_cfg, nntr_cfg);
+      vl_model.initialize();
+      vl_model.load_weight(model_path);
+
+      if (!nntr_cfg.contains("video_path") ||
+          !nntr_cfg["video_path"].is_string() ||
+          nntr_cfg["video_path"].get<std::string>().empty()) {
+        throw std::invalid_argument(
+          "nntr_config.json must contain a non-empty 'video_path' key "
+          "pointing to a raw float32 [C,T,H,W] video tensor file.");
+      }
+
+      const json vision_cfg =
+        cfg.contains("vision_config") ? cfg["vision_config"] : json::object();
+      const unsigned int num_frames =
+        vision_cfg.value("num_frames", 16u);
+      const unsigned int frame_height =
+        vision_cfg.contains("image_height")
+          ? vision_cfg["image_height"].get<unsigned int>()
+          : (vision_cfg.contains("image_size")
+               ? vision_cfg["image_size"].get<unsigned int>()
+               : vision_cfg.value("img_size", 256u));
+      const unsigned int frame_width =
+        vision_cfg.contains("image_width")
+          ? vision_cfg["image_width"].get<unsigned int>()
+          : frame_height;
+      const std::string video_path = nntr_cfg["video_path"].get<std::string>();
+
+#ifdef PROFILE
+      start_peak_tracker();
+#endif
+      vl_model.run_video_bin(video_path, static_cast<int>(num_frames),
+                             static_cast<int>(frame_height),
+                             static_cast<int>(frame_width), input_text,
+                             do_sample, true);
+#ifdef PROFILE
+      stop_and_print_peak();
+#endif
+    } else if (architecture == "VJEPA2ViT") {
       // V-JEPA2 ViT encoder path — load video and run encoder
       causallm::VJEPA2ViT vjepa_model(cfg, generation_cfg, nntr_cfg);
       vjepa_model.initialize();
@@ -492,8 +544,6 @@ int main(int argc, char *argv[]) {
     }
     model->initialize();
     model->load_weight(weight_file);
-
-    bool do_sample = generation_cfg.value("do_sample", false);
 
 #ifdef PROFILE
     start_peak_tracker();

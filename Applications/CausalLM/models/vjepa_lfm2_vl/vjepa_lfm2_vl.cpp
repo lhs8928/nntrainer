@@ -12,17 +12,43 @@
 
 #include "vjepa_lfm2_vl.h"
 
+#include "../../video_util.h"
+
 #include <llm_util.hpp>
 
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
+#include <initializer_list>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace causallm {
+
+namespace {
+
+unsigned int valueForAnyKey(const json &cfg,
+                            std::initializer_list<const char *> keys,
+                            unsigned int default_value) {
+  for (const auto *key : keys) {
+    if (cfg.contains(key) && !cfg[key].is_null())
+      return cfg[key].get<unsigned int>();
+  }
+  return default_value;
+}
+
+unsigned int imageSizeFromVisionConfig(const json &vision_cfg) {
+  return valueForAnyKey(vision_cfg, {"image_size", "img_size"}, 256u);
+}
+
+unsigned int textHiddenSizeFromConfig(const json &cfg, const json &text_cfg) {
+  return valueForAnyKey(cfg, {"hidden_size"},
+                        valueForAnyKey(text_cfg, {"hidden_size"}, 1024u));
+}
+
+} // namespace
 
 /* -------------------------------------------------------------------------
  * Config splitting
@@ -48,8 +74,8 @@ json VjepaLfm2ForConditionalGeneration::buildProjectorConfig(
   auto [text_cfg, vision_cfg] = splitConfig(cfg);
 
   unsigned int vit_embed = vision_cfg.value("hidden_size", 768u);
-  unsigned int lm_hidden = cfg.value("hidden_size", 1024u);
-  unsigned int img_size = vision_cfg.value("image_size", 256u);
+  unsigned int lm_hidden = textHiddenSizeFromConfig(cfg, text_cfg);
+  unsigned int img_size = imageSizeFromVisionConfig(vision_cfg);
   unsigned int patch_size = vision_cfg.value("patch_size", 16u);
   unsigned int num_frames = vision_cfg.contains("num_frames")
                               ? vision_cfg["num_frames"].get<unsigned int>()
@@ -62,9 +88,14 @@ json VjepaLfm2ForConditionalGeneration::buildProjectorConfig(
   unsigned int output_tokens =
     num_patches / (downsample_factor_ * downsample_factor_);
   unsigned int input_dim = vit_embed * downsample_factor_ * downsample_factor_;
+  unsigned int merger_hidden_1 =
+    valueForAnyKey(cfg, {"merger_hidden_1"}, input_dim);
+  unsigned int merger_hidden_2 =
+    valueForAnyKey(cfg, {"merger_hidden_2"}, input_dim / 2u);
 
   json proj_cfg;
-  proj_cfg["hidden_size"] = vit_embed;
+  proj_cfg["vision_hidden_size"] = vit_embed;
+  proj_cfg["hidden_size"] = lm_hidden;
   proj_cfg["img_size"] = img_size;
   proj_cfg["patch_size"] = patch_size;
   proj_cfg["num_frames"] = num_frames;
@@ -74,7 +105,8 @@ json VjepaLfm2ForConditionalGeneration::buildProjectorConfig(
   proj_cfg["output_tokens"] = output_tokens;
   proj_cfg["input_dim"] = input_dim;
   proj_cfg["output_dim"] = lm_hidden;
-  proj_cfg["projector_hidden_size"] = projector_hidden_size_;
+  proj_cfg["merger_hidden_1"] = merger_hidden_1;
+  proj_cfg["merger_hidden_2"] = merger_hidden_2;
   proj_cfg["projector_bias"] = cfg.value("projector_bias", true);
   proj_cfg["projector_hidden_act"] = cfg.value("projector_hidden_act", "gelu");
   proj_cfg["projector_use_layernorm"] =
@@ -101,17 +133,29 @@ VjepaLfm2ForConditionalGeneration::VjepaLfm2ForConditionalGeneration(
   projector_hidden_size_ = cfg.value("projector_hidden_size", 2048u);
 
   auto [text_cfg, vision_cfg] = splitConfig(cfg);
+  if (!vision_cfg.contains("img_size") && vision_cfg.contains("image_size"))
+    vision_cfg["img_size"] = vision_cfg["image_size"];
+  if (!vision_cfg.contains("in_chans") && vision_cfg.contains("num_channels"))
+    vision_cfg["in_chans"] = vision_cfg["num_channels"];
 
   // Vision encoder
   json vjepa_nntr = nntr_cfg_;
   vjepa_nntr["model_type"] = "embedding";
+  vjepa_nntr["skip_tokenizer"] = true;
+  vjepa_nntr["num_to_generate"] = 0;
+  json proj_cfg = buildProjectorConfig(cfg);
+  vjepa_nntr["init_seq_len"] = proj_cfg["num_patches"];
+  vjepa_nntr["max_seq_len"] = proj_cfg["num_patches"];
   vjepa_ =
     std::make_unique<VJEPA2ViT>(vision_cfg, generation_cfg_, vjepa_nntr);
 
   // Projector (config built from top-level VL fields)
-  json proj_cfg = buildProjectorConfig(cfg);
   json proj_nntr = nntr_cfg_;
   proj_nntr["model_type"] = "embedding";
+  proj_nntr["skip_tokenizer"] = true;
+  proj_nntr["num_to_generate"] = 0;
+  proj_nntr["init_seq_len"] = proj_cfg["output_tokens"];
+  proj_nntr["max_seq_len"] = proj_cfg["output_tokens"];
   projector_ =
     std::make_unique<VjepaProjector>(proj_cfg, generation_cfg_, proj_nntr);
 
@@ -213,7 +257,8 @@ VjepaLfm2ForConditionalGeneration::mergeTextVideoEmbeddings(
       "VjepaLfm2ForConditionalGeneration: LLM tokenizer not available");
   }
 
-  const unsigned int text_dim = cfg_.value("hidden_size", 1024u);
+  auto [text_cfg, vision_cfg] = splitConfig(cfg_);
+  const unsigned int text_dim = textHiddenSizeFromConfig(cfg_, text_cfg);
   const unsigned int init_seq_len =
     nntr_cfg_.value("init_seq_len", 4096u);
   const unsigned int batch_size = nntr_cfg_.value("batch_size", 1u);
@@ -223,12 +268,25 @@ VjepaLfm2ForConditionalGeneration::mergeTextVideoEmbeddings(
 
   size_t embed_offset = 0;
   size_t video_idx = 0;
+  const size_t max_tokens = static_cast<size_t>(batch_size) * init_seq_len;
+
+  auto ensure_capacity = [&](size_t tokens_to_add) {
+    const size_t used_tokens = embed_offset / text_dim;
+    if (used_tokens + tokens_to_add > max_tokens) {
+      throw std::runtime_error(
+        "VjepaLfm2ForConditionalGeneration: merged embedding length exceeds "
+        "init_seq_len capacity (" +
+        std::to_string(used_tokens + tokens_to_add) + " > " +
+        std::to_string(max_tokens) + ")");
+    }
+  };
 
   for (size_t seg_i = 0; seg_i < text_segments.size(); ++seg_i) {
     // Tokenize and embed this text segment
     if (!text_segments[seg_i].empty()) {
       auto enc =
         tok->Encode(text_segments[seg_i], /*add_special_token=*/false);
+      ensure_capacity(enc.size());
       for (auto id : enc) {
         auto emb = lm_->lookupEmbedding(static_cast<unsigned int>(id));
         std::copy(emb.begin(), emb.end(),
@@ -240,6 +298,12 @@ VjepaLfm2ForConditionalGeneration::mergeTextVideoEmbeddings(
     // Insert video embeddings after each segment (except the last)
     if (seg_i < num_video_tags_) {
       size_t vision_start = video_idx * vision_tokens_per_video;
+      if (vision_start + vision_tokens_per_video > num_video_tokens) {
+        throw std::runtime_error(
+          "VjepaLfm2ForConditionalGeneration: video embedding slice exceeds "
+          "projector output token count");
+      }
+      ensure_capacity(vision_tokens_per_video);
       for (size_t v = 0; v < vision_tokens_per_video; ++v) {
         std::copy(video_embeds + (vision_start + v) * text_dim,
                   video_embeds + (vision_start + v + 1) * text_dim,
@@ -272,25 +336,52 @@ void VjepaLfm2ForConditionalGeneration::run_video(
                                     ? vision_cfg["num_frames"].get<unsigned int>()
                                     : 16u;
   const unsigned int tubelet_size = vision_cfg.value("tubelet_size", 2u);
-  const unsigned int img_size = vision_cfg.value("image_size", 256u);
+  const unsigned int img_size = imageSizeFromVisionConfig(vision_cfg);
   const unsigned int patch_size = vision_cfg.value("patch_size", 16u);
   const unsigned int grid_t = num_frames / tubelet_size;
   const unsigned int grid_h = img_size / patch_size;
   const unsigned int grid_w = img_size / patch_size;
   const unsigned int num_patches = grid_t * grid_h * grid_w;
 
+  if (frames.size() != num_frames) {
+    throw std::runtime_error(
+      "VjepaLfm2ForConditionalGeneration::run_video: frame count mismatch; "
+      "got " +
+      std::to_string(frames.size()) + ", expected " +
+      std::to_string(num_frames));
+  }
+  const size_t expected_frame_size = static_cast<size_t>(3) * img_size * img_size;
+  for (size_t i = 0; i < frames.size(); ++i) {
+    if (frames[i].size() != expected_frame_size) {
+      throw std::runtime_error(
+        "VjepaLfm2ForConditionalGeneration::run_video: frame " +
+        std::to_string(i) + " size mismatch; got " +
+        std::to_string(frames[i].size()) + ", expected " +
+        std::to_string(expected_frame_size));
+    }
+  }
+
   // ── 1. VJEPA2 ViT Encoder ────────────────────────────────────────
   auto [vision_ptr, vision_size] =
-    vjepa_->run_image(frames, log_output);
+    vjepa_->run_image(frames, img_size, img_size, log_output);
 
   // ── 2. Projector ─────────────────────────────────────────────────
   auto [proj_ptr, proj_size] =
     projector_->run(static_cast<const float *>(vision_ptr), num_patches,
                     log_output);
 
-  const unsigned int text_dim = cfg_.value("hidden_size", 1024u);
+  const unsigned int text_dim = textHiddenSizeFromConfig(cfg_, text_cfg);
   const unsigned int output_tokens =
     num_patches / (downsample_factor_ * downsample_factor_);
+
+  if (output_tokens == 0 || num_video_tags_ == 0 ||
+      output_tokens % num_video_tags_ != 0) {
+    throw std::runtime_error(
+      "VjepaLfm2ForConditionalGeneration: projected token count (" +
+      std::to_string(output_tokens) +
+      ") must be non-zero and divisible by num_video_tags (" +
+      std::to_string(num_video_tags_) + ")");
+  }
 
   if (log_output) {
     std::cout << "[VJepaLFM2-VL] Vision tokens: " << num_patches
@@ -351,18 +442,33 @@ void VjepaLfm2ForConditionalGeneration::run_video_bin(
       "VjepaLfm2ForConditionalGeneration: call initialize() first");
   }
 
-  // Load preprocessed frames from .bin file
-  // auto frames = VideoPreprocessor::loadPreprocessedFrames(
-  //   video_bin_path, static_cast<unsigned int>(numFrames), 3,
-  //   static_cast<unsigned int>(frameHeight),
-  //   static_cast<unsigned int>(frameWidth));
+  const unsigned int frames_count = static_cast<unsigned int>(numFrames);
+  const unsigned int height = static_cast<unsigned int>(frameHeight);
+  const unsigned int width = static_cast<unsigned int>(frameWidth);
+  const unsigned int channels = 3;
+  auto video = loadVideoFromBin(video_bin_path, channels, frames_count,
+                                height, width);
 
-  // if (log_output) {
-  //   std::cout << "[VJepaLFM2-VL] Loaded " << frames.size()
-  //             << " frames from " << video_bin_path << "\n";
-  // }
+  std::vector<std::vector<float>> frames(frames_count);
+  const size_t frame_plane = static_cast<size_t>(height) * width;
+  const size_t frame_size = static_cast<size_t>(channels) * frame_plane;
+  for (unsigned int t = 0; t < frames_count; ++t) {
+    frames[t].resize(frame_size);
+    for (unsigned int c = 0; c < channels; ++c) {
+      const size_t src_offset =
+        (static_cast<size_t>(c) * frames_count + t) * frame_plane;
+      const size_t dst_offset = static_cast<size_t>(c) * frame_plane;
+      std::copy_n(video.data() + src_offset, frame_plane,
+                  frames[t].data() + dst_offset);
+    }
+  }
 
-  // run_video(frames, prompt, do_sample, log_output);
+  if (log_output) {
+    std::cout << "[VJepaLFM2-VL] Loaded " << frames.size()
+              << " frames from " << video_bin_path << "\n";
+  }
+
+  run_video(frames, prompt, do_sample, log_output);
 }
 
 /* -------------------------------------------------------------------------
