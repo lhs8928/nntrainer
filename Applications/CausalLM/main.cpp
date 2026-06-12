@@ -333,6 +333,28 @@ int main(int argc, char *argv[]) {
       generation_cfg = causallm::LoadJsonFile(generation_config_path);
     }
     json nntr_cfg = causallm::LoadJsonFile(model_path + "/nntr_config.json");
+    // Resolve relative paths in nntr_cfg against model_path so that
+    // config files with bare filenames work when run as:
+    //   nntr_causallm <model_dir>
+    // Absolute paths (e.g. for CI override) are left unchanged.
+    {
+      auto resolve_path = [&](const std::string &key) {
+        if (!nntr_cfg.contains(key))
+          return;
+        const auto val = nntr_cfg[key];
+        if (!val.is_string())
+          return;
+        const std::string s = val.get<std::string>();
+        if (s.empty())
+          return;
+        if (!std::filesystem::path(s).is_absolute())
+          nntr_cfg[key] = model_path + "/" + s;
+      };
+      resolve_path("tokenizer_file");
+      resolve_path("embedding_bin_path");
+      resolve_path("image_path");
+      resolve_path("video_path");
+    }
 
     if (nntr_cfg.contains("system_prompt")) {
       system_head_prompt =
@@ -396,6 +418,69 @@ int main(int argc, char *argv[]) {
       }
     }
 
+    if (architecture == "VJEPA2ViT") {
+      // V-JEPA2 ViT encoder path — load video and run encoder
+      causallm::VJEPA2ViT vjepa_model(cfg, generation_cfg, nntr_cfg);
+      vjepa_model.initialize();
+      vjepa_model.load_weight(weight_file);
+
+      // Determine video source:
+      //   1) "video_path" in nntr_config.json → directory of image frames
+      //   2) "sample_input" in nntr_config.json → raw binary tensor file
+      //      (backward-compatible with existing config files)
+      std::string video_dir;
+      std::string video_bin_path;
+
+      if (nntr_cfg.contains("video_path") &&
+          nntr_cfg["video_path"].is_string() &&
+          !nntr_cfg["video_path"].get<std::string>().empty()) {
+        video_dir = nntr_cfg["video_path"].get<std::string>();
+        if (std::filesystem::is_directory(video_dir)) {
+          // Directory of image frames → use loadAndPreprocessVideo
+          std::cout << "Video source: image frames directory (" << video_dir
+                    << ")" << std::endl;
+        } else {
+          // It's a file — determine type by extension
+          std::string ext = std::filesystem::path(video_dir).extension().string();
+          std::transform(ext.begin(), ext.end(), ext.begin(),
+                         [](unsigned char c) { return std::tolower(c); });
+          if (ext == ".bin" || ext == ".raw" || ext == ".dat" ||
+              ext == ".fp32") {
+            video_bin_path = video_dir;
+            video_dir.clear();
+            std::cout << "Video source: binary tensor file (" << video_bin_path
+                      << ")" << std::endl;
+          } else {
+            // Video file (.mp4, .avi, .mkv, ...) — needs frame extraction
+            std::cerr << "[Error] Video file '" << video_dir
+                      << "' is a compressed video format (" << ext << ").\n"
+                      << "  VJEPA2ViT requires either:\n"
+                      << "    1) A directory of image frames (JPEG/PNG/BMP), "
+                         "or\n"
+                      << "    2) A raw float32 binary file [C,T,H,W].\n"
+                      << "  Extract frames first, e.g.:\n"
+                      << "    ffmpeg -i " << video_dir
+                      << " -q:v 2 frames/%05d.jpg\n"
+                      << "  Then set 'video_path' to the 'frames/' directory."
+                      << std::endl;
+            return EXIT_FAILURE;
+          }
+        }
+      } else {
+        // Fall back to sample_input (raw binary tensor path)
+        video_bin_path = input_text;
+        std::cout << "Video source: sample_input binary tensor (" << video_bin_path
+                  << ")" << std::endl;
+      }
+
+#ifdef PROFILE
+      start_peak_tracker();
+#endif
+      vjepa_model.run_with_video(video_dir, video_bin_path);
+#ifdef PROFILE
+      stop_and_print_peak();
+#endif
+    } else {
     auto model = causallm::Factory::Instance().create(architecture, cfg,
                                                       generation_cfg, nntr_cfg);
     if (!model) {
@@ -422,6 +507,7 @@ int main(int argc, char *argv[]) {
 #ifdef PROFILE
     stop_and_print_peak();
 #endif
+    }
     auto finish_time = std::chrono::high_resolution_clock::now();
     auto e2e_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
       finish_time - start_time);

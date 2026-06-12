@@ -32,6 +32,10 @@ static std::mutex rope_init_mtx;
 
 #include <cstdint>
 
+#if defined(__x86_64__) || defined(__i386__)
+#include <immintrin.h>
+#endif
+
 inline float convert_scalar(uint16_t h) {
   return nntrainer::compute_fp16_to_fp32(h);
 }
@@ -882,7 +886,7 @@ mha_convert_fp16bits_to_fp32(unsigned int N, const uint16_t *src, float *dst) {
 //                       B is N rows x K cols, row-major, ldb columns
 //   TransB=false (AV): C[m, n] = alpha * sum_k A[m,k] * fp16(B[k,n])
 //                       B is K rows x N cols, row-major, ldb columns
-static inline void mha_hsgemm_avx2(unsigned int M, unsigned int N,
+static void mha_hsgemm_avx2(unsigned int M, unsigned int N,
                                    unsigned int K, float alpha, const float *A,
                                    unsigned int lda, const uint16_t *B,
                                    unsigned int ldb, bool TransB, float *C,
