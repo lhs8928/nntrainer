@@ -154,8 +154,8 @@ void Transformer::setupParameters(json &cfg, json &generation_cfg,
     IS_CAUSAL = false;
   }
 
-  NUM_VOCAB = cfg["vocab_size"];
-  DIM = cfg["hidden_size"];
+  NUM_VOCAB = cfg.value("vocab_size", 0);
+  DIM = cfg.value("hidden_size", 0);
   INTERMEDIATE_SIZE =
     cfg.contains("intermediate_size") ? cfg["intermediate_size"].get<int>() : 0;
   NUM_LAYERS = cfg["num_hidden_layers"];
