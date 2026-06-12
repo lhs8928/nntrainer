@@ -8,8 +8,10 @@
  * @brief  V-JEPA 2.1 + Projector + LFM2 multimodal video-language model.
  *
  *         Pipeline:
- *           preprocessed .bin frames → VJEPA2ViT::run_image()
- *           → VjepaProjector::run() → merge text+vision embeddings
+ *           run_video():  frames → VJEPA2ViT::run_image()
+ *           run_video_bin(): .bin → VJEPA2ViT::run_with_bin()
+ *           → runVisionToLM() → VjepaProjector::run()
+ *           → merge text+vision embeddings
  *           → Lfm2CausalLM::run_with_embeddings() → generate tokens
  *
  *         Single-class approach: all components are owned by this class,
@@ -143,7 +145,7 @@ private:
   json generation_cfg_;
   json nntr_cfg_;
 
-  unsigned int num_video_tags_{8};
+  unsigned int num_video_tags_{12};
   unsigned int downsample_factor_{2};
   int video_token_id_{64400};
   int image_token_id_{396};
@@ -180,6 +182,21 @@ private:
     const std::vector<std::string> &text_segments,
     const float *video_embeds, unsigned int num_video_tokens,
     unsigned int vision_tokens_per_video);
+
+  /**
+   * @brief Run the projector + merge + LM pipeline from vision encoder output.
+   *
+   * Common path shared by run_video() and run_video_bin().
+   *
+   * @param vision_ptr    Pointer to vision encoder output (NUM_PATCHES * DIM floats).
+   * @param num_patches   Number of vision patches from the encoder.
+   * @param prompt        Text prompt.
+   * @param do_sample     Whether to sample during generation.
+   * @param log_output    Whether to log output.
+   */
+  void runVisionToLM(const void *vision_ptr, unsigned int num_patches,
+                     const std::string &prompt, bool do_sample,
+                     bool log_output);
 };
 
 } // namespace causallm

@@ -62,7 +62,7 @@ void VJEPA2ViT::setupParameters(json &cfg, json &generation_cfg,
   IMG_SIZE = cfg.value("img_size", 384);
   PATCH_SIZE = cfg.value("patch_size", 16);
   TUBELET = cfg.value("tubelet_size", 2);
-  NUM_FRAMES = cfg.value("num_frames", 64);
+  NUM_FRAMES = cfg.value("num_frames", 16);
   IN_CHANS = cfg.value("in_chans", 3);
   PRETRAINED_GRID = cfg.value("pretrained_grid_size", 256 / PATCH_SIZE);
   INTERPOLATE_ROPE = cfg.value("interpolate_rope", true);
@@ -416,6 +416,55 @@ VJEPA2ViT::run_image(const std::vector<std::vector<float>> &images,
   }
 
   std::vector<float> tokens = patchify(video);
+  std::vector<float *> input;
+  input.push_back(tokens.data());
+  std::vector<float *> label;
+
+  std::vector<float *> output = model->incremental_inference(
+    BATCH_SIZE, input, label, NUM_PATCHES, 0, NUM_PATCHES, false);
+
+  const size_t n_out = static_cast<size_t>(BATCH_SIZE) * NUM_PATCHES * DIM;
+  last_output_.assign(output[0], output[0] + n_out);
+
+  if (log_output) {
+    std::cout << "[VJEPA2ViT] features [" << NUM_PATCHES << "x" << DIM
+              << "], first 10 values: ";
+    const int print_count = DIM > 10 ? 10 : static_cast<int>(DIM);
+    for (int i = 0; i < print_count; ++i) {
+      std::cout << "[" << i << "]=" << std::setprecision(9)
+                << last_output_[i] << " ";
+    }
+    std::cout << std::endl;
+  }
+
+  return {last_output_.data(), last_output_.size() * sizeof(float)};
+}
+
+multimodal_pointer
+VJEPA2ViT::run_with_bin(const std::string &video_bin_path,
+                        bool log_output) {
+  if (!is_initialized) {
+    throw std::runtime_error("VJEPA2ViT model is not initialized. Please call "
+                             "initialize() before run_with_bin().");
+  }
+
+  if (video_bin_path.empty()) {
+    throw std::invalid_argument(
+      "video_bin_path must not be empty in run_with_bin().");
+  }
+
+  // Load the raw float32 [C, T, H, W] binary file
+  std::vector<float> video = loadVideoFromBin(video_bin_path, IN_CHANS,
+                                               NUM_FRAMES, IMG_SIZE, IMG_SIZE);
+
+  if (log_output) {
+    std::cout << "[VJEPA2ViT] Loaded video from binary: " << video_bin_path
+              << " (" << video.size() << " floats)" << std::endl;
+  }
+
+  // Patchify and run inference
+  std::vector<float> tokens = patchify(video);
+
   std::vector<float *> input;
   input.push_back(tokens.data());
   std::vector<float *> label;

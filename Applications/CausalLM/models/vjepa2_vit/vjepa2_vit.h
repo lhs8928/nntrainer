@@ -99,6 +99,20 @@ public:
                       const std::string &video_bin_path = "",
                       bool normalize = true);
 
+  /**
+   * @brief Run the encoder on a preprocessed video binary file.
+   *
+   * Loads a raw float32 [C, T, H, W] binary file, patchifies it, and runs
+   * inference. Returns the encoded hidden states for downstream use (e.g.,
+   * projector in a VL pipeline).
+   *
+   * @param video_bin_path Path to a raw float32 [C,T,H,W] binary file.
+   * @param log_output     Whether to log output.
+   * @return multimodal_pointer {data_ptr, size_in_bytes} pointing to the
+   *         encoded hidden states. Valid until the next call or destruction.
+   */
+  multimodal_pointer run_with_bin(const std::string &video_bin_path,
+                                  bool log_output = true);
 protected:
   /**
    * @brief Construct the symbolic ViT inference graph.
