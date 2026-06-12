@@ -86,11 +86,18 @@ causallm_lm_head_dep = declare_dependency(
     include_directories: causallm_layer_inc
 )
 
+# mha_core uses AVX2 + FMA + F16C intrinsics on x86
+_mha_x86_args = []
+if host_machine.cpu_family() == 'x86_64'
+  _mha_x86_args = ['-mavx2', '-mfma', '-mf16c']
+endif
+
 causallm_mha_core = shared_library(
     'mha_core_layer',
     causallm_mha_core_abs,
     include_directories: causallm_layer_inc,
     dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+    cpp_args: _mha_x86_args,
     install: true,
     install_dir: application_install_dir
 )
