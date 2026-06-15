@@ -190,7 +190,8 @@ void NeuralNetwork::setTrainConfig(const std::vector<std::string> &values) {
     << " of first element: " << left_props.front();
 }
 
-int NeuralNetwork::compile(ExecutionMode mode) {
+int NeuralNetwork::compile(ExecutionMode mode,
+                           std::shared_ptr<ml::train::Model> ref_model) {
 
   exec_mode = mode;
 
@@ -278,7 +279,8 @@ int NeuralNetwork::compile(ExecutionMode mode) {
   return status;
 }
 
-int NeuralNetwork::initialize(ExecutionMode mode) {
+int NeuralNetwork::initialize(ExecutionMode mode,
+                              std::shared_ptr<ml::train::Model> ref_model) {
   int status = ML_ERROR_NONE;
 
   if (mode != exec_mode) {
@@ -347,6 +349,12 @@ int NeuralNetwork::initialize(ExecutionMode mode) {
         return opt->getOptimizerVariableDim(dim);
       };
     model_graph.requestOptimizerVariable(cb, true);
+  }
+
+  if (ref_model.get()) {
+    ref_model_graph = std::make_shared<NetworkGraph>(
+      std::dynamic_pointer_cast<NeuralNetwork>(ref_model)->getNetworkGraph());
+    model_graph.setRefGraph(ref_model_graph);
   }
 
   // Allocate weights

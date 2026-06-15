@@ -162,7 +162,8 @@ public:
    * @retval #ML_ERROR_NONE Successful.
    * @retval #ML_ERROR_INVALID_PARAMETER invalid parameter.
    */
-  int compile(ExecutionMode mode = ExecutionMode::TRAIN) override;
+  int compile(ExecutionMode mode = ExecutionMode::TRAIN,
+              std::shared_ptr<ml::train::Model> ref_model = nullptr) override;
 
   /**
    * @brief     set Property of Network
@@ -178,7 +179,9 @@ public:
    * @retval #ML_ERROR_NONE Successful.
    * @retval #ML_ERROR_INVALID_PARAMETER invalid parameter.
    */
-  int initialize(ExecutionMode mode = ExecutionMode::TRAIN) override;
+  int initialize(
+    ExecutionMode mode = ExecutionMode::TRAIN,
+    std::shared_ptr<ml::train::Model> ref_model = nullptr) override;
 
   /**
    * @brief     Reinitialize Network. This should be called after initialize
@@ -715,6 +718,7 @@ private:
     nullptr; /** Configurations bound to current engine */
 
   NetworkGraph model_graph; /** Network Model Graph */
+  std::shared_ptr<NetworkGraph> ref_model_graph;
 
   /**< Set in compile() for graphs that contain a QNN/HTP engine. When true,
    * inference() reuses the already-allocated tensor pool across calls instead
