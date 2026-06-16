@@ -469,6 +469,12 @@ public:
   virtual bool getLoadedFromConfig() const = 0;
 
   /**
+   * @brief returns loadedWeight state of a network
+   * @retval loadedWeight value
+   */
+  virtual bool getLoadedWeight() const = 0;
+
+  /**
    * @brief     Get Loss from the previous epoch of training data
    * @retval    loss value
    */
