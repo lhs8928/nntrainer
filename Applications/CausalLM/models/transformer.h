@@ -54,7 +54,7 @@ namespace causallm {
 /*** ALIAS ****/
 using LayerHandle = ml::train::LayerHandle;
 using Tensor = ml::train::Tensor;
-using ModelHandle = std::unique_ptr<ml::train::Model>;
+using ModelHandle = std::shared_ptr<ml::train::Model>;
 
 using json = nlohmann::json;
 
@@ -97,7 +97,7 @@ public:
   /**
    * @brief Initialize and Construct the Transformer model
    */
-  virtual void initialize();
+  virtual void initialize(std::shared_ptr<Transformer> base_creation = nullptr);
 
   /**
    * @brief Initialize variant accepting a native library directory. The base
@@ -161,6 +161,8 @@ public:
    * @brief Access the model tokenizer (may be null before initialize()).
    */
   tokenizers::Tokenizer *getTokenizer() { return tokenizer.get(); }
+
+  ModelHandle getModelHandle() { return model; }
 
 protected:
   /**

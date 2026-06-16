@@ -154,7 +154,7 @@ void stop_and_print_peak() {
 }
 
 /**
- * @brief Resolve config architecture names to registered model factory names.
+ * @brief Resolve config architecture and model types.
  */
 std::string resolve_architecture(std::string model_type,
                                  const std::string &architecture) {
@@ -205,13 +205,7 @@ std::string resolve_architecture(std::string model_type,
   return architecture;
 }
 
-/**
- * @brief Entry point for loading, initializing, and running a CausalLM model.
- */
-int main(int argc, char *argv[]) {
-
-  auto start_time = std::chrono::high_resolution_clock::now();
-
+void registerCausalModels() {
   /** Register all runnable causallm models to factory */
   causallm::Factory::Instance().registerModel(
     "LlamaForCausalLM", [](json cfg, json generation_cfg, json nntr_cfg) {
@@ -317,6 +311,262 @@ int main(int argc, char *argv[]) {
       return std::make_unique<causallm::VjepaLfm2ForConditionalGeneration>(
         cfg, generation_cfg, nntr_cfg);
     });
+}
+
+struct Config {
+  json cfg;
+  json generation_cfg;
+  json nntr_cfg;
+};
+
+Config getConfigs(const std::string model_path) {
+  Config config;
+  config.cfg = causallm::LoadJsonFile(model_path + "/config.json");
+  config.generation_cfg = json::object();
+  std::string generation_config_path = model_path + "/generation_config.json";
+  if (std::filesystem::exists(generation_config_path)) {
+    config.generation_cfg = causallm::LoadJsonFile(generation_config_path);
+  }
+  config.nntr_cfg = causallm::LoadJsonFile(model_path + "/nntr_config.json");
+
+  // Resolve relative paths in nntr_cfg against model_path so that
+  // config files with bare filenames work when run as:
+  //   nntr_causallm <model_dir>
+  // Absolute paths (e.g. for CI override) are left unchanged.
+  {
+    auto resolve_path = [&](const std::string &key) {
+      if (!config.nntr_cfg.contains(key))
+        return;
+      const auto val = config.nntr_cfg[key];
+      if (!val.is_string())
+        return;
+      const std::string s = val.get<std::string>();
+      if (s.empty())
+        return;
+      if (!std::filesystem::path(s).is_absolute())
+        config.nntr_cfg[key] = model_path + "/" + s;
+    };
+    resolve_path("tokenizer_file");
+    resolve_path("embedding_bin_path");
+    resolve_path("image_path");
+    resolve_path("video_path");
+  }
+
+  return config;
+}
+
+std::string getArchitecture(Config &config) {
+  json &cfg = config.cfg;
+  json &generation_cfg = config.generation_cfg;
+  json &nntr_cfg = config.nntr_cfg;
+
+  std::string architecture;
+  if (cfg.contains("architectures") && cfg["architectures"].is_array() &&
+      !cfg["architectures"].empty()) {
+    architecture = cfg["architectures"].get<std::vector<std::string>>()[0];
+  } else if (cfg.contains("architecture") && cfg["architecture"].is_string()) {
+    architecture = cfg["architecture"].get<std::string>();
+  } else if (cfg.contains("model_type") && cfg["model_type"].is_string()) {
+    architecture = cfg["model_type"].get<std::string>();
+  } else {
+    throw std::invalid_argument(
+      "config.json must contain 'architectures', 'architecture', or "
+      "'model_type'.");
+  }
+
+  if (nntr_cfg.contains("model_type")) {
+    std::string model_type = nntr_cfg["model_type"].get<std::string>();
+    architecture = resolve_architecture(model_type, architecture);
+  }
+
+  return architecture;
+}
+
+std::shared_ptr<causallm::Transformer>
+createModel(Config &config, std::string architecture,
+            const std::string model_path) {
+  json &cfg = config.cfg;
+  json &generation_cfg = config.generation_cfg;
+  json &nntr_cfg = config.nntr_cfg;
+
+  // Construct weight file path
+  const std::string weight_file =
+    model_path + "/" + nntr_cfg["model_file_name"].get<std::string>();
+
+  std::cout << weight_file << std::endl;
+
+  auto [model, base_creation] = causallm::Factory::Instance().create(
+    architecture, cfg, generation_cfg, nntr_cfg);
+  if (!model) {
+    std::cerr << "Unknown architecture: " << architecture << std::endl;
+    std::cerr << "Registered architectures:";
+    causallm::Factory::Instance().printRegistered(std::cerr);
+    std::cerr << std::endl;
+    return nullptr;
+  }
+
+  model->initialize(base_creation);
+  
+  if (architecture == "Lfm2VLVJepa21BModel") {
+    model->load_weight(model_path);
+  } else {
+    model->load_weight(weight_file);
+  }
+
+  return model;
+}
+
+void runModel(int argc, char *argv[], Config config, std::string architecture,
+              const std::string model_path,
+              std::shared_ptr<causallm::Transformer> model) {
+  std::string input_text;
+  std::string system_head_prompt = "";
+  std::string system_tail_prompt = "";
+
+  json &cfg = config.cfg;
+  json &generation_cfg = config.generation_cfg;
+  json &nntr_cfg = config.nntr_cfg;
+
+  // Load chat template from tokenizer_config.json or jinja (if available)
+  std::optional<causallm::ChatTemplate> chat_template;
+  if (causallm::ChatTemplate::Exists(model_path)) {
+    chat_template.emplace(causallm::ChatTemplate::Load(model_path));
+  }
+
+  // Determine input text
+  if (argc >= 3) {
+    input_text = argv[2];
+  } else {
+    if (nntr_cfg.contains("chat_input")) {
+      if (chat_template.has_value()) {
+        input_text = chat_template->apply(nntr_cfg["chat_input"]);
+        system_head_prompt.clear();
+        system_tail_prompt.clear();
+      } else {
+        std::cerr << "[Warning] 'chat_input' is set but support for model "
+                     "architecture '"
+                  << architecture
+                  << "' is not implemented. Falling back to 'sample_input'."
+                  << std::endl;
+        input_text = nntr_cfg["sample_input"].get<std::string>();
+      }
+    } else {
+      input_text = nntr_cfg["sample_input"].get<std::string>();
+    }
+  }
+
+  if (nntr_cfg.contains("system_prompt")) {
+    system_head_prompt =
+      nntr_cfg["system_prompt"]["head_prompt"].get<std::string>();
+    system_tail_prompt =
+      nntr_cfg["system_prompt"]["tail_prompt"].get<std::string>();
+  }
+
+  bool do_sample = generation_cfg.value("do_sample", false);
+
+  if (architecture == "Lfm2VLVJepa21BModel") {
+    if (!nntr_cfg.contains("video_path") ||
+        !nntr_cfg["video_path"].is_string() ||
+        nntr_cfg["video_path"].get<std::string>().empty()) {
+      throw std::invalid_argument(
+        "nntr_config.json must contain a non-empty 'video_path' key "
+        "pointing to a raw float32 [C,T,H,W] video tensor file.");
+    }
+
+    const std::string video_path = nntr_cfg["video_path"].get<std::string>();
+
+    auto vl_model = dynamic_cast<causallm::VjepaLfm2ForConditionalGeneration *>(model.get());
+    if (!vl_model) {
+      throw std::runtime_error("Failed to cast model to VjepaLfm2ForConditionalGeneration");
+    }
+
+#ifdef PROFILE
+    start_peak_tracker();
+#endif
+    vl_model->run_video_bin(video_path, input_text, do_sample, true);
+#ifdef PROFILE
+    stop_and_print_peak();
+#endif
+  } else if (architecture == "VJEPA2ViT") {
+    // Determine video source:
+    //   1) "video_path" in nntr_config.json → directory of image frames
+    //   2) "sample_input" in nntr_config.json → raw binary tensor file
+    //      (backward-compatible with existing config files)
+    std::string video_dir;
+    std::string video_bin_path;
+
+    if (nntr_cfg.contains("video_path") &&
+        nntr_cfg["video_path"].is_string() &&
+        !nntr_cfg["video_path"].get<std::string>().empty()) {
+      video_dir = nntr_cfg["video_path"].get<std::string>();
+      if (std::filesystem::is_directory(video_dir)) {
+        std::cout << "Video source: image frames directory (" << video_dir
+                  << ")" << std::endl;
+      } else {
+        std::string ext = std::filesystem::path(video_dir).extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        if (ext == ".bin" || ext == ".raw" || ext == ".dat" ||
+            ext == ".fp32") {
+          video_bin_path = video_dir;
+          video_dir.clear();
+          std::cout << "Video source: binary tensor file (" << video_bin_path
+                    << ")" << std::endl;
+        } else {
+          std::cerr << "[Error] Video file '" << video_dir
+                    << "' is a compressed video format (" << ext << ").\n"
+                    << "  VJEPA2ViT requires either:\n"
+                    << "    1) A directory of image frames (JPEG/PNG/BMP), or\n"
+                    << "    2) A raw float32 binary file [C,T,H,W].\n";
+          throw std::runtime_error("Invalid video file format for VJEPA2ViT");
+        }
+      }
+    } else {
+      video_bin_path = input_text;
+      std::cout << "Video source: sample_input binary tensor (" << video_bin_path
+                << ")" << std::endl;
+    }
+
+    auto vjepa_model = dynamic_cast<causallm::VJEPA2ViT *>(model.get());
+    if (!vjepa_model) {
+      throw std::runtime_error("Failed to cast model to VJEPA2ViT");
+    }
+
+#ifdef PROFILE
+    start_peak_tracker();
+#endif
+    vjepa_model->run_with_video(video_dir, video_bin_path);
+#ifdef PROFILE
+    stop_and_print_peak();
+#endif
+  } else {
+#ifdef PROFILE
+    start_peak_tracker();
+#endif
+#if defined(_WIN32)
+    model->run(input_text.c_str(), do_sample, system_head_prompt.c_str(),
+               system_tail_prompt.c_str(), false);
+#else
+    model->run(input_text, do_sample, system_head_prompt, system_tail_prompt,
+               false);
+#endif
+#ifdef PROFILE
+    stop_and_print_peak();
+#endif
+
+    auto causal_lm_model = dynamic_cast<causallm::CausalLM *>(model.get());
+    std::cout << causal_lm_model->getOutput(0) << "\n";
+  }
+}
+
+/**
+ * @brief Entry point for loading, initializing, and running a CausalLM model.
+ */
+int main(int argc, char *argv[]) {
+
+  auto start_time = std::chrono::high_resolution_clock::now();
+
+  registerCausalModels();
 
   // Validate arguments
   if (argc < 2) {
@@ -328,243 +578,32 @@ int main(int argc, char *argv[]) {
   }
 
   const std::string model_path = argv[1];
-  std::string input_text;
-  std::string system_head_prompt = "";
-  std::string system_tail_prompt = "";
 
-  std::cout << model_path << std::endl;
+  std::cerr << model_path << std::endl;
+  Config config = getConfigs(model_path);
+  std::string architecture = getArchitecture(config);
 
   try {
-    // Load configuration files
-    json cfg = causallm::LoadJsonFile(model_path + "/config.json");
-    json generation_cfg = json::object();
-    std::string generation_config_path = model_path + "/generation_config.json";
-    if (std::filesystem::exists(generation_config_path)) {
-      generation_cfg = causallm::LoadJsonFile(generation_config_path);
-    }
-    json nntr_cfg = causallm::LoadJsonFile(model_path + "/nntr_config.json");
-    // Resolve relative paths in nntr_cfg against model_path so that
-    // config files with bare filenames work when run as:
-    //   nntr_causallm <model_dir>
-    // Absolute paths (e.g. for CI override) are left unchanged.
-    {
-      auto resolve_path = [&](const std::string &key) {
-        if (!nntr_cfg.contains(key))
-          return;
-        const auto val = nntr_cfg[key];
-        if (!val.is_string())
-          return;
-        const std::string s = val.get<std::string>();
-        if (s.empty())
-          return;
-        if (!std::filesystem::path(s).is_absolute())
-          nntr_cfg[key] = model_path + "/" + s;
-      };
-      resolve_path("tokenizer_file");
-      resolve_path("embedding_bin_path");
-      resolve_path("image_path");
-      resolve_path("video_path");
-    }
+    auto model1 = createModel(config, architecture, model_path);
+    auto model2 = createModel(config, architecture, model_path);
 
-    if (nntr_cfg.contains("system_prompt")) {
-      system_head_prompt =
-        nntr_cfg["system_prompt"]["head_prompt"].get<std::string>();
-      system_tail_prompt =
-        nntr_cfg["system_prompt"]["tail_prompt"].get<std::string>();
-    }
-
-    // Construct weight file path
-    const std::string weight_file =
-      model_path + "/" + nntr_cfg["model_file_name"].get<std::string>();
-
-    std::cout << weight_file << std::endl;
-
-    // Initialize and run model
-    std::string architecture;
-    if (cfg.contains("architectures") && cfg["architectures"].is_array() &&
-        !cfg["architectures"].empty()) {
-      architecture = cfg["architectures"].get<std::vector<std::string>>()[0];
-    } else if (cfg.contains("architecture") &&
-               cfg["architecture"].is_string()) {
-      architecture = cfg["architecture"].get<std::string>();
-    } else if (cfg.contains("model_type") && cfg["model_type"].is_string()) {
-      architecture = cfg["model_type"].get<std::string>();
-    } else {
-      throw std::invalid_argument(
-        "config.json must contain 'architectures', 'architecture', or "
-        "'model_type'.");
-    }
-
-    if (nntr_cfg.contains("model_type")) {
-      std::string model_type = nntr_cfg["model_type"].get<std::string>();
-      architecture = resolve_architecture(model_type, architecture);
-    }
-
-    // Load chat template from tokenizer_config.json or jinja (if available)
-    std::optional<causallm::ChatTemplate> chat_template;
-    if (causallm::ChatTemplate::Exists(model_path)) {
-      chat_template.emplace(causallm::ChatTemplate::Load(model_path));
-    }
-
-    // Determine input text
-    if (argc >= 3) {
-      input_text = argv[2];
-    } else {
-      if (nntr_cfg.contains("chat_input")) {
-        if (chat_template.has_value()) {
-          input_text = chat_template->apply(nntr_cfg["chat_input"]);
-          system_head_prompt.clear();
-          system_tail_prompt.clear();
-        } else {
-          std::cerr << "[Warning] 'chat_input' is set but support for model "
-                       "architecture '"
-                    << architecture
-                    << "' is not implemented. Falling back to 'sample_input'."
-                    << std::endl;
-          input_text = nntr_cfg["sample_input"].get<std::string>();
-        }
-      } else {
-        input_text = nntr_cfg["sample_input"].get<std::string>();
-      }
-    }
-
-    bool do_sample = generation_cfg.value("do_sample", false);
-
-    if (architecture == "Lfm2VLVJepa21BModel") {
-      causallm::VjepaLfm2ForConditionalGeneration vl_model(
-        cfg, generation_cfg, nntr_cfg);
-      vl_model.initialize();
-      vl_model.load_weight(model_path);
-
-      if (!nntr_cfg.contains("video_path") ||
-          !nntr_cfg["video_path"].is_string() ||
-          nntr_cfg["video_path"].get<std::string>().empty()) {
-        throw std::invalid_argument(
-          "nntr_config.json must contain a non-empty 'video_path' key "
-          "pointing to a raw float32 [C,T,H,W] video tensor file.");
-      }
-
-      const json vision_cfg =
-        cfg.contains("vision_config") ? cfg["vision_config"] : json::object();
-      const unsigned int num_frames =
-        vision_cfg.value("num_frames", 16u);
-      const unsigned int frame_height =
-        vision_cfg.contains("image_height")
-          ? vision_cfg["image_height"].get<unsigned int>()
-          : (vision_cfg.contains("image_size")
-               ? vision_cfg["image_size"].get<unsigned int>()
-               : vision_cfg.value("img_size", 256u));
-      const unsigned int frame_width =
-        vision_cfg.contains("image_width")
-          ? vision_cfg["image_width"].get<unsigned int>()
-          : frame_height;
-      const std::string video_path = nntr_cfg["video_path"].get<std::string>();
-
-#ifdef PROFILE
-      start_peak_tracker();
-#endif
-      vl_model.run_video_bin(video_path, input_text, do_sample, true);
-#ifdef PROFILE
-      stop_and_print_peak();
-#endif
-    } else if (architecture == "VJEPA2ViT") {
-      // V-JEPA2 ViT encoder path — load video and run encoder
-      causallm::VJEPA2ViT vjepa_model(cfg, generation_cfg, nntr_cfg);
-      vjepa_model.initialize();
-      vjepa_model.load_weight(weight_file);
-
-      // Determine video source:
-      //   1) "video_path" in nntr_config.json → directory of image frames
-      //   2) "sample_input" in nntr_config.json → raw binary tensor file
-      //      (backward-compatible with existing config files)
-      std::string video_dir;
-      std::string video_bin_path;
-
-      if (nntr_cfg.contains("video_path") &&
-          nntr_cfg["video_path"].is_string() &&
-          !nntr_cfg["video_path"].get<std::string>().empty()) {
-        video_dir = nntr_cfg["video_path"].get<std::string>();
-        if (std::filesystem::is_directory(video_dir)) {
-          // Directory of image frames → use loadAndPreprocessVideo
-          std::cout << "Video source: image frames directory (" << video_dir
-                    << ")" << std::endl;
-        } else {
-          // It's a file — determine type by extension
-          std::string ext = std::filesystem::path(video_dir).extension().string();
-          std::transform(ext.begin(), ext.end(), ext.begin(),
-                         [](unsigned char c) { return std::tolower(c); });
-          if (ext == ".bin" || ext == ".raw" || ext == ".dat" ||
-              ext == ".fp32") {
-            video_bin_path = video_dir;
-            video_dir.clear();
-            std::cout << "Video source: binary tensor file (" << video_bin_path
-                      << ")" << std::endl;
-          } else {
-            // Video file (.mp4, .avi, .mkv, ...) — needs frame extraction
-            std::cerr << "[Error] Video file '" << video_dir
-                      << "' is a compressed video format (" << ext << ").\n"
-                      << "  VJEPA2ViT requires either:\n"
-                      << "    1) A directory of image frames (JPEG/PNG/BMP), "
-                         "or\n"
-                      << "    2) A raw float32 binary file [C,T,H,W].\n"
-                      << "  Extract frames first, e.g.:\n"
-                      << "    ffmpeg -i " << video_dir
-                      << " -q:v 2 frames/%05d.jpg\n"
-                      << "  Then set 'video_path' to the 'frames/' directory."
-                      << std::endl;
-            return EXIT_FAILURE;
-          }
-        }
-      } else {
-        // Fall back to sample_input (raw binary tensor path)
-        video_bin_path = input_text;
-        std::cout << "Video source: sample_input binary tensor (" << video_bin_path
-                  << ")" << std::endl;
-      }
-
-#ifdef PROFILE
-      start_peak_tracker();
-#endif
-      vjepa_model.run_with_video(video_dir, video_bin_path);
-#ifdef PROFILE
-      stop_and_print_peak();
-#endif
-    } else {
-    auto model = causallm::Factory::Instance().create(architecture, cfg,
-                                                      generation_cfg, nntr_cfg);
-    if (!model) {
-      std::cerr << "Unknown architecture: " << architecture << std::endl;
-      std::cerr << "Registered architectures:";
-      causallm::Factory::Instance().printRegistered(std::cerr);
-      std::cerr << std::endl;
-      return EXIT_FAILURE;
-    }
-    model->initialize();
-    model->load_weight(weight_file);
-
-#ifdef PROFILE
-    start_peak_tracker();
-#endif
-#if defined(_WIN32)
-    model->run(input_text.c_str(), do_sample, system_head_prompt.c_str(),
-               system_tail_prompt.c_str());
-#else
-    model->run(input_text, do_sample, system_head_prompt, system_tail_prompt);
-#endif
-#ifdef PROFILE
-    stop_and_print_peak();
-#endif
-    }
-    auto finish_time = std::chrono::high_resolution_clock::now();
-    auto e2e_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-      finish_time - start_time);
-    std::cout << "[e2e time]: " << e2e_duration.count() << " ms \n";
-    printMemoryUsage();
+    std::thread runModelThread1(runModel, argc, argv, config, architecture,
+                                model_path, model1);
+    std::thread runModelThread2(runModel, argc, argv, config, architecture,
+                                model_path, model2);
+    runModelThread1.join();
+    runModelThread2.join();
 
   } catch (const std::exception &e) {
     std::cerr << "\n[!] FATAL ERROR: " << e.what() << "\n";
     return EXIT_FAILURE;
   }
+
+  auto finish_time = std::chrono::high_resolution_clock::now();
+  auto e2e_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+    finish_time - start_time);
+  std::cout << "[e2e time]: " << e2e_duration.count() << " ms \n";
+  printMemoryUsage();
 
   return EXIT_SUCCESS;
 }

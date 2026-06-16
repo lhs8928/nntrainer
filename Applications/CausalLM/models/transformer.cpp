@@ -199,7 +199,7 @@ void Transformer::setupParameters(json &cfg, json &generation_cfg,
 /**
  * @brief Build and compile the symbolic transformer graph.
  */
-void Transformer::initialize() {
+void Transformer::initialize(std::shared_ptr<Transformer> base_creation) {
 
   // RegisterCustomLayers
   registerCustomLayers();
@@ -219,7 +219,11 @@ void Transformer::initialize() {
   // build symbolic tensor graph and compile from (input, output)
   auto [x, y] = constructModel();
 
-  if (model->compile(x, y, ml::train::ExecutionMode::INFERENCE)) {
+  ModelHandle ref_model;
+  if (base_creation) {
+    ref_model = base_creation->getModelHandle();
+  }
+  if (model->compile(x, y, ml::train::ExecutionMode::INFERENCE, ref_model)) {
     throw std::invalid_argument("Model compilation failed.");
   }
 

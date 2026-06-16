@@ -45,7 +45,7 @@
 
 using json = nlohmann::json;
 
-static std::unique_ptr<causallm::Transformer> g_model;
+static std::shared_ptr<causallm::Transformer> g_model;
 static std::mutex g_mutex;
 static bool g_initialized = false;
 static std::string g_architecture = "";
@@ -529,8 +529,9 @@ ErrorCode loadModel(BackendType compute, ModelType modeltype,
       return CAUSAL_LM_ERROR_INVALID_PARAMETER;
     }
 
-    g_model = causallm::Factory::Instance().create(architecture, cfg,
-                                                   generation_cfg, nntr_cfg);
+    std::shared_ptr<causallm::Transformer> base_creation;
+    [ g_model, base_creation ] = causallm::Factory::Instance().create(
+      architecture, cfg, generation_cfg, nntr_cfg);
     if (!g_model) {
       return CAUSAL_LM_ERROR_MODEL_LOAD_FAILED;
     }
