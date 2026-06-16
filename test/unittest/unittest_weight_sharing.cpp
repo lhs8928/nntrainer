@@ -48,6 +48,63 @@ TEST(WeightSharing, sharing_p) {
   EXPECT_EQ(layer1->getWeights()[0], layer2->getWeights()[0]);
 }
 
+TEST(WeightSharing, sharing_initialize_n) {
+  std::shared_ptr<ml::train::Model> model1, model2;
+  model1 = ml::train::createModel(ml::train::ModelType::NEURAL_NET);
+  model2 = ml::train::createModel(ml::train::ModelType::NEURAL_NET);
+
+  std::shared_ptr<ml::train::Layer> input1 =
+    ml::train::layer::Input({"name=input1", "input_shape=1:1:1"});
+  std::shared_ptr<ml::train::Layer> input2 =
+    ml::train::layer::Input({"name=input2", "input_shape=1:1:1"});
+
+  model1->addLayer(input1);
+  model2->addLayer(input2);
+
+  std::shared_ptr<ml::train::Layer> fc1 =
+    ml::train::layer::FullyConnected({"name=fc1", "unit=2"});
+  std::shared_ptr<ml::train::Layer> fc2 =
+    ml::train::layer::FullyConnected({"name=fc2", "unit=2"});
+
+  model1->addLayer(fc1);
+  model2->addLayer(fc2);
+
+  model1->compile(ml::train::ExecutionMode::INFERENCE);
+  model2->compile(ml::train::ExecutionMode::INFERENCE);
+
+  EXPECT_THROW(model2->initialize(ml::train::ExecutionMode::INFERENCE, model1),
+               std::invalid_argument);
+}
+
+TEST(WeightSharing, sharing_unmatched_ref_n) {
+  std::shared_ptr<ml::train::Model> model1, model2;
+  model1 = ml::train::createModel(ml::train::ModelType::NEURAL_NET);
+  model2 = ml::train::createModel(ml::train::ModelType::NEURAL_NET);
+
+  std::shared_ptr<ml::train::Layer> input1 =
+    ml::train::layer::Input({"name=input1", "input_shape=1:1:1"});
+  std::shared_ptr<ml::train::Layer> input2 =
+    ml::train::layer::Input({"name=input2", "input_shape=1:1:1"});
+
+  model1->addLayer(input1);
+  model2->addLayer(input2);
+
+  std::shared_ptr<ml::train::Layer> fc1 =
+    ml::train::layer::FullyConnected({"name=fc1", "unit=2"});
+  std::shared_ptr<ml::train::Layer> fc2 =
+    ml::train::layer::FullyConnected({"name=fc2", "unit=3"});
+
+  model1->addLayer(fc1);
+  model2->addLayer(fc2);
+
+  model1->compile(ml::train::ExecutionMode::INFERENCE);
+  model2->compile(ml::train::ExecutionMode::INFERENCE);
+
+  model1->initialize(ml::train::ExecutionMode::INFERENCE);
+  EXPECT_THROW(model2->initialize(ml::train::ExecutionMode::INFERENCE, model1),
+               std::invalid_argument);
+}
+
 /**
  * @brief Main gtest
  */
