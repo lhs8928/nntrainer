@@ -49,6 +49,7 @@
 #if !defined(_WIN32)
 #include "qwen3_cached_slim_moe_causallm.h"
 #endif
+#include "lfm2_causallm.h"
 #include "qwen3_causallm.h"
 #include "qwen3_embedding.h"
 #include "qwen3_moe_causallm.h"
@@ -289,6 +290,11 @@ int main(int argc, char *argv[]) {
     "TimmViT", [](json cfg, json generation_cfg, json nntr_cfg) {
       return std::make_unique<causallm::TimmViTTransformer>(cfg, generation_cfg,
                                                             nntr_cfg);
+    });
+  causallm::Factory::Instance().registerModel(
+    "Lfm2ForCausalLM", [](json cfg, json generation_cfg, json nntr_cfg) {
+      return std::make_unique<causallm::Lfm2CausalLM>(cfg, generation_cfg,
+                                                      nntr_cfg);
     });
 
   // Validate arguments
