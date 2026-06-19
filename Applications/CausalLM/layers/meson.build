@@ -193,22 +193,15 @@ causallm_shared_fully_connected_layer_dep = declare_dependency(
     include_directories: causallm_layer_inc
 )
 
-<<<<<<< HEAD
 causallm_rms_reverse_norm = shared_library(
     'rms_reverse_norm_layer',
     causallm_rms_reverse_norm_src_abs,
-=======
-causallm_custom_multiply_layer = shared_library(
-    'custom_multiply',
-    causallm_custom_multiply_layer_src_abs,
->>>>>>> 262cbdd (causallm: add LFM2 support layers)
     include_directories: causallm_layer_inc,
     dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
     install: true,
     install_dir: application_install_dir
 )
 
-<<<<<<< HEAD
 causallm_rms_reverse_norm_dep = declare_dependency(
     link_with: causallm_rms_reverse_norm,
     include_directories: causallm_layer_inc
@@ -251,9 +244,19 @@ causallm_logit_softcapping = shared_library(
 )
 causallm_logit_softcapping_dep = declare_dependency(
     link_with: causallm_logit_softcapping,
-=======
+    include_directories: causallm_layer_inc
+)
+
+causallm_custom_multiply_layer = shared_library(
+    'custom_multiply',
+    causallm_custom_multiply_layer_src_abs,
+    include_directories: causallm_layer_inc,
+    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+    install: true,
+    install_dir: application_install_dir
+)
+
 causallm_custom_multiply_dep = declare_dependency(
     link_with: causallm_custom_multiply_layer,
->>>>>>> 262cbdd (causallm: add LFM2 support layers)
     include_directories: causallm_layer_inc
 )

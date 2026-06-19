@@ -10,7 +10,7 @@
  * @bug    No known bugs except for NYI items
  */
 
-#include <gemma4_causallm.h>
+#include "gemma4_causallm.h"
 
 #include <algorithm>
 #include <cmath>
