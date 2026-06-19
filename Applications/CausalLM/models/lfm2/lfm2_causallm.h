@@ -14,28 +14,59 @@
 #ifndef __LFM2_CAUSALLM_H__
 #define __LFM2_CAUSALLM_H__
 
+#include <cstdint>
+#include <fstream>
 #include <string>
 #include <vector>
+
+#include <tensor_dim.h>
 
 #include "causal_lm.h"
 
 namespace causallm {
 
 /**
- * @brief Lfm2Transformer - model-specific attention variant
+ * @brief Lfm2Transformer - model-specific attention variant and conv block
  * @note Overrides createAttention() for lfm2-specific behavior
+ * @note Provides createConvBlock() and setupLfm2Parameters() shared by
+ *       Lfm2CausalLM and Lfm2VlDecoder
  */
 class Lfm2Transformer : virtual public Transformer {
 public:
-  Lfm2Transformer(json &cfg, json &generation_cfg, json &nntr_cfg)
-    : Transformer(cfg, generation_cfg, nntr_cfg) {}
+  Lfm2Transformer(json &cfg, json &generation_cfg, json &nntr_cfg) :
+    Transformer(cfg, generation_cfg, nntr_cfg) {}
 
-  Tensor createAttention(const int layer_id, int seq_len,
-                         int n_heads, int head_dim,
-                         Tensor query, Tensor key,
+  Tensor createAttention(const int layer_id, int seq_len, int n_heads,
+                         int head_dim, Tensor query, Tensor key,
                          Tensor value) override;
 
+  /**
+   * @brief Create a conv block for LFM2 hybrid layers.
+   * @param layer_id index of the layer
+   * @param input symbolic input tensor
+   * @return symbolic output tensor of the conv block
+   */
+  Tensor createConvBlock(const int layer_id, Tensor input);
+
   void registerCustomLayers() override;
+
+  /**
+   * @brief Setup LFM2-specific parameters shared by CausalLM and VL decoder.
+   * @param cfg Model config (config.json or text_config)
+   * @param generation_cfg Generation config
+   * @param nntr_cfg NNTrainer config
+   * @param require_layer_types If true, throw when layer_types is missing
+   */
+  void setupLfm2Parameters(json &cfg, json &generation_cfg, json &nntr_cfg,
+                           bool require_layer_types = true);
+
+  std::vector<std::string> layer_types_;
+  int CONV_DIM = 0;
+  int CONV_DIM_OUT = 0;
+  int CONV_L_CACHE = 0;
+  bool CONV_BIAS = false;
+  bool USE_EMBEDDING = false;
+  std::string EMBEDDING_BIN_PATH; /**< Path to standalone embedding bin file */
 };
 
 /**
@@ -50,8 +81,6 @@ public:
   std::pair<Tensor, Tensor> constructModel() override;
   void setupParameters(json &cfg, json &generation_cfg,
                        json &nntr_cfg) override;
-  Tensor createConvBlock(const int layer_id,
-                         Tensor input);
   void registerCustomLayers() override;
 
   /**
@@ -60,14 +89,71 @@ public:
    */
   static Lfm2CausalLM createTestModel();
 
+  /**
+   * @brief Run the model with a text prompt.
+   *
+   * When USE_EMBEDDING=true, tokenizes the prompt, converts tokens to
+   * embeddings via lookupEmbedding(), and delegates to run_with_embeddings().
+   * When USE_EMBEDDING=false, delegates to CausalLM::run() directly.
+   */
+  void run(const WSTR prompt, bool do_sample = false,
+           const WSTR system_prompt = "", const WSTR tail_prompt = "",
+           bool log_output = true) override;
+
+  /**
+   * @brief Run prefill with in-memory input embeddings (skips file I/O).
+   *
+   * @param inputs_embeds  Pointer to merged embeddings [B * INIT_SEQ_LEN * DIM]
+   */
+  void run_with_embeddings(const void *inputs_embeds, size_t n_tokens,
+                           std::vector<int> seed_tokens, bool do_sample,
+                           bool log_output);
+  /**
+   * @brief Look up the embedding vector for a given token ID.
+   *
+   * Supports FP32, Q4_0, and Q6_K embedding weight types.
+   * Must be called after load_weight() so that embedding weights are loaded.
+   *
+   * @param token_id Token ID to look up
+   * @return Embedding vector of size DIM (FP32)
+   */
+  std::vector<float> lookupEmbedding(unsigned int token_id);
+
+  /**
+   * @brief Get the generated token IDs from the last run_with_embeddings call.
+   */
+  const std::vector<unsigned int> &getGeneratedIds() const {
+    return generated_ids_;
+  }
+
   ModelHandle &getModel() { return model; }
 
-public:
-  std::vector<std::string> layer_types_;
-  int CONV_DIM;
-  int CONV_DIM_OUT;
-  int CONV_L_CACHE;
-  bool CONV_BIAS;
+  /**
+   * @brief Load model weights and optionally cache embedding weights.
+   * @param weight_path Path to the model weight file
+   */
+  void load_weight(const std::string &weight_path) override;
+
+private:
+  std::vector<unsigned int>
+    generated_ids_; /**< Generated token IDs from last run */
+
+  /** Embedding weight cache for lookupEmbedding() */
+  bool embedding_weight_cached_ = false;
+  nntrainer::TensorDim::DataType embedding_weight_dtype_ =
+    nntrainer::TensorDim::DataType::FP32;
+  std::vector<float> embedding_weight_cache_; /**< FP32 embedding weights */
+  std::vector<uint8_t>
+    embedding_weight_cache_uint8_; /**< Quantized embedding weights */
+  size_t embedding_row_bytes_ = 0; /**< Bytes per row for quantized types */
+
+  /**
+   * @brief Load embedding weights from EMBEDDING_BIN_PATH into cache.
+   *
+   * Reads the standalone embedding binary file whose path is specified
+   * in nntr_config["embedding_bin_path"]. Supports FP32, Q4_0, and Q6_K.
+   */
+  void loadEmbeddingWeight();
 };
 
 } // namespace causallm

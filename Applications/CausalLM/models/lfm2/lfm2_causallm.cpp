@@ -17,32 +17,34 @@
 #include <model.h>
 #include <tensor_api.h>
 
+#include <algorithm>
+#include <chrono>
+#include <cpu_backend.h>
 #include <iostream>
 
+#include <causal_conv1d_layer.h>
+#include <custom_multiply.h>
 #include <embedding_layer.h>
 #include <mha_core.h>
-#include <rms_norm.h>
 #include <reshaped_rms_norm.h>
+#include <rms_norm.h>
 #include <swiglu.h>
 #include <tie_word_embedding.h>
-#include <custom_multiply.h>
-#include <causal_conv1d_layer.h>
 
 using ml::train::Tensor;
 
 namespace causallm {
 
-Lfm2CausalLM::Lfm2CausalLM(json &cfg, json &generation_cfg, json &nntr_cfg)
-  : Transformer(cfg, generation_cfg, nntr_cfg, ModelType::CAUSALLM),
-    CausalLM(cfg, generation_cfg, nntr_cfg),
-    Lfm2Transformer(cfg, generation_cfg, nntr_cfg) {
+Lfm2CausalLM::Lfm2CausalLM(json &cfg, json &generation_cfg, json &nntr_cfg) :
+  Transformer(cfg, generation_cfg, nntr_cfg, ModelType::CAUSALLM),
+  CausalLM(cfg, generation_cfg, nntr_cfg),
+  Lfm2Transformer(cfg, generation_cfg, nntr_cfg) {
   setupParameters(cfg, generation_cfg, nntr_cfg);
 }
 
-Tensor
-Lfm2Transformer::createAttention(const int layer_id, int seq_len, int n_heads,
-                         int head_dim, Tensor query,
-                         Tensor key, Tensor value) {
+Tensor Lfm2Transformer::createAttention(const int layer_id, int seq_len,
+                                        int n_heads, int head_dim, Tensor query,
+                                        Tensor key, Tensor value) {
 
   // Q layer
   LayerHandle wq(createLayer(
@@ -110,37 +112,217 @@ Lfm2Transformer::createAttention(const int layer_id, int seq_len, int n_heads,
   return wo(a);
 }
 
+Tensor Lfm2Transformer::createConvBlock(const int layer_id, Tensor input) {
+
+  auto prefix = "layer" + std::to_string(layer_id);
+
+  // Pre-conv normalization
+  // Input/output: [B, 1, T, DIM]
+  LayerHandle conv_norm(
+    createLayer("rms_norm", {withKey("name", prefix + "_conv_norm"),
+                             withKey("epsilon", std::to_string(NORM_EPS)),
+                             withKey("packed", "false")}));
+  Tensor normed = conv_norm(input);
+
+  // Expand features: [B, 1, T, DIM] → [B, 1, T, 3*CONV_DIM]
+  LayerHandle conv_in_proj(
+    createLayer("fully_connected", {withKey("name", prefix + "_conv_in_proj"),
+                                    withKey("unit", 3 * CONV_DIM),
+                                    withKey("disable_bias", "true")}));
+  Tensor proj_out = conv_in_proj(normed);
+
+  // Split along width (axis=3): [B,1,T,3*CONV_DIM] → 3 × [B,1,T,CONV_DIM]
+  LayerHandle chunk_layer(
+    createLayer("split", {withKey("name", prefix + "_conv_chunk"),
+                          withKey("axis", 3), withKey("split_number", 3)}));
+  Tensor chunks = chunk_layer(proj_out);
+
+  Tensor chunk_0 = chunks.output(0); // gate_a  [B,1,T,CONV_DIM]
+  Tensor chunk_1 = chunks.output(1); // gate_b  [B,1,T,CONV_DIM]
+  Tensor chunk_2 = chunks.output(2); // gate_c  [B,1,T,CONV_DIM]
+
+  // Gating before conv: gate_a ⊙ gate_c
+  LayerHandle gate_mul(
+    createLayer("custom_multiply", {withKey("name", prefix + "_conv_mul_pre"),
+                                    withKey("inplace", "true")}));
+  Tensor gated = gate_mul({chunk_0, chunk_2});
+
+  // Causal depthwise conv1d with state cache.
+  // Input/output: [B, 1, T, CONV_DIM]
+  // Weight: [1, 1, 3, CONV_DIM] FP32  (kernel-first layout)
+  LayerHandle causal_conv(
+    createLayer("causal_conv1d", {
+                                   withKey("name", prefix + "_conv_conv"),
+                                   withKey("weight_dtype", "FP32"),
+                                 }));
+  Tensor conv_out = causal_conv(gated);
+
+  // Gating after conv: gate_b ⊙ conv_out
+  LayerHandle out_mul(
+    createLayer("custom_multiply", {withKey("name", prefix + "_conv_mul_post"),
+                                    withKey("inplace", "true")}));
+  Tensor gated_out = out_mul({chunk_1, conv_out});
+  LayerHandle conv_out_proj(
+    createLayer("fully_connected",
+                {withKey("name", prefix + "_conv_out_proj"),
+                 withKey("unit", DIM), withKey("disable_bias", "true")}));
+  Tensor proj_back = conv_out_proj(gated_out);
+
+  // Conv residual connection
+  Tensor residual = input.add(proj_back);
+
+  // Pre-FFN normalization
+  LayerHandle ffn_norm(
+    createLayer("rms_norm", {withKey("name", prefix + "_ffn_norm"),
+                             withKey("epsilon", std::to_string(NORM_EPS)),
+                             withKey("packed", "false")}));
+  Tensor ffn_normed = ffn_norm(residual);
+
+  // Feed forward
+  Tensor ffn_out = createMlp(layer_id, DIM, INTERMEDIATE_SIZE, ffn_normed);
+
+  // FFN residual connection
+  Tensor block_out = residual.add(ffn_out);
+
+  return block_out;
+}
+
 void Lfm2Transformer::registerCustomLayers() {
   auto &ct_engine = nntrainer::Engine::Global();
   auto app_context =
     static_cast<nntrainer::AppContext *>(ct_engine.getRegisteredContext("cpu"));
   try {
-    app_context->registerFactory(nntrainer::createLayer<causallm::ReshapedRMSNormLayer>);
-    app_context->registerFactory(nntrainer::createLayer<causallm::CustomMultiplyLayer>);
-    app_context->registerFactory(nntrainer::createLayer<causallm::CausalConv1DLayer>);
+    app_context->registerFactory(
+      nntrainer::createLayer<causallm::ReshapedRMSNormLayer>);
+    app_context->registerFactory(
+      nntrainer::createLayer<causallm::CustomMultiplyLayer>);
+    app_context->registerFactory(
+      nntrainer::createLayer<causallm::CausalConv1DLayer>);
   } catch (std::invalid_argument &e) {
-    std::cerr << "failed to register factory, reason: " << e.what() << std::endl;
+    std::cerr << "failed to register factory, reason: " << e.what()
+              << std::endl;
+  }
+}
+
+void Lfm2Transformer::setupLfm2Parameters(json &cfg, json &generation_cfg,
+                                          json &nntr_cfg,
+                                          bool require_layer_types) {
+  (void)generation_cfg;
+
+  try {
+    unsigned int ff_dim = INTERMEDIATE_SIZE;
+    if (cfg.contains("block_ff_dim")) {
+      ff_dim = cfg["block_ff_dim"].get<unsigned int>();
+    }
+
+    if (cfg.contains("block_auto_adjust_ff_dim") &&
+        cfg["block_auto_adjust_ff_dim"].get<bool>()) {
+      ff_dim = static_cast<unsigned int>((2.0f * ff_dim) / 3.0f);
+    }
+
+    float mult = cfg.contains("block_ffn_dim_multiplier")
+                   ? cfg["block_ffn_dim_multiplier"].get<float>()
+                   : 1.0f;
+    ff_dim = static_cast<unsigned int>(ff_dim * mult);
+
+    unsigned int multiple_of = cfg.contains("block_multiple_of")
+                                 ? cfg["block_multiple_of"].get<unsigned int>()
+                                 : 1;
+    ff_dim = multiple_of * ((ff_dim + multiple_of - 1) / multiple_of);
+
+    INTERMEDIATE_SIZE = ff_dim;
+
+    // LFM2 prefers block_norm_eps over rms_norm_eps for block norms
+    NORM_EPS = cfg.contains("block_norm_eps")
+                 ? cfg["block_norm_eps"].get<float>()
+                 : NORM_EPS;
+
+    // conv-specific parameters
+    CONV_DIM = cfg.contains("conv_dim") ? cfg["conv_dim"].get<int>() : DIM;
+
+    CONV_DIM_OUT =
+      cfg.contains("conv_dim_out") ? cfg["conv_dim_out"].get<int>() : DIM;
+
+    CONV_L_CACHE =
+      cfg.contains("conv_L_cache") ? cfg["conv_L_cache"].get<int>() : 0;
+
+    CONV_BIAS =
+      cfg.contains("conv_bias") ? cfg["conv_bias"].get<bool>() : false;
+
+    // Layer types (attention/conv hybrid)
+    if (cfg.contains("layer_types")) {
+      layer_types_ = cfg["layer_types"].get<std::vector<std::string>>();
+    } else if (require_layer_types) {
+      throw std::invalid_argument(
+        "Lfm2CausalLM requires layer_types in config");
+    } else {
+      layer_types_.assign(NUM_LAYERS, "full_attention");
+    }
+
+    if (cfg.contains("layer_types")) {
+      if (layer_types_.size() != static_cast<size_t>(NUM_LAYERS)) {
+        throw std::invalid_argument(
+          "layer_types size must match num_hidden_layers");
+      }
+
+      for (const auto &layer_type : layer_types_) {
+        if (layer_type != "attention" && layer_type != "full_attention" &&
+            layer_type != "conv") {
+          throw std::invalid_argument("Unsupported LFM2 layer type: " +
+                                      layer_type);
+        }
+      }
+    }
+
+    TIE_WORD_EMBEDDINGS = cfg.contains("tie_word_embeddings")
+                            ? cfg["tie_word_embeddings"].get<bool>()
+                            : false;
+
+    USE_EMBEDDING = nntr_cfg.contains("use_embedding")
+                      ? nntr_cfg["use_embedding"].get<bool>()
+                      : false;
+
+    EMBEDDING_BIN_PATH = nntr_cfg.contains("embedding_bin_path")
+                           ? nntr_cfg["embedding_bin_path"].get<std::string>()
+                           : "";
+  } catch (const std::exception &e) {
+    throw std::runtime_error(
+      std::string("Lfm2Transformer: config parsing error: ") + e.what());
   }
 }
 
 std::pair<Tensor, Tensor> Lfm2CausalLM::constructModel() {
 
-  // Create input tensor
-  LayerHandle input_layer = createLayer("input", {
-    withKey("name", "input0"),
-    withKey("input_shape", "1:1:" + std::to_string(INIT_SEQ_LEN))
-  });
-  Tensor input = input_layer(Tensor());
+  Tensor input_tensor;
+  Tensor x;
 
-  // Embedding layer
-  const std::string embedding_type = TIE_WORD_EMBEDDINGS ? "tie_word_embeddings" : "embedding_layer";
-  LayerHandle embedding(createLayer(embedding_type, {
-    withKey("name", "embedding0"),
-    withKey("weight_dtype", EMBEDDING_DTYPE),
-    withKey("in_dim", NUM_VOCAB),
-    withKey("out_dim", DIM)
-  }));
-  Tensor x = embedding(input);
+  // Always create embedding0 for: weight loading, lookupEmbedding(),
+  // and TIE_WORD_EMBEDDINGS shared_from reference.
+  const std::string embedding_type =
+    TIE_WORD_EMBEDDINGS ? "tie_word_embeddings" : "embedding_layer";
+  LayerHandle embedding(createLayer(
+    embedding_type,
+    {withKey("name", "embedding0"), withKey("weight_dtype", EMBEDDING_DTYPE),
+     withKey("in_dim", NUM_VOCAB), withKey("out_dim", DIM)}));
+
+  if (!USE_EMBEDDING) {
+    // Standard path: token IDs → embedding → transformer
+    LayerHandle input_layer = createLayer(
+      "input", {withKey("name", "input0"),
+                withKey("input_shape", "1:1:" + std::to_string(INIT_SEQ_LEN))});
+    input_tensor = input_layer(Tensor());
+    x = embedding(input_tensor);
+  } else {
+    // Embedding bypass: pre-computed embeddings → transformer directly.
+    // embedding0 exists in graph but is disconnected from the data path,
+    // so it is not executed during forward but its weights are still loaded.
+    LayerHandle input_layer = createLayer(
+      "input", {withKey("name", "input0"),
+                withKey("input_shape", "1:" + std::to_string(INIT_SEQ_LEN) +
+                                         ":" + std::to_string(DIM))});
+    input_tensor = input_layer(Tensor());
+    x = input_tensor;
+  }
 
   // Hybrid transformer blocks
   for (int i = 0; i < NUM_LAYERS; ++i) {
@@ -150,17 +332,15 @@ std::pair<Tensor, Tensor> Lfm2CausalLM::constructModel() {
     } else if (layer_type == "conv") {
       x = createConvBlock(i, x);
     } else {
-      throw std::invalid_argument("Unsupported LFM2 layer type: " +
-                                  layer_type);
+      throw std::invalid_argument("Unsupported LFM2 layer type: " + layer_type);
     }
   }
 
   // Final normalization
-  LayerHandle output_norm(createLayer("rms_norm", {
-    withKey("name", "output_norm"),
-    withKey("epsilon", std::to_string(NORM_EPS)),
-    withKey("packed", "false")
-  }));
+  LayerHandle output_norm(
+    createLayer("rms_norm", {withKey("name", "output_norm"),
+                             withKey("epsilon", std::to_string(NORM_EPS)),
+                             withKey("packed", "false")}));
   Tensor norm_out = output_norm(x);
 
   // LM head
@@ -180,165 +360,429 @@ std::pair<Tensor, Tensor> Lfm2CausalLM::constructModel() {
   LayerHandle lmhead(createLayer(lmhead_type, lmhead_props));
   Tensor output = lmhead(norm_out);
 
-  return {input, output};
+  return {input_tensor, output};
 }
 
-Tensor
-Lfm2CausalLM::createConvBlock(const int layer_id, Tensor input) {
+std::vector<float> Lfm2CausalLM::lookupEmbedding(unsigned int token_id) {
+  if (token_id >= NUM_VOCAB) {
+    throw std::invalid_argument(
+      "lookupEmbedding: token_id (" + std::to_string(token_id) +
+      ") exceeds NUM_VOCAB (" + std::to_string(NUM_VOCAB) + ")");
+  }
 
-  auto prefix = "layer" + std::to_string(layer_id);
+  if (!embedding_weight_cached_) {
+    throw std::runtime_error("lookupEmbedding: embedding weight not cached. "
+                             "Ensure load_weight() has been called.");
+  }
 
-  // Pre-conv normalization
-  // Input/output: [B, 1, T, DIM]
-  LayerHandle conv_norm(createLayer("rms_norm", {
-    withKey("name", prefix + "_conv_norm"),
-    withKey("epsilon", std::to_string(NORM_EPS)),
-    withKey("packed", "false")
-  }));
-  Tensor normed = conv_norm(input);
+  std::vector<float> result(DIM);
 
-  // Expand features: [B, 1, T, DIM] → [B, 1, T, 3*CONV_DIM]
-  LayerHandle conv_in_proj(createLayer("fully_connected", {
-    withKey("name", prefix + "_conv_in_proj"),
-    withKey("unit", 3 * CONV_DIM),
-    withKey("disable_bias", "true")
-  }));
-  Tensor proj_out = conv_in_proj(normed);
+  if (embedding_weight_dtype_ == nntrainer::TensorDim::DataType::FP32) {
+    const float *data = embedding_weight_cache_.data();
+    std::copy(data + static_cast<size_t>(token_id) * DIM,
+              data + static_cast<size_t>(token_id + 1) * DIM, result.begin());
+  } else if (embedding_weight_dtype_ == nntrainer::TensorDim::DataType::Q4_0) {
+    const void *row_ptr =
+      embedding_weight_cache_uint8_.data() + embedding_row_bytes_ * token_id;
+    nntrainer::dequantize_row_q4_0(row_ptr, result.data(), DIM);
+  } else if (embedding_weight_dtype_ == nntrainer::TensorDim::DataType::Q6_K) {
+    const void *row_ptr =
+      embedding_weight_cache_uint8_.data() + embedding_row_bytes_ * token_id;
+    nntrainer::dequantize_row_q6_K(row_ptr, result.data(), DIM);
+  } else {
+    throw std::runtime_error("lookupEmbedding: unsupported embedding dtype");
+  }
 
-  // Split along width (axis=3): [B,1,T,3*CONV_DIM] → 3 × [B,1,T,CONV_DIM]
-  LayerHandle chunk_layer(createLayer("split", {
-    withKey("name", prefix + "_conv_chunk"),
-    withKey("axis", 3),
-    withKey("split_number", 3)
-  }));
-  Tensor chunks = chunk_layer(proj_out);
+  // Apply embedding scale (consistent with EmbeddingLayer)
+  if (EMBEDDING_SCALE != 1.0f) {
+    for (auto &v : result)
+      v *= EMBEDDING_SCALE;
+  }
 
-  Tensor chunk_0 = chunks.output(0); // gate_a  [B,1,T,CONV_DIM]
-  Tensor chunk_1 = chunks.output(1); // gate_b  [B,1,T,CONV_DIM]
-  Tensor chunk_2 = chunks.output(2); // gate_c  [B,1,T,CONV_DIM]
-
-  // Gating before conv: gate_a ⊙ gate_c
-  LayerHandle gate_mul(createLayer("custom_multiply", {
-    withKey("name", prefix + "_conv_mul_pre"),
-    withKey("inplace", "true")
-  }));
-  Tensor gated = gate_mul({chunk_0, chunk_2});
-
-  // Causal depthwise conv1d with state cache.
-  // Input/output: [B, 1, T, CONV_DIM]
-  // Weight: [1, 1, 3, CONV_DIM] FP32  (kernel-first layout)
-  LayerHandle causal_conv(createLayer("causal_conv1d", {
-    withKey("name", prefix + "_conv_conv"),
-    withKey("weight_dtype", "FP32"),
-  }));
-  Tensor conv_out = causal_conv(gated);
-
-  // Gating after conv: gate_b ⊙ conv_out
-  LayerHandle out_mul(createLayer("custom_multiply", {
-    withKey("name", prefix + "_conv_mul_post"),
-    withKey("inplace", "true")
-  }));
-  Tensor gated_out = out_mul({chunk_1, conv_out});
-  LayerHandle conv_out_proj(createLayer("fully_connected", {
-    withKey("name", prefix + "_conv_out_proj"),
-    withKey("unit", DIM),
-    withKey("disable_bias", "true")
-  }));
-  Tensor proj_back = conv_out_proj(gated_out);
-
-  // Conv residual connection
-  Tensor residual = input.add(proj_back);
-
-  // Pre-FFN normalization
-  LayerHandle ffn_norm(createLayer("rms_norm", {
-    withKey("name", prefix + "_ffn_norm"),
-    withKey("epsilon", std::to_string(NORM_EPS)),
-    withKey("packed", "false")
-  }));
-  Tensor ffn_normed = ffn_norm(residual);
-
-  // Feed forward
-  Tensor ffn_out = createMlp(layer_id, DIM, INTERMEDIATE_SIZE, ffn_normed);
-
-  // FFN residual connection
-  Tensor block_out = residual.add(ffn_out);
-
-  return block_out;
+  return result;
 }
 
-void Lfm2CausalLM::setupParameters(json &cfg, json &generation_cfg,
-                                        json &nntr_cfg) {
+void Lfm2CausalLM::run(const WSTR prompt, bool do_sample,
+                       const WSTR system_prompt, const WSTR tail_prompt,
+                       bool log_output) {
+  if (!USE_EMBEDDING) {
+    CausalLM::run(prompt, do_sample, system_prompt, tail_prompt, log_output);
+    return;
+  }
 
-  try {
-    unsigned int ff_dim = cfg["block_ff_dim"].get<unsigned int>();  // 10240
+  if (!is_initialized) {
+    throw std::runtime_error(
+      "Lfm2CausalLM model is not initialized. Please call "
+      "initialize() before run().");
+  }
 
-    if (cfg.contains("block_auto_adjust_ff_dim") &&
-        cfg["block_auto_adjust_ff_dim"].get<bool>()) {
-      ff_dim = static_cast<unsigned int>((2.0f * ff_dim) / 3.0f);   // 6826
+  if (!embedding_weight_cached_) {
+    throw std::runtime_error("Lfm2CausalLM::run: embedding weight not cached. "
+                             "Ensure load_weight() has been called.");
+  }
+
+  const std::string full_prompt = system_prompt + prompt + tail_prompt;
+  if (log_output)
+    std::cout << full_prompt << std::endl;
+
+  auto token_ids = tokenizer->Encode(full_prompt);
+
+  // Clamp to INIT_SEQ_LEN (the model's prefill capacity)
+  const size_t max_tokens = static_cast<size_t>(INIT_SEQ_LEN);
+  if (token_ids.size() > max_tokens)
+    token_ids.resize(max_tokens);
+
+  const size_t n_tokens = token_ids.size();
+
+  // Build flat embedding buffer: [n_tokens * DIM]
+  std::vector<float> inputs_embeds(n_tokens * static_cast<size_t>(DIM));
+  for (size_t t = 0; t < n_tokens; ++t) {
+    const unsigned int tok = static_cast<unsigned int>(token_ids[t]);
+    std::vector<float> emb = lookupEmbedding(tok);
+    std::copy(emb.begin(), emb.end(),
+              inputs_embeds.begin() + static_cast<ptrdiff_t>(t * DIM));
+  }
+
+  // Collect token IDs as seed_tokens for repetition penalty tracking
+  std::vector<int> seed_tokens(token_ids.begin(), token_ids.end());
+
+  run_with_embeddings(inputs_embeds.data(), n_tokens, seed_tokens, do_sample,
+                      log_output);
+}
+
+void Lfm2CausalLM::run_with_embeddings(const void *inputs_embeds,
+                                       size_t n_tokens,
+                                       std::vector<int> seed_tokens,
+                                       bool do_sample, bool log_output) {
+
+  auto start_total = std::chrono::high_resolution_clock::now();
+
+  if (!is_initialized) {
+    throw std::runtime_error(
+      "Lfm2CausalLM model is not initialized. Please call "
+      "initialize() before run_with_embeddings().");
+  }
+  if (!USE_EMBEDDING) {
+    throw std::runtime_error(
+      "run_with_embeddings() requires USE_EMBEDDING=true. "
+      "Set use_embedding=true in nntr_config.");
+  }
+
+  const auto *embeds = static_cast<const float *>(inputs_embeds);
+  const unsigned int input_len = static_cast<unsigned int>(n_tokens);
+
+  if (input_len > static_cast<unsigned int>(INIT_SEQ_LEN)) {
+    throw std::invalid_argument("n_tokens (" + std::to_string(input_len) +
+                                ") exceeds INIT_SEQ_LEN (" +
+                                std::to_string(INIT_SEQ_LEN) + ")");
+  }
+
+  if (MAX_SEQ_LEN < INIT_SEQ_LEN) {
+    throw std::invalid_argument(
+      "MAX_SEQ_LEN must be greater than or equal to INIT_SEQ_LEN");
+  }
+
+  // Allocate the host-owned KV cache and bind it to mha_core's external cache
+  // input slots. Idempotent: only the first call does work.
+  allocateAndBindKVCache();
+
+  output_list.clear();
+  for (unsigned int b = 0; b < BATCH_SIZE; ++b) {
+    output_list.push_back("");
+  }
+
+  // Store seed token IDs into ids_history for repetition penalty support
+  for (unsigned int b = 0; b < BATCH_SIZE; ++b) {
+    for (size_t i = 0; i < seed_tokens.size(); ++i) {
+      ids_history[b * MAX_SEQ_LEN + i] =
+        static_cast<unsigned int>(seed_tokens[i]);
+    }
+  }
+
+  /**
+   * Build inference inputs: [input_data, kv_cache_pointers...]
+   * KV cache pointers are sorted by name for consistent ordering.
+   */
+  auto build_inference_inputs = [this](float *input_data) {
+    std::vector<std::pair<std::string, float *>> cache_inputs;
+    cache_inputs.reserve(static_cast<size_t>(NUM_LAYERS) * 2);
+    for (int i = 0; i < NUM_LAYERS; ++i) {
+      cache_inputs.emplace_back(
+        "cache_k_l" + std::to_string(i),
+        reinterpret_cast<float *>(kv_cache.getKeyCache(i).getData()));
+      cache_inputs.emplace_back(
+        "cache_v_l" + std::to_string(i),
+        reinterpret_cast<float *>(kv_cache.getValueCache(i).getData()));
+    }
+    std::sort(
+      cache_inputs.begin(), cache_inputs.end(),
+      [](const auto &lhs, const auto &rhs) { return lhs.first < rhs.first; });
+
+    std::vector<float *> inference_inputs;
+    inference_inputs.reserve(1 + cache_inputs.size());
+    inference_inputs.push_back(input_data);
+    for (const auto &cache_input : cache_inputs)
+      inference_inputs.push_back(cache_input.second);
+    return inference_inputs;
+  };
+
+  /**
+   * Variables for Log
+   */
+  unsigned int generation_cnt = 0;
+
+  /**
+   * PREFILL
+   */
+  // Prepare prefill input: embeds contains [B * n_tokens * DIM] floats.
+  // Pad to INIT_SEQ_LEN if n_tokens < INIT_SEQ_LEN.
+  float *input_sample;
+  bool needs_padding = input_len < static_cast<unsigned int>(INIT_SEQ_LEN);
+  std::vector<float> padded_embeds;
+
+  if (needs_padding) {
+    const size_t padded_size =
+      static_cast<size_t>(BATCH_SIZE) * INIT_SEQ_LEN * DIM;
+    padded_embeds.assign(padded_size, 0.0f);
+    const size_t copy_size = static_cast<size_t>(BATCH_SIZE) * input_len * DIM;
+    std::copy(embeds, embeds + copy_size, padded_embeds.begin());
+    input_sample = padded_embeds.data();
+  } else {
+    input_sample = const_cast<float *>(embeds);
+  }
+
+  auto input = build_inference_inputs(input_sample);
+  std::vector<float *> label;
+
+  auto start_prefill = std::chrono::high_resolution_clock::now();
+
+  const unsigned int prefill_from = global_token_len;
+  const unsigned int prefill_to = prefill_from + input_len;
+  setKVCachePosition(prefill_from);
+
+  std::vector<float *> outputs = model->incremental_inference(
+    BATCH_SIZE, input, label, input_len, prefill_from, prefill_to, false);
+
+  // Sync KVCacheManager's tracked position with mha_core's internal
+  // cache_index after prefill.
+  advanceKVCachePosition(input_len);
+
+  // Generate first token from prefill logits
+  generated_ids_.clear();
+  std::vector<bool> eos_list(BATCH_SIZE, false);
+  std::vector<unsigned int> id_list(
+    generate(outputs[0], do_sample, 1.0f, ids_history, input_len));
+
+  generated_ids_.push_back(id_list[0]);
+  registerOutputs(tokenizer, id_list, input_len, eos_list, log_output);
+
+  // Update ids_history with the first generated token
+  for (unsigned int b = 0; b < BATCH_SIZE; ++b) {
+    ids_history[b * MAX_SEQ_LEN + input_len] = id_list[b];
+  }
+
+  for (auto *out : outputs) {
+    delete[] out;
+  }
+
+  auto finish_prefill = std::chrono::high_resolution_clock::now();
+  auto prefill_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+    finish_prefill - start_prefill);
+
+  /**
+   * TOKEN GENERATION
+   *
+   * With USE_EMBEDDING=true, each generation step converts the generated
+   * token ID back to its embedding vector via lookupEmbedding(), then feeds
+   * it through the model. The input buffer is zero-padded with the token's
+   * embedding at the first position.
+   */
+  std::vector<float> gen_input(
+    static_cast<size_t>(BATCH_SIZE) * INIT_SEQ_LEN * DIM, 0.0f);
+
+  auto start_generation = std::chrono::high_resolution_clock::now();
+
+  for (unsigned int token_generation_idx = input_len + 1;
+       token_generation_idx < input_len + 1 + NUM_TO_GENERATE;
+       ++token_generation_idx) {
+
+    // Look up embedding for the last generated token and fill gen_input
+    std::fill(gen_input.begin(), gen_input.end(), 0.0f);
+    for (unsigned int b = 0; b < BATCH_SIZE; ++b) {
+      std::vector<float> embed = lookupEmbedding(id_list[b]);
+      std::copy(embed.begin(), embed.end(),
+                gen_input.data() + static_cast<size_t>(b) * INIT_SEQ_LEN * DIM);
     }
 
-    float mult = cfg.contains("block_ffn_dim_multiplier")
-                  ? cfg["block_ffn_dim_multiplier"].get<float>()
-                  : 1.0f;
-    ff_dim = static_cast<unsigned int>(ff_dim * mult);
+    input = build_inference_inputs(gen_input.data());
+    allocateAndBindKVCache();
 
-    unsigned int multiple_of = cfg.contains("block_multiple_of")
-                                ? cfg["block_multiple_of"].get<unsigned int>()
-                                : 1;
-    ff_dim = multiple_of * ((ff_dim + multiple_of - 1) / multiple_of);  // 6912
+    auto output_interval =
+      model->incremental_inference(BATCH_SIZE, input, label, input_len,
+                                   token_generation_idx - 1 + global_token_len,
+                                   token_generation_idx + global_token_len);
 
-    INTERMEDIATE_SIZE = ff_dim;
+    id_list = generate(output_interval[0], do_sample);
+    generated_ids_.push_back(id_list[0]);
 
-    // LFM2 prefers block_norm_eps over rms_norm_eps for block norms
-    NORM_EPS = cfg.contains("block_norm_eps")
-                 ? cfg["block_norm_eps"].get<float>()
-                 : NORM_EPS;
+    registerOutputs(tokenizer, id_list, token_generation_idx, eos_list,
+                    log_output);
+    ++generation_cnt;
 
-    // conv-specific parameters
-    CONV_DIM = cfg.contains("conv_dim")
-                 ? cfg["conv_dim"].get<unsigned int>()
-                 : DIM;
-
-    CONV_DIM_OUT = cfg.contains("conv_dim_out")
-                     ? cfg["conv_dim_out"].get<unsigned int>()
-                     : DIM;
-
-    CONV_L_CACHE = cfg.contains("conv_L_cache")
-                     ? cfg["conv_L_cache"].get<unsigned int>()
-                     : 0;
-
-    CONV_BIAS = cfg.contains("conv_bias")
-                  ? cfg["conv_bias"].get<bool>()
-                  : false;
-
-    if (!cfg.contains("layer_types")) {
-      throw std::invalid_argument("Lfm2CausalLM requires layer_types in config");
+    // Update ids_history with the generated token
+    for (unsigned int b = 0; b < BATCH_SIZE; ++b) {
+      ids_history[b * MAX_SEQ_LEN + token_generation_idx] = id_list[b];
     }
 
-    layer_types_ = cfg["layer_types"].get<std::vector<std::string>>();
-    if (layer_types_.size() != NUM_LAYERS) {
-      throw std::invalid_argument(
-        "layer_types size must match num_hidden_layers");
+    for (auto *out : output_interval) {
+      delete[] out;
     }
 
-    for (const auto &layer_type : layer_types_) {
-      if (layer_type != "attention" && layer_type != "full_attention" &&
-          layer_type != "conv") {
-        throw std::invalid_argument("Unsupported LFM2 layer type: " +
-                                    layer_type);
+    // Check EOS
+    for (unsigned int j = 0; j < BATCH_SIZE; ++j) {
+      if (!eos_list[j] && (std::find(EOS_TOKEN_ID.begin(), EOS_TOKEN_ID.end(),
+                                     id_list[j]) != EOS_TOKEN_ID.end())) {
+        eos_list[j] = true;
       }
     }
 
-    TIE_WORD_EMBEDDINGS = false;
-  } catch (const std::exception &e) {
-    throw std::runtime_error(std::string("Lfm2CausalLM: config parsing error: ") +
-                             e.what());
+    bool is_finish = true;
+    for (unsigned int j = 0; j < BATCH_SIZE; ++j) {
+      if (!eos_list[j]) {
+        is_finish = false;
+        break;
+      }
+    }
+
+    if (is_finish) {
+      break;
+    }
   }
+
+  global_token_len += (generation_cnt + input_len);
+
+  auto finish_generation = std::chrono::high_resolution_clock::now();
+  auto generation_duration =
+    std::chrono::duration_cast<std::chrono::milliseconds>(finish_generation -
+                                                          start_generation);
+
+  auto finish_total = std::chrono::high_resolution_clock::now();
+  auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+    finish_total - start_total);
+  size_t peak_memory = getPeakMemoryKb();
+
+  if (log_output) {
+
+    std::cout << "\n\n";
+    std::cout << "=================[ LLM with NNTrainer ]===================\n";
+    std::cout << "prefill: " << input_len << " tokens, "
+              << prefill_duration.count() << " ms, "
+              << ((double)input_len / prefill_duration.count() * 1000)
+              << " TPS\n";
+    std::cout << "generation: " << generation_cnt << " tokens, "
+              << generation_duration.count() << " ms, "
+              << ((double)generation_cnt / generation_duration.count() * 1000)
+              << " TPS\n";
+    std::cout << "total: " << total_duration.count() << " ms\n";
+    std::cout << "peak memory: " << peak_memory << " KB\n";
+    std::cout << "==========================================================\n";
+  }
+
+  performance_metrics.prefill_tokens = input_len;
+  performance_metrics.prefill_duration_ms = prefill_duration.count();
+  performance_metrics.generation_tokens = generation_cnt;
+  performance_metrics.generation_duration_ms = generation_duration.count();
+  performance_metrics.total_duration_ms = total_duration.count();
+  performance_metrics.peak_memory_kb = peak_memory;
+
+  has_run_ = true;
+}
+
+void Lfm2CausalLM::setupParameters(json &cfg, json &generation_cfg,
+                                   json &nntr_cfg) {
+  // Delegate LFM2-specific parameter parsing to the shared method
+  setupLfm2Parameters(cfg, generation_cfg, nntr_cfg,
+                      /*require_layer_types=*/true);
 }
 
 void Lfm2CausalLM::registerCustomLayers() {
   CausalLM::registerCustomLayers();
   Lfm2Transformer::registerCustomLayers();
+}
+
+void Lfm2CausalLM::load_weight(const std::string &weight_path) {
+  Transformer::load_weight(weight_path);
+
+  if (USE_EMBEDDING) {
+    loadEmbeddingWeight();
+  }
+}
+
+void Lfm2CausalLM::loadEmbeddingWeight() {
+  if (EMBEDDING_BIN_PATH.empty()) {
+    throw std::runtime_error(
+      "loadEmbeddingWeight: embedding_bin_path is not set. "
+      "Add embedding_bin_path to nntr_config.");
+  }
+
+  // Determine dtype from EMBEDDING_DTYPE string
+  if (EMBEDDING_DTYPE == "FP32" || EMBEDDING_DTYPE == "fp32") {
+    embedding_weight_dtype_ = nntrainer::TensorDim::DataType::FP32;
+  } else if (EMBEDDING_DTYPE == "Q4_0" || EMBEDDING_DTYPE == "q4_0") {
+    embedding_weight_dtype_ = nntrainer::TensorDim::DataType::Q4_0;
+  } else if (EMBEDDING_DTYPE == "Q6_K" || EMBEDDING_DTYPE == "q6_K") {
+    embedding_weight_dtype_ = nntrainer::TensorDim::DataType::Q6_K;
+  } else {
+    throw std::runtime_error(
+      "loadEmbeddingWeight: unsupported embedding dtype: " + EMBEDDING_DTYPE);
+  }
+
+  std::ifstream file(EMBEDDING_BIN_PATH, std::ios::binary | std::ios::ate);
+  if (!file.is_open()) {
+    throw std::runtime_error(
+      "loadEmbeddingWeight: failed to open embedding bin: " +
+      EMBEDDING_BIN_PATH);
+  }
+
+  if (embedding_weight_dtype_ == nntrainer::TensorDim::DataType::FP32) {
+    size_t expected_size = static_cast<size_t>(NUM_VOCAB) * DIM;
+    size_t file_size = static_cast<size_t>(file.tellg());
+    if (file_size != expected_size * sizeof(float)) {
+      throw std::runtime_error(
+        "loadEmbeddingWeight: FP32 file size mismatch. Expected " +
+        std::to_string(expected_size * sizeof(float)) + " bytes, got " +
+        std::to_string(file_size) + " bytes.");
+    }
+    embedding_weight_cache_.resize(expected_size);
+    file.seekg(0, std::ios::beg);
+    file.read(reinterpret_cast<char *>(embedding_weight_cache_.data()),
+              static_cast<std::streamsize>(expected_size * sizeof(float)));
+  } else {
+    // Compute row bytes for quantized types (consistent with
+    // EmbeddingLayer::incremental_forwarding)
+    if (embedding_weight_dtype_ == nntrainer::TensorDim::DataType::Q4_0) {
+      int num_blocks = (DIM + 32 - 1) / 32;
+      embedding_row_bytes_ = static_cast<size_t>(18 * num_blocks);
+    } else { // Q6_K
+      int num_blocks = (DIM + 256 - 1) / 256;
+      embedding_row_bytes_ = static_cast<size_t>(210 * num_blocks);
+    }
+
+    size_t total_bytes = embedding_row_bytes_ * NUM_VOCAB;
+    size_t file_size = static_cast<size_t>(file.tellg());
+    if (file_size != total_bytes) {
+      throw std::runtime_error(
+        "loadEmbeddingWeight: quantized file size mismatch. Expected " +
+        std::to_string(total_bytes) + " bytes, got " +
+        std::to_string(file_size) + " bytes.");
+    }
+    embedding_weight_cache_uint8_.resize(total_bytes);
+    file.seekg(0, std::ios::beg);
+    file.read(reinterpret_cast<char *>(embedding_weight_cache_uint8_.data()),
+              static_cast<std::streamsize>(total_bytes));
+  }
+
+  embedding_weight_cached_ = true;
 }
 
 } // namespace causallm
