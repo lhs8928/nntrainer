@@ -28,55 +28,23 @@
 
 namespace {
 
+constexpr int tiny_lfm2_num_layers = 2;
+
 /**
  * @brief Tiny LFM2 CausalLM adapter for common model tests
  */
-class TinyLfm2CausalLM final : public causallm::Lfm2CausalLM,
-                               public causallm_test::TinyCausalLMRunner {
-public:
-  /**
-   * @brief Construct a tiny LFM2 CausalLM test adapter
-   */
-  TinyLfm2CausalLM(causallm::json &cfg, causallm::json &generation_cfg,
-                   causallm::json &nntr_cfg) :
-    causallm::Transformer(cfg, generation_cfg, nntr_cfg,
-                          causallm::ModelType::CAUSALLM),
-    causallm::Lfm2CausalLM(cfg, generation_cfg, nntr_cfg) {}
+using TinyLfm2CausalLM =
+  causallm_test::CausalLMTestAdapter<causallm::Lfm2CausalLM>;
 
-  /**
-   * @brief Initialize the tiny LFM2 model
-   */
-  void initializeModel() override { initialize(); }
-
-  /**
-   * @brief Save tiny LFM2 model weights
-   */
-  void saveWeight(const std::string &path) override { save_weight(path); }
-
-  /**
-   * @brief Save tiny LFM2 model weights with dtype conversion
-   */
-  void saveWeightWithDtype(
-    const std::string &path,
-    const std::map<std::string, ml::train::TensorDim::DataType>
-      &layer_dtype_map) override {
-    save_weight(path, ml::train::TensorDim::DataType::NONE, layer_dtype_map);
-  }
-
-  /**
-   * @brief Load tiny LFM2 model weights
-   */
-  void loadWeight(const std::string &path) override { load_weight(path); }
-
-  /**
-   * @brief Set deterministic tiny LFM2 weights for golden token tests
-   *
-   * Zero all FC weights; set RMS norm scales to 1; set embedding[1][0]=1,
-   * embedding[4][0]=2. This produces analytically known prefill logits.
-   */
-  void setDeterministicWeights() override {
-    auto set_weights = [](ml::train::Layer &layer,
-                          nntrainer::RunLayerContext &context, void *) {
+/**
+ * @brief Populate deterministic tiny LFM2 weights for golden token tests
+ *
+ * Zero all FC weights; set RMS norm scales to 1; set embedding[1][0]=1,
+ * embedding[4][0]=2. This produces analytically known prefill logits.
+ */
+void setupLfm2DeterministicWeights(TinyLfm2CausalLM &model) {
+  model.forEachLayer(
+    [](ml::train::Layer &layer, nntrainer::RunLayerContext &context, void *) {
       if (layer.getName() == "output_of_causallm")
         return;
 
@@ -95,103 +63,8 @@ public:
           weight.setValue(0, 0, 4, 0, 2.0f);
         }
       }
-    };
-
-    model->forEachLayer(set_weights, nullptr);
-  }
-
-  /**
-   * @brief Run one prompt through the tiny LFM2 model
-   */
-  void runPrompt(const std::string &prompt) override {
-    run(prompt, false, "", "", false);
-  }
-
-  /**
-   * @brief Run LFM2 prefill and return logits before sampling
-   */
-  std::vector<float> prefillLogits(const std::string &prompt) override {
-    allocateAndBindKVCache();
-
-    auto encoded = tokenizer->Encode(prompt);
-    if (encoded.empty())
-      throw std::invalid_argument("tiny LFM2 prompt encoded to no tokens");
-
-    const unsigned int num_allow_str = MAX_SEQ_LEN - NUM_TO_GENERATE;
-    const unsigned int init_len = static_cast<unsigned int>(
-      std::min<size_t>(encoded.size(), num_allow_str));
-    std::vector<float> input_sample(
-      static_cast<size_t>(BATCH_SIZE) * MAX_SEQ_LEN, 0.0f);
-
-    for (unsigned int b = 0; b < BATCH_SIZE; ++b) {
-      for (unsigned int i = 0; i < init_len; ++i) {
-        const auto token_id = static_cast<unsigned int>(encoded[i]);
-        input_sample[static_cast<size_t>(b) * MAX_SEQ_LEN + i] =
-          static_cast<float>(token_id);
-        ids_history[static_cast<size_t>(b) * MAX_SEQ_LEN + i] = token_id;
-      }
-    }
-
-    std::vector<std::pair<std::string, float *>> cache_inputs;
-    cache_inputs.reserve(static_cast<size_t>(NUM_LAYERS) * 2);
-    for (int i = 0; i < NUM_LAYERS; ++i) {
-      cache_inputs.emplace_back(
-        "cache_k_l" + std::to_string(i),
-        reinterpret_cast<float *>(kv_cache.getKeyCache(i).getData()));
-      cache_inputs.emplace_back(
-        "cache_v_l" + std::to_string(i),
-        reinterpret_cast<float *>(kv_cache.getValueCache(i).getData()));
-    }
-
-    std::sort(
-      cache_inputs.begin(), cache_inputs.end(),
-      [](const auto &lhs, const auto &rhs) { return lhs.first < rhs.first; });
-
-    std::vector<float *> input;
-    input.reserve(1 + cache_inputs.size());
-    input.push_back(input_sample.data());
-    for (const auto &cache_input : cache_inputs)
-      input.push_back(cache_input.second);
-
-    std::vector<float *> label;
-    setKVCachePosition(0);
-    auto output = model->incremental_inference(BATCH_SIZE, input, label,
-                                               init_len, 0, init_len, false);
-    std::vector<float> logits(output[0], output[0] + NUM_VOCAB);
-    for (auto &out : output)
-      delete[] out;
-
-    return logits;
-  }
-
-  /**
-   * @brief Get generated output text
-   */
-  std::string getOutputText(int batch_idx = 0) const override {
-    return getOutput(batch_idx);
-  }
-
-  /**
-   * @brief Get whether the tiny LFM2 model has completed run()
-   */
-  bool hasRun() const override { return causallm::CausalLM::hasRun(); }
-
-  /**
-   * @brief Read one token from the LFM2 input/output history
-   */
-  unsigned int tokenAt(size_t idx) const override { return ids_history[idx]; }
-
-  /**
-   * @brief Generate ids from logits through LFM2 decoding logic
-   */
-  std::vector<unsigned int>
-  generateFromLogits(float *logits, bool do_sample, float repetition_penalty,
-                     unsigned int *input_ids,
-                     unsigned int num_input_ids) override {
-    return generate(logits, do_sample, repetition_penalty, input_ids,
-                    num_input_ids);
-  }
-};
+    });
+}
 
 /**
  * @brief Make the tiny LFM2 model config
@@ -215,7 +88,7 @@ causallm::json makeTinyLfm2Config() {
     {"layer_types", {"attention", "conv"}},
     {"max_position_embeddings", 8},
     {"num_attention_heads", 8},
-    {"num_hidden_layers", 2},
+    {"num_hidden_layers", tiny_lfm2_num_layers},
     {"num_key_value_heads", 4},
     {"rms_norm_eps", 1e-6},
     {"rope_theta", 10000},
@@ -232,8 +105,8 @@ causallm::json makeTinyLfm2Config() {
  *   layer1 (conv):      explicit residual (input.add(proj_back)) does the same.
  *   output_norm on [2,0..0] (64-dim): RMS≈0.25, normed≈[8,0..0].
  *   tied LM head: logit[j] ≈ 8*emb[j][0].
- *   Slight numerical deviation from zero-weight attention is consistent with
- *   Qwen-family models (same architecture for the attention block).
+ *   LFM2's Q/K reshaped_rms_norm reduces numerical error vs Qwen family:
+ *   logit[1] ≈ 7.9999361, logit[4] ≈ 15.9998722 (empirically confirmed).
  */
 std::vector<float> makeExpectedLfm2Logits() {
   std::vector<float> logits(32, 0.0f);
@@ -294,6 +167,9 @@ makeLfm2Case(const causallm_test::TinyCausalLMDataType &data_type) {
     [](causallm::json &cfg, causallm::json &generation_cfg,
        causallm::json &nntr_cfg) {
       return std::make_unique<TinyLfm2CausalLM>(cfg, generation_cfg, nntr_cfg);
+    },
+    [](causallm_test::TinyCausalLMRunner &runner) {
+      setupLfm2DeterministicWeights(static_cast<TinyLfm2CausalLM &>(runner));
     },
   };
 }
