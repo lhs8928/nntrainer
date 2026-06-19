@@ -29,6 +29,7 @@ CAUSALLM_COMMON_INCLUDES := \
     $(LOCAL_PATH)/../models/timm_vit \
     $(LOCAL_PATH)/../models/deberta_v2 \
     $(LOCAL_PATH)/../models/gemma4 \
+    $(LOCAL_PATH)/../models/lfm2 \
     $(LOCAL_PATH)/../third_party/minja/include \
     $(LOCAL_PATH)/../third_party \
 
@@ -89,6 +90,8 @@ LOCAL_SRC_FILES := \
     ../layers/lm_head.cpp \
     ../models/qwen3_moe/qwen_moe_layer.cpp \
     ../layers/reshaped_rms_norm.cpp \
+    ../layers/custom_multiply.cpp \
+    ../layers/causal_conv1d_layer.cpp \
     ../layers/rms_norm.cpp \
     ../layers/swiglu.cpp \
     ../layers/tie_word_embedding.cpp \
@@ -100,6 +103,7 @@ LOCAL_SRC_FILES := \
     ../models/gemma3/gemma3_causallm.cpp \
     ../models/gemma3/embedding_gemma.cpp \
     ../models/gemma4/gemma4_causallm.cpp \
+    ../models/lfm2/lfm2_causallm.cpp \
     ../models/gemma3/function.cpp \
     ../models/timm_vit/timm_vit_transformer.cpp \
     ../models/deberta_v2/deberta_v2.cpp \
@@ -222,6 +226,8 @@ LOCAL_SRC_FILES := ../quantize.cpp \
     ../layers/mha_core.cpp \
     ../models/qwen3_moe/qwen_moe_layer.cpp \
     ../layers/reshaped_rms_norm.cpp \
+    ../layers/custom_multiply.cpp \
+    ../layers/causal_conv1d_layer.cpp \
     ../layers/rms_norm.cpp \
     ../layers/swiglu.cpp \
     ../layers/tie_word_embedding.cpp\
@@ -234,6 +240,7 @@ LOCAL_SRC_FILES := ../quantize.cpp \
     ../models/gemma3/gemma3_causallm.cpp \
     ../models/gemma3/embedding_gemma.cpp \
     ../models/gemma4/gemma4_causallm.cpp \
+    ../models/lfm2/lfm2_causallm.cpp \
     ../models/gemma3/function.cpp \
     ../models/deberta_v2/deberta_v2.cpp \
     ../layers/deberta_attention_layer.cpp \
@@ -256,38 +263,7 @@ LOCAL_C_INCLUDES += $(NNTRAINER_INCLUDES) \
     $(LOCAL_PATH)/../models/gemma3 \
     $(LOCAL_PATH)/../models/deberta_v2 \
     $(LOCAL_PATH)/../models/gemma4 \
-
-include $(BUILD_EXECUTABLE)
-
-# ---- unittest_causallm_models (CausalLM tiny + differential gtest suite) ----
-include $(CLEAR_VARS)
-
-LOCAL_ARM_NEON := true
-LOCAL_ARM_MODE := arm
-LOCAL_MODULE_TAGS := optional
-LOCAL_MODULE := unittest_causallm_models
-
-CAUSALLM_TEST_FLAGS := -pthread -fexceptions -frtti -DENABLE_FP16=1 -DUSE__FP16=1 -D__ARM_NEON__=1 -march=armv8.2-a+fp16+dotprod+i8mm -DUSE_NEON=1 -mtune=cortex-a76 -O3 -ffast-math
-LOCAL_CFLAGS += -std=c++17 $(CAUSALLM_TEST_FLAGS) -Igoogletest/include -Igoogletest/
-LOCAL_CXXFLAGS += -std=c++17 -frtti
-LOCAL_LDFLAGS += -fexceptions
-LOCAL_LDLIBS := -llog -landroid
-
-UNITTEST_MODELS_DIR := ../../../test/unittest/models
-LOCAL_SRC_FILES := \
-    $(UNITTEST_MODELS_DIR)/causallm_test_utils.cpp \
-    $(UNITTEST_MODELS_DIR)/unittest_causallm_gemma3.cpp \
-    $(UNITTEST_MODELS_DIR)/unittest_causallm_qwen2.cpp \
-    $(UNITTEST_MODELS_DIR)/unittest_causallm_qwen3.cpp \
-    $(UNITTEST_MODELS_DIR)/unittest_causallm_lfm2.cpp
-
-LOCAL_SHARED_LIBRARIES := causallm_core nntrainer ccapi-nntrainer
-LOCAL_STATIC_LIBRARIES := googletest_main
-
-LOCAL_C_INCLUDES += $(NNTRAINER_INCLUDES) $(CAUSALLM_COMMON_INCLUDES) \
-    $(LOCAL_PATH)/$(GTEST_PATH)/include \
-    $(LOCAL_PATH)/../api \
-    $(LOCAL_PATH)/$(UNITTEST_MODELS_DIR)
+    $(LOCAL_PATH)/../models/lfm2 \
 
 include $(BUILD_EXECUTABLE)
 
@@ -367,7 +343,9 @@ LOCAL_SRC_FILES := \
     $(UNITTEST_MODELS_DIR)/unittest_causallm_qwen2_embedding_reference.cpp \
     $(UNITTEST_MODELS_DIR)/unittest_causallm_embedding_gemma_reference.cpp \
     $(UNITTEST_MODELS_DIR)/unittest_causallm_tinybert_reference.cpp \
-    $(UNITTEST_MODELS_DIR)/unittest_causallm_deberta_v2_reference.cpp
+    $(UNITTEST_MODELS_DIR)/unittest_causallm_deberta_v2_reference.cpp \
+    $(UNITTEST_MODELS_DIR)/unittest_causallm_lfm2.cpp \
+    $(UNITTEST_MODELS_DIR)/unittest_causallm_lfm2_reference.cpp
 
 LOCAL_SHARED_LIBRARIES := causallm_core nntrainer ccapi-nntrainer
 LOCAL_STATIC_LIBRARIES := googletest_main
