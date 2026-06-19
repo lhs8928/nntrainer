@@ -191,17 +191,23 @@ void Lfm2Transformer::registerCustomLayers() {
   auto &ct_engine = nntrainer::Engine::Global();
   auto app_context =
     static_cast<nntrainer::AppContext *>(ct_engine.getRegisteredContext("cpu"));
-  try {
-    app_context->registerFactory(
-      nntrainer::createLayer<causallm::ReshapedRMSNormLayer>);
-    app_context->registerFactory(
-      nntrainer::createLayer<causallm::CustomMultiplyLayer>);
-    app_context->registerFactory(
-      nntrainer::createLayer<causallm::CausalConv1DLayer>);
-  } catch (std::invalid_argument &e) {
-    std::cerr << "failed to register factory, reason: " << e.what()
-              << std::endl;
-  }
+
+  // Register each factory in its own try/catch so that an "already taken key"
+  // exception from one layer (e.g. reshaped_rms_norm, which Qwen3/Gemma also
+  // register on the shared global AppContext) does not abort registration of
+  // the remaining LFM2-specific layers. Matches the Gemma4 pattern.
+  auto tryRegister = [&](auto factory_fn) {
+    try {
+      app_context->registerFactory(factory_fn);
+    } catch (std::invalid_argument &e) {
+      std::cerr << "failed to register factory, reason: " << e.what()
+                << std::endl;
+    }
+  };
+
+  tryRegister(nntrainer::createLayer<causallm::ReshapedRMSNormLayer>);
+  tryRegister(nntrainer::createLayer<causallm::CustomMultiplyLayer>);
+  tryRegister(nntrainer::createLayer<causallm::CausalConv1DLayer>);
 }
 
 void Lfm2Transformer::setupLfm2Parameters(json &cfg, json &generation_cfg,

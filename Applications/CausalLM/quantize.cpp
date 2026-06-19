@@ -77,6 +77,7 @@
 #include "gptoss_cached_slim_causallm.h"
 #endif
 #include "gptoss_causallm.h"
+#include "lfm2_causallm.h"
 #if !defined(_WIN32) && !defined(__ANDROID__)
 #include "multilingual_tinybert_16mb.h"
 #endif
@@ -357,6 +358,11 @@ void registerAllModels() {
                           return std::make_unique<causallm::EmbeddingGemma>(
                             cfg, generation_cfg, nntr_cfg);
                         });
+  factory.registerModel("Lfm2ForCausalLM",
+                        [](json cfg, json generation_cfg, json nntr_cfg) {
+                          return std::make_unique<causallm::Lfm2CausalLM>(
+                            cfg, generation_cfg, nntr_cfg);
+                        });
   factory.registerModel("DebertaV2", [](json cfg, json generation_cfg,
                                         json nntr_cfg) {
     return std::make_unique<causallm::DebertaV2>(cfg, generation_cfg, nntr_cfg);
@@ -492,6 +498,11 @@ buildLayerDtypeMap(int num_layers, DataType fc_dtype, DataType embd_dtype,
       dtype_map[prefix + "_ffn_down"] = fc_dtype;
 
       dtype_map[prefix + "_ffn_output"] = fc_dtype;
+
+      // LFM2 conv-block projections (causal_conv1d core stays FP32, but the
+      // in/out projections follow fc_layer_dtype like any other FC layer).
+      dtype_map[prefix + "_conv_in_proj"] = fc_dtype;
+      dtype_map[prefix + "_conv_out_proj"] = fc_dtype;
 
       // FFN FC layers - BERT (BertTransformer)
       dtype_map[prefix + "_ffn_fc1"] = fc_dtype;
