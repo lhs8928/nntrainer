@@ -164,15 +164,19 @@ std::pair<Tensor, Tensor> Lfm2CausalLM::constructModel() {
   Tensor norm_out = output_norm(x);
 
   // LM head
-  const std::string lmhead_type = TIE_WORD_EMBEDDINGS ? "tie_word_embeddings" : "lm_head";
+  const std::string lmhead_type =
+    TIE_WORD_EMBEDDINGS ? "tie_word_embeddings" : "lm_head";
 
   std::vector<std::string> lmhead_props = {
     withKey("name", "output_of_causallm"),
     withKey("weight_dtype", LMHEAD_DTYPE),
     withKey("unit", NUM_VOCAB),
     withKey("disable_bias", "true"),
-    withKey("shared_from", "embedding0")
   };
+
+  if (TIE_WORD_EMBEDDINGS)
+    lmhead_props.emplace_back(withKey("shared_from", "embedding0"));
+
   LayerHandle lmhead(createLayer(lmhead_type, lmhead_props));
   Tensor output = lmhead(norm_out);
 
