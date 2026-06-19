@@ -160,6 +160,130 @@ float compute_mse(const uint32_t M, const uint32_t N, std::vector<T> &ref_dst,
   return mean_squared_error;
 }
 
+#if defined(__aarch64__) || defined(_M_ARM64) || defined(__AVX2__)
+static std::vector<float> make_causal_conv_input(unsigned int B, unsigned int H,
+                                                 unsigned int W) {
+  std::vector<float> input(static_cast<size_t>(B) * H * W);
+  for (size_t i = 0; i < input.size(); ++i) {
+    const int v = static_cast<int>((i * 17 + 5) % 23) - 11;
+    input[i] = static_cast<float>(v) * 0.125f;
+  }
+  return input;
+}
+
+static std::vector<float> make_causal_conv_weight(unsigned int W) {
+  std::vector<float> weight(3 * W);
+  for (size_t i = 0; i < weight.size(); ++i) {
+    const int v = static_cast<int>((i * 7 + 3) % 19) - 9;
+    weight[i] = static_cast<float>(v) * 0.03125f;
+  }
+  return weight;
+}
+
+static std::vector<float> make_causal_conv_bias(unsigned int W) {
+  std::vector<float> bias(W);
+  for (size_t i = 0; i < bias.size(); ++i) {
+    const int v = static_cast<int>((i * 5 + 1) % 13) - 6;
+    bias[i] = static_cast<float>(v) * 0.0625f;
+  }
+  return bias;
+}
+
+static std::vector<float> reference_causal_depthwise_conv1d_k3(
+  const std::vector<float> &input, const std::vector<float> &weight,
+  const float *bias, unsigned int B, unsigned int H, unsigned int W) {
+  std::vector<float> output(static_cast<size_t>(B) * H * W, 0.0f);
+  const float *w0 = weight.data();
+  const float *w1 = weight.data() + W;
+  const float *w2 = weight.data() + 2 * W;
+
+  for (unsigned int b = 0; b < B; ++b) {
+    const float *x_base = input.data() + static_cast<size_t>(b) * H * W;
+    float *y_base = output.data() + static_cast<size_t>(b) * H * W;
+
+    for (unsigned int t = 0; t < H; ++t) {
+      for (unsigned int c = 0; c < W; ++c) {
+        const float cur = x_base[static_cast<size_t>(t) * W + c];
+        const float prev1 =
+          t >= 1 ? x_base[static_cast<size_t>(t - 1) * W + c] : 0.0f;
+        const float prev2 =
+          t >= 2 ? x_base[static_cast<size_t>(t - 2) * W + c] : 0.0f;
+        float acc = w0[c] * cur + w1[c] * prev1 + w2[c] * prev2;
+        if (bias) {
+          acc += bias[c];
+        }
+        y_base[static_cast<size_t>(t) * W + c] = acc;
+      }
+    }
+  }
+
+  return output;
+}
+
+TEST(nntrainer_cpu_backend_standalone,
+     causal_depthwise_conv1d_k3_prefill_matches_reference_with_bias) {
+  nntrainer::init_backend();
+
+  constexpr unsigned int B = 2;
+  constexpr unsigned int H = 5;
+  constexpr unsigned int W = 45;
+
+  const std::vector<float> input = make_causal_conv_input(B, H, W);
+  const std::vector<float> weight = make_causal_conv_weight(W);
+  const std::vector<float> bias = make_causal_conv_bias(W);
+  const std::vector<float> expected =
+    reference_causal_depthwise_conv1d_k3(input, weight, bias.data(), B, H, W);
+
+  std::vector<float> output(expected.size(), 0.0f);
+  nntrainer::causal_depthwise_conv1d_k3(input.data(), weight.data(),
+                                        bias.data(), output.data(), B, H, W);
+
+  for (size_t i = 0; i < output.size(); ++i) {
+    EXPECT_NEAR(output[i], expected[i], 1.0e-6f);
+  }
+}
+
+TEST(nntrainer_cpu_backend_standalone,
+     causal_depthwise_conv1d_k3_decode_matches_prefill_and_updates_state) {
+  nntrainer::init_backend();
+
+  constexpr unsigned int B = 1;
+  constexpr unsigned int H = 6;
+  constexpr unsigned int W = 45;
+
+  const std::vector<float> input = make_causal_conv_input(B, H, W);
+  const std::vector<float> weight = make_causal_conv_weight(W);
+  const std::vector<float> expected =
+    reference_causal_depthwise_conv1d_k3(input, weight, nullptr, B, H, W);
+
+  std::vector<float> prefill_output(expected.size(), 0.0f);
+  nntrainer::causal_depthwise_conv1d_k3(input.data(), weight.data(), nullptr,
+                                        prefill_output.data(), B, H, W);
+
+  std::vector<float> state(2 * W, 0.0f);
+  std::vector<float> y_cur(W, 0.0f);
+
+  for (unsigned int t = 0; t < H; ++t) {
+    const float *x_cur = input.data() + static_cast<size_t>(t) * W;
+    nntrainer::causal_depthwise_conv1d_k3_decode(x_cur, weight.data(),
+                                                 state.data(), y_cur.data(), W);
+
+    const float *prefill_y = prefill_output.data() + static_cast<size_t>(t) * W;
+    const float *expected_y = expected.data() + static_cast<size_t>(t) * W;
+    for (unsigned int c = 0; c < W; ++c) {
+      EXPECT_NEAR(y_cur[c], expected_y[c], 1.0e-6f);
+      EXPECT_NEAR(y_cur[c], prefill_y[c], 1.0e-6f);
+
+      const float expected_s0 =
+        t >= 1 ? input[static_cast<size_t>(t - 1) * W + c] : 0.0f;
+      const float expected_s1 = input[static_cast<size_t>(t) * W + c];
+      EXPECT_NEAR(state[c], expected_s0, 1.0e-6f);
+      EXPECT_NEAR(state[W + c], expected_s1, 1.0e-6f);
+    }
+  }
+}
+#endif
+
 TEST(nntrainer_cpu_backend_standalone, q4_K_quantization) {
   nntrainer::init_backend();
 

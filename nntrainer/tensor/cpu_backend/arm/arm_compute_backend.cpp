@@ -606,4 +606,37 @@ void transform_int4_osv32_isv2_to_q4_0(size_t N, size_t K,
 #endif
 }
 
+// Dispatches to the NEON prefill kernel on AArch64.
+void causal_depthwise_conv1d_k3(const float *input, const float *packed_weight,
+                                const float *bias, float *output,
+                                unsigned int B, unsigned int H,
+                                unsigned int W) {
+#if defined(__aarch64__) || defined(_M_ARM64)
+  nntrainer::neon::causal_depthwise_conv1d_k3(input, packed_weight, bias,
+                                              output, B, H, W);
+#endif
+}
+
+// Single-token decode wrapper. Non-AArch64 builds use the scalar fallback
+// because decode is on the hot path for CausalLM incremental inference.
+void causal_depthwise_conv1d_k3_decode(const float *x_cur,
+                                       const float *packed_weight, float *state,
+                                       float *y_cur, unsigned int W) {
+#if defined(__aarch64__) || defined(_M_ARM64)
+  nntrainer::neon::causal_depthwise_conv1d_k3_decode(x_cur, packed_weight,
+                                                     state, y_cur, W);
+#else
+  const float *w0 = packed_weight;
+  const float *w1 = packed_weight + W;
+  const float *w2 = packed_weight + 2 * W;
+  const float *s0 = state;     // x_{t-2}
+  const float *s1 = state + W; // x_{t-1}
+  for (unsigned int c = 0; c < W; ++c) {
+    y_cur[c] = w0[c] * x_cur[c] + w1[c] * s1[c] + w2[c] * s0[c];
+  }
+  std::memmove(state, state + W, W * sizeof(float));
+  std::memcpy(state + W, x_cur, W * sizeof(float));
+#endif
+}
+
 } /* namespace nntrainer */
