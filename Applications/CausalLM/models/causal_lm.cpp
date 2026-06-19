@@ -158,9 +158,15 @@ void CausalLM::allocateAndBindKVCache() {
       kp = find_cache_placeholder("cache_k_l" + std::to_string(i));
     if (vp == nullptr)
       vp = find_cache_placeholder("cache_v_l" + std::to_string(i));
+    if (kp == nullptr && vp == nullptr) {
+      /// This layer has no attention sub-graph (e.g., a conv-only block in a
+      /// hybrid architecture like LFM2). Skip KV-cache binding for it.
+      continue;
+    }
     NNTR_THROW_IF(kp == nullptr || vp == nullptr, std::runtime_error)
       << "allocateAndBindKVCache: cache_k_l" << i << " / cache_v_l" << i
-      << " input placeholder not found in compiled graph";
+      << " partially found in compiled graph (one placeholder exists but "
+         "the other does not)";
     NNTR_THROW_IF(kp->getDataType() != kc.getDataType() ||
                     vp->getDataType() != vc.getDataType(),
                   std::runtime_error)
