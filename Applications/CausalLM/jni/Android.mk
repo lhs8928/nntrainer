@@ -259,6 +259,38 @@ LOCAL_C_INCLUDES += $(NNTRAINER_INCLUDES) \
 
 include $(BUILD_EXECUTABLE)
 
+# ---- unittest_causallm_models (CausalLM tiny + differential gtest suite) ----
+include $(CLEAR_VARS)
+
+LOCAL_ARM_NEON := true
+LOCAL_ARM_MODE := arm
+LOCAL_MODULE_TAGS := optional
+LOCAL_MODULE := unittest_causallm_models
+
+CAUSALLM_TEST_FLAGS := -pthread -fexceptions -frtti -DENABLE_FP16=1 -DUSE__FP16=1 -D__ARM_NEON__=1 -march=armv8.2-a+fp16+dotprod+i8mm -DUSE_NEON=1 -mtune=cortex-a76 -O3 -ffast-math
+LOCAL_CFLAGS += -std=c++17 $(CAUSALLM_TEST_FLAGS) -Igoogletest/include -Igoogletest/
+LOCAL_CXXFLAGS += -std=c++17 -frtti
+LOCAL_LDFLAGS += -fexceptions
+LOCAL_LDLIBS := -llog -landroid
+
+UNITTEST_MODELS_DIR := ../../../test/unittest/models
+LOCAL_SRC_FILES := \
+    $(UNITTEST_MODELS_DIR)/causallm_test_utils.cpp \
+    $(UNITTEST_MODELS_DIR)/unittest_causallm_gemma3.cpp \
+    $(UNITTEST_MODELS_DIR)/unittest_causallm_qwen2.cpp \
+    $(UNITTEST_MODELS_DIR)/unittest_causallm_qwen3.cpp \
+    $(UNITTEST_MODELS_DIR)/unittest_causallm_lfm2.cpp
+
+LOCAL_SHARED_LIBRARIES := causallm_core nntrainer ccapi-nntrainer
+LOCAL_STATIC_LIBRARIES := googletest_main
+
+LOCAL_C_INCLUDES += $(NNTRAINER_INCLUDES) $(CAUSALLM_COMMON_INCLUDES) \
+    $(LOCAL_PATH)/$(GTEST_PATH)/include \
+    $(LOCAL_PATH)/../api \
+    $(LOCAL_PATH)/$(UNITTEST_MODELS_DIR)
+
+include $(BUILD_EXECUTABLE)
+
 # Build nntr_safetensors_info executable
 include $(CLEAR_VARS)
 
