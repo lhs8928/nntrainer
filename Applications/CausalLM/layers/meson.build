@@ -3,6 +3,7 @@ causallm_layer_inc = [include_directories('.')]
 
 causallm_rms_norm_src_abs = [meson.current_source_dir() / 'rms_norm.cpp']
 causallm_swiglu_src_abs = [meson.current_source_dir() / 'swiglu.cpp']
+causallm_causal_conv1d_src_abs = [meson.current_source_dir() / 'causal_conv1d_layer.cpp']
 causallm_tie_word_embedding_src_abs = [meson.current_source_dir() / 'tie_word_embedding.cpp']
 causallm_lmhead_src_abs = [meson.current_source_dir() / 'lm_head.cpp']
 causallm_mha_core_abs = [meson.current_source_dir()/ 'mha_core.cpp']
@@ -17,6 +18,7 @@ causallm_shared_fully_connected_src_abs = [meson.current_source_dir() / 'shared_
 causallm_per_layer_slice_src_abs = [meson.current_source_dir() / 'per_layer_slice.cpp']
 causallm_scalar_multiply_src_abs = [meson.current_source_dir() / 'scalar_multiply.cpp']
 causallm_logit_softcapping_src_abs = [meson.current_source_dir() / 'logit_softcapping.cpp']
+causallm_custom_multiply_layer_src_abs = [meson.current_source_dir() / 'custom_multiply.cpp']
 
 causallm_rms_norm = shared_library(
     'rms_norm_layer', 
@@ -41,6 +43,19 @@ causallm_swiglu = shared_library(
 )
 causallm_swiglu_dep = declare_dependency(
     link_with: causallm_swiglu,
+    include_directories: causallm_layer_inc
+)
+
+causallm_causal_conv1d = shared_library(
+    'causal_conv1d_layer',
+    causallm_causal_conv1d_src_abs,
+    include_directories: causallm_layer_inc,
+    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+    install: true,
+    install_dir: application_install_dir
+)
+causallm_causal_conv1d_dep = declare_dependency(
+    link_with: causallm_causal_conv1d,
     include_directories: causallm_layer_inc
 )
 
@@ -178,15 +193,22 @@ causallm_shared_fully_connected_layer_dep = declare_dependency(
     include_directories: causallm_layer_inc
 )
 
+<<<<<<< HEAD
 causallm_rms_reverse_norm = shared_library(
     'rms_reverse_norm_layer',
     causallm_rms_reverse_norm_src_abs,
+=======
+causallm_custom_multiply_layer = shared_library(
+    'custom_multiply',
+    causallm_custom_multiply_layer_src_abs,
+>>>>>>> 262cbdd (causallm: add LFM2 support layers)
     include_directories: causallm_layer_inc,
     dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
     install: true,
     install_dir: application_install_dir
 )
 
+<<<<<<< HEAD
 causallm_rms_reverse_norm_dep = declare_dependency(
     link_with: causallm_rms_reverse_norm,
     include_directories: causallm_layer_inc
@@ -229,5 +251,9 @@ causallm_logit_softcapping = shared_library(
 )
 causallm_logit_softcapping_dep = declare_dependency(
     link_with: causallm_logit_softcapping,
+=======
+causallm_custom_multiply_dep = declare_dependency(
+    link_with: causallm_custom_multiply_layer,
+>>>>>>> 262cbdd (causallm: add LFM2 support layers)
     include_directories: causallm_layer_inc
 )
