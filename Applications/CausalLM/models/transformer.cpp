@@ -381,30 +381,34 @@ Transformer::createKVCachePlaceholders(const int layer_id, int n_heads) {
   const unsigned int max_timestep = static_cast<unsigned int>(MAX_SEQ_LEN);
   const unsigned int kv_width =
     static_cast<unsigned int>(HEAD_DIM * n_heads / GQA_SIZE);
-#ifdef ENABLE_FP16
-  ml::train::TensorDim cache_dim(
-    {BATCH_SIZE, 1, max_timestep, kv_width},
-    {ml::train::TensorDim::Format::NCHW, ml::train::TensorDim::DataType::FP16});
-
-  Tensor cache_k(cache_dim, "cache_k_l" + std::to_string(layer_id));
-  Tensor cache_v(cache_dim, "cache_v_l" + std::to_string(layer_id));
-  return {cache_k, cache_v};
-#else
   const std::string cache_shape = std::to_string(BATCH_SIZE) +
                                   ":1:" + std::to_string(max_timestep) + ":" +
                                   std::to_string(kv_width);
 
+  // KV caches MUST be created as "input" layers (not plain Tensors). Plain
+  // Tensors shrink the graph's input-layer set, which changes the tensor-pool
+  // in-place/flatten behavior so that the first transformer layer's input is no
+  // longer a synced dependent of the model input placeholder. On ARM that broke
+  // USE_EMBEDDING prefill: the embedding reached input0's output but never
+  // layer0_conv_norm (all-zero activations → <pad>). The x86 (#else) path
+  // always used input layers and worked; this keeps both paths symmetric,
+  // differing only in the external dtype (FP16 on ARM, UINT16 elsewhere).
+#ifdef ENABLE_FP16
+  const char *cache_dtype = "FP16";
+#else
+  const char *cache_dtype = "UINT16";
+#endif
+
   LayerHandle cache_k_input(createLayer(
-    "input",
-    {withKey("name", "cache_k_l" + std::to_string(layer_id)),
-     withKey("input_shape", cache_shape), withKey("input_dtype", "UINT16")}));
+    "input", {withKey("name", "cache_k_l" + std::to_string(layer_id)),
+              withKey("input_shape", cache_shape),
+              withKey("input_dtype", cache_dtype)}));
   LayerHandle cache_v_input(createLayer(
-    "input",
-    {withKey("name", "cache_v_l" + std::to_string(layer_id)),
-     withKey("input_shape", cache_shape), withKey("input_dtype", "UINT16")}));
+    "input", {withKey("name", "cache_v_l" + std::to_string(layer_id)),
+              withKey("input_shape", cache_shape),
+              withKey("input_dtype", cache_dtype)}));
 
   return {cache_k_input(Tensor()), cache_v_input(Tensor())};
-#endif
 }
 
 /**
