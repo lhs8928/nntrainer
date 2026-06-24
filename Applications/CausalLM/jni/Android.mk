@@ -28,6 +28,7 @@ CAUSALLM_COMMON_INCLUDES := \
     $(LOCAL_PATH)/../models/gemma3 \
     $(LOCAL_PATH)/../models/timm_vit \
     $(LOCAL_PATH)/../models/vjepa2_vit \
+    $(LOCAL_PATH)/../models/vjepa_lfm2_vl \
     $(LOCAL_PATH)/../models/deberta_v2 \
     $(LOCAL_PATH)/../models/gemma4 \
     $(LOCAL_PATH)/../models/lfm2 \
@@ -108,6 +109,8 @@ LOCAL_SRC_FILES := \
     ../models/gemma3/function.cpp \
     ../models/timm_vit/timm_vit_transformer.cpp \
     ../models/vjepa2_vit/vjepa2_vit.cpp \
+    ../models/vjepa2_vit/vjepa_projector.cpp \
+    ../models/vjepa_lfm2_vl/vjepa_lfm2_vl.cpp \
     ../layers/vjepa_rope_layer.cpp \
     ../layers/vjepa_gelu_layer.cpp \
     ../layers/vjepa_layernorm_layer.cpp \
@@ -248,6 +251,8 @@ LOCAL_SRC_FILES := ../quantize.cpp \
     ../models/lfm2/lfm2_causallm.cpp \
     ../models/gemma3/function.cpp \
     ../models/vjepa2_vit/vjepa2_vit.cpp \
+    ../models/vjepa2_vit/vjepa_projector.cpp \
+    ../models/vjepa_lfm2_vl/vjepa_lfm2_vl.cpp \
     ../layers/vjepa_rope_layer.cpp \
     ../layers/vjepa_gelu_layer.cpp \
     ../layers/vjepa_layernorm_layer.cpp \
