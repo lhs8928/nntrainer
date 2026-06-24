@@ -124,18 +124,8 @@ public:
   // ── Delegated LLM interface ──────────────────────────────────────────
 
   const std::vector<unsigned int> &getGeneratedIds() const;
-  tokenizers::Tokenizer *getTokenizer();
-  std::string getOutput(int batch_idx = 0) const override;
+  std::string getOutput(int batch_idx = 0) const;
   bool hasRun() const;
-  TransformerPerformanceMetrics getPerformanceMetrics() const;
-  void requestStop() override;
-  void setStreamer(::BaseStreamer *streamer) override;
-  int getKvLen() const override;
-  size_t embeddingBytesPerToken() const override;
-  std::pair<float, int> get_embedding_info() override;
-  void run_with_embeddings(const void *prefill_embeds, size_t n_tokens,
-                           std::vector<int> seed_tokens, bool do_sample,
-                           bool log_output) override;
 
 private:
   json cfg_;

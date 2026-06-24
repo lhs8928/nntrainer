@@ -122,7 +122,7 @@ MHACoreLayer::MHACoreLayer() :
     props::UseRope(), props::MaxPositionEmbeddings(), props::UseSink(),
     props::RopeScalingType(), props::RopeScalingFactor(),
     props::RopePartialRotaryFactor(), props::RopeScalingMaxPositionEmbeddings(),
-    props::AttnLogitSoftcapping(), props::IsCausal()),
+    props::AttnLogitSoftcapping(), props::IsCausal(), props::UseGemmAttention()),
   sm(nntrainer::ActivationType::ACT_SOFTMAX),
   epsilon(1e-3),
   cache_index(0),

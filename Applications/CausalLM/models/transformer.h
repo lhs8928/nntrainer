@@ -58,6 +58,9 @@ using ModelHandle = std::unique_ptr<ml::train::Model>;
 
 using json = nlohmann::json;
 
+/** Pointer + byte size to a model-produced multimodal embedding buffer. */
+typedef std::pair<void *, size_t> multimodal_pointer;
+
 /**
  * @brief Model Type Enum
  */
@@ -95,6 +98,16 @@ public:
    * @brief Initialize and Construct the Transformer model
    */
   virtual void initialize();
+
+  /**
+   * @brief Initialize variant accepting a native library directory. The base
+   *        implementation ignores the path and delegates to initialize();
+   *        models that need plugin loading from a specific directory override.
+   */
+  virtual void initialize(const std::string &native_lib_dir) {
+    (void)native_lib_dir;
+    initialize();
+  }
 
   /**
    * @brief Load the model weights from a file
@@ -143,6 +156,11 @@ public:
    * @brief get the status of run
    */
   bool hasRun() const { return has_run_; }
+
+  /**
+   * @brief Access the model tokenizer (may be null before initialize()).
+   */
+  tokenizers::Tokenizer *getTokenizer() { return tokenizer.get(); }
 
 protected:
   /**

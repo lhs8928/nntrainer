@@ -638,11 +638,6 @@ VjepaLfm2ForConditionalGeneration::getGeneratedIds() const {
   return lm_->getGeneratedIds();
 }
 
-tokenizers::Tokenizer *
-VjepaLfm2ForConditionalGeneration::getTokenizer() {
-  return lm_->getTokenizer();
-}
-
 std::string
 VjepaLfm2ForConditionalGeneration::getOutput(int batch_idx) const {
   return lm_->getOutput(batch_idx);
@@ -650,37 +645,6 @@ VjepaLfm2ForConditionalGeneration::getOutput(int batch_idx) const {
 
 bool VjepaLfm2ForConditionalGeneration::hasRun() const {
   return lm_->hasRun();
-}
-
-TransformerPerformanceMetrics
-VjepaLfm2ForConditionalGeneration::getPerformanceMetrics() const {
-  return lm_->getPerformanceMetrics();
-}
-
-void VjepaLfm2ForConditionalGeneration::requestStop() { lm_->requestStop(); }
-
-void VjepaLfm2ForConditionalGeneration::setStreamer(BaseStreamer *streamer) {
-  lm_->setStreamer(streamer);
-}
-
-int VjepaLfm2ForConditionalGeneration::getKvLen() const {
-  return lm_->getKvLen();
-}
-
-size_t VjepaLfm2ForConditionalGeneration::embeddingBytesPerToken() const {
-  return lm_->embeddingBytesPerToken();
-}
-
-std::pair<float, int>
-VjepaLfm2ForConditionalGeneration::get_embedding_info() {
-  return lm_->get_embedding_info();
-}
-
-void VjepaLfm2ForConditionalGeneration::run_with_embeddings(
-  const void *prefill_embeds, size_t n_tokens,
-  std::vector<int> seed_tokens, bool do_sample, bool log_output) {
-  lm_->run_with_embeddings(prefill_embeds, n_tokens, seed_tokens, do_sample,
-                           log_output);
 }
 
 } // namespace causallm
