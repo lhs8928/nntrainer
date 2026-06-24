@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+export ANDROID_NDK=~/Desktop/workspace/android-ndk-r26d
+export PATH=${PATH}:${ANDROID_NDK}
+
 set -e
 
 TARGET=$1

@@ -3,6 +3,8 @@
 # This is a script to run NNTrainer unit tests on Android devices
 # Note that this script assumes to be run on the nntrainer root path.
 
+export ANDROID_NDK=~/Desktop/workspace/android-ndk-r26d
+export PATH=${PATH}:${ANDROID_NDK}
 
 opencl_arg="-Denable-opencl=true"  
 enable_gpu=0
