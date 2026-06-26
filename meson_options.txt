@@ -27,7 +27,7 @@ option('enable-npu', type: 'boolean', value: false)
 #   meson setup build -Denable-npu=true -Dqnn-sdk-root=/opt/qcom/aistack/qnn-2.x.x
 # See docs/backend_guide/QNN_BUILD.md for details.
 option('qnn-sdk-root', type: 'string', value: '')
-option('mmap-read', type: 'boolean', value: true)
+option('mmap-read', type: 'boolean', value: false)
 option('enable-kernel-caching', type: 'boolean', value: false)
 
 # dependency conflict resolution

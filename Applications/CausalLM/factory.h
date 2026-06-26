@@ -37,28 +37,13 @@ public:
     creators[key] = creator;
   }
 
-  std::tuple<std::shared_ptr<Transformer>, std::shared_ptr<Transformer>>
+  std::shared_ptr<Transformer>
   create(const std::string &key, json &cfg, json &generation_cfg,
          json &nntr_cfg) {
     auto creator_it = creators.find(key);
-    if (creator_it != creators.end()) {
-      auto creation = (creator_it->second)(cfg, generation_cfg, nntr_cfg);
-      // std::shared_ptr<Transformer> base_creation =
-      // creations.find(key)->second;
-      std::shared_ptr<Transformer> base_creation;
-      auto creation_it = creations.find(key);
-      if (creation_it != creations.end()) {
-        base_creation = creation_it->second;
-      }
-      creations.try_emplace(key, creation);
-
-      return std::make_tuple(creation, base_creation);
-    }
-    return std::make_tuple(nullptr, nullptr);
-  }
-
-  std::shared_ptr<Transformer> getCreation(const std::string &key) {
-    return creations[key];
+    if (creator_it != creators.end())
+      return (creator_it->second)(cfg, generation_cfg, nntr_cfg);
+    return nullptr;
   }
 
   void printRegistered(std::ostream &os) const {
@@ -69,7 +54,6 @@ public:
 
 private:
   std::unordered_map<std::string, Creator> creators;
-  std::unordered_map<std::string, std::shared_ptr<Transformer>> creations;
 };
 
 } // namespace causallm

@@ -2282,6 +2282,8 @@ void NeuralNetwork::exports(const ml::train::ExportMethods &method,
 }
 
 void NeuralNetwork::setRefModel(std::shared_ptr<ml::train::Model> ref_model_) {
+  NNTR_THROW_IF(!ref_model_, std::invalid_argument)
+    << "The reference model is null.";
   NNTR_THROW_IF(!ref_model_->getInitialized(), std::invalid_argument)
     << "The reference model has not been initialized, so the reference will be "
        "omitted.";

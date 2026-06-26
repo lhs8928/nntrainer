@@ -529,8 +529,7 @@ ErrorCode loadModel(BackendType compute, ModelType modeltype,
       return CAUSAL_LM_ERROR_INVALID_PARAMETER;
     }
 
-    std::shared_ptr<causallm::Transformer> base_creation;
-    [ g_model, base_creation ] = causallm::Factory::Instance().create(
+    g_model = causallm::Factory::Instance().create(
       architecture, cfg, generation_cfg, nntr_cfg);
     if (!g_model) {
       return CAUSAL_LM_ERROR_MODEL_LOAD_FAILED;

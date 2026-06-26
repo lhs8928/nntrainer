@@ -9,6 +9,8 @@ causallm_src = [
 
 executable_src = [
     meson.current_source_dir() / 'main.cpp',
+    meson.current_source_dir() / 'model_runtime.cpp',
+    meson.current_source_dir() / 'orchestrator.cpp',
 ]
 
 causallm_inc_abs = [meson.current_source_dir()]
