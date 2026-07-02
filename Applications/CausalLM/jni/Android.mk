@@ -162,7 +162,7 @@ LOCAL_ARM_MODE := arm
 LOCAL_MODULE := nntrainer_causallm
 LOCAL_LDLIBS := -llog -landroid -DENABLE_FP16=1 -DUSE__FP16=1 -D__ARM_NEON__=1 -march=armv8.2-a+fp16+dotprod+i8mm -DUSE_NEON=1
 
-LOCAL_SRC_FILES := ../main.cpp ../model_runtime.cpp ../orchestrator.cpp
+LOCAL_SRC_FILES := ../main.cpp ../model_runtime.cpp ../model_manager.cpp
 
 LOCAL_SHARED_LIBRARIES := causallm_core nntrainer ccapi-nntrainer
 LOCAL_STATIC_LIBRARIES := tokenizers_c

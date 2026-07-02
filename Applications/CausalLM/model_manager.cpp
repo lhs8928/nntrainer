@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
- * @file   orchestrator.cpp
- * @brief  Implementation of ModelService and Orchestrator (see orchestrator.h).
+ * @file   model_manager.cpp
+ * @brief  Implementation of ModelService and ModelManager (see model_manager.h).
  */
-#include "orchestrator.h"
+#include "model_manager.h"
 
 #include <algorithm>
 #include <chrono>
@@ -115,46 +115,55 @@ void ModelService::workerLoop(int worker_id, bool share) {
     {
       std::lock_guard<std::mutex> lk(*create_mtx_);
       std::stringstream null_stream;
-      auto old_cout = std::cout.rdbuf(null_stream.rdbuf());
       auto old_cerr = std::cerr.rdbuf(null_stream.rdbuf());
 
       try {
         inst = buildInstance(config_, architecture_, model_path_,
                              share ? base_ : nullptr);
       } catch (...) {
-        std::cout.rdbuf(old_cout);
         std::cerr.rdbuf(old_cerr);
         throw;
       }
-      std::cout.rdbuf(old_cout);
       std::cerr.rdbuf(old_cerr);
     }
     if (!inst) {
       --active_;
-      std::lock_guard<std::mutex> lk(io_mtx_);
-      std::cout << "\r\033[2K" << std::flush;
-      std::cerr << "[worker " << worker_id << "] instance creation failed"
-                << std::endl;
-      if (!g_current_prompt.empty()) {
-        std::cout << g_current_prompt << std::flush;
+      {
+        std::lock_guard<std::mutex> lk(io_mtx_);
+        std::cout << "\r\033[2K" << std::flush;
+        std::cerr << "[worker " << worker_id << "] instance creation failed"
+                  << std::endl;
+        if (!g_current_prompt.empty()) {
+          std::cout << g_current_prompt << std::flush;
+        }
       }
+      ++served_; // Critical: increment served_ only after error is fully printed!
       continue;
     }
 
     // (b) Run once.
+    std::string out;
+    double ms = 0.0;
     auto t0 = std::chrono::high_resolution_clock::now();
-    std::string out =
-      runModel(config_, architecture_, model_path_, inst, prompt);
-    auto t1 = std::chrono::high_resolution_clock::now();
-    double ms =
-      std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+    try {
+      out = runModel(config_, architecture_, model_path_, inst, prompt);
+      auto t1 = std::chrono::high_resolution_clock::now();
+      ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+    } catch (const std::exception &e) {
+      auto t1 = std::chrono::high_resolution_clock::now();
+      ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+      out = "[ERROR] Inference failed: " + std::string(e.what());
+    } catch (...) {
+      auto t1 = std::chrono::high_resolution_clock::now();
+      ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+      out = "[ERROR] Inference failed with an unknown exception.";
+    }
 
     // (c) Discard: frees this instance's activation/KV memory; the base's
     //     shared weight pool is only referenced, never owned, so it survives.
     inst.reset();
 
     --active_;
-    ++served_;
     {
       std::lock_guard<std::mutex> lk(stats_m_);
       latencies_ms_.push_back(ms);
@@ -183,6 +192,7 @@ void ModelService::workerLoop(int worker_id, bool share) {
         std::cout << g_current_prompt << std::flush;
       }
     }
+    ++served_; // Critical: increment served_ only after the entire output panel has been printed!
   }
 }
 
@@ -220,7 +230,7 @@ ServingStats ModelService::stop() {
   return s;
 }
 
-/* ============================ Orchestrator ============================ */
+/* ============================ ModelManager ============================ */
 
 static std::string extractModelName(const std::string &path) {
   std::string norm = path;
@@ -234,7 +244,7 @@ static std::string extractModelName(const std::string &path) {
   return norm;
 }
 
-int Orchestrator::addService(const std::string &model_path, int pool_size) {
+int ModelManager::addService(const std::string &model_path, int pool_size) {
   try {
     std::string model_name = extractModelName(model_path);
 
@@ -261,7 +271,7 @@ int Orchestrator::addService(const std::string &model_path, int pool_size) {
   }
 }
 
-void Orchestrator::serve(int id) {
+void ModelManager::serve(int id) {
   auto it = services_.find(id);
   if (it == services_.end()) {
     std::cerr << "[ERROR] Service ID " << id << " not found" << std::endl;
@@ -306,7 +316,26 @@ void Orchestrator::serve(int id) {
   std::cout << "=============================\n" << std::endl;
 }
 
-void Orchestrator::list() {
+void ModelManager::runSingle(int id, const std::string &prompt) {
+  auto it = services_.find(id);
+  if (it == services_.end()) {
+    std::cerr << "[ERROR] Service ID " << id << " not found" << std::endl;
+    return;
+  }
+  ModelService &svc = *it->second;
+
+  // On-demand loading / startup
+  if (!svc.isStarted()) {
+    std::cout << "[INFO] Starting service " << id << " (" << svc.arch() << ") on-demand..." << std::endl;
+    svc.start(global_create_mtx_);
+  }
+
+  // Set g_current_prompt before submitting so the worker thread can restore it!
+  g_current_prompt = "Enter choice and option: ";
+  svc.submit(prompt);
+}
+
+void ModelManager::list() {
   if (services_.empty()) {
     std::cout << "No services" << std::endl;
     return;
@@ -320,13 +349,13 @@ void Orchestrator::list() {
   std::cout << std::endl;
 }
 
-void Orchestrator::remove(int id) {
+void ModelManager::remove(int id) {
   if (services_.erase(id) > 0)
     std::cout << "[SUCCESS] Service " << id << " removed" << std::endl;
   else
     std::cerr << "[ERROR] Service ID " << id << " not found" << std::endl;
 }
 
-bool Orchestrator::has(int id) const {
+bool ModelManager::has(int id) const {
   return services_.find(id) != services_.end();
 }

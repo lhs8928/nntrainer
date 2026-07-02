@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
- * @file   orchestrator.h
+ * @file   model_manager.h
  * @brief  Model lifecycle + execution orchestration for the CausalLM app.
  *         A ModelService owns one model family (a weight-owning base + a
  *         request-driven worker pool that creates a fresh shared instance per
- *         request and discards it). The Orchestrator owns the sharing policy,
+ *         request and discards it). The ModelManager owns the sharing policy,
  *         a process-global creation mutex, and routes interactive commands.
  */
-#ifndef __CAUSALLM_ORCHESTRATOR_H__
-#define __CAUSALLM_ORCHESTRATOR_H__
+#ifndef __CAUSALLM_MODEL_MANAGER_H__
+#define __CAUSALLM_MODEL_MANAGER_H__
 
 #include <string>
 
@@ -58,6 +58,8 @@ public:
   const std::string &arch() const { return architecture_; }
   int poolSize() const { return pool_size_; }
   bool share() const { return share_; }
+  bool isStarted() const { return !workers_.empty(); }
+  int getServedCount() const { return served_.load(); }
 
 private:
   void workerLoop(int worker_id, bool share);
@@ -88,12 +90,13 @@ private:
  * @brief Owns multiple ModelServices, the single sharing policy, and a
  *        process-global creation mutex. Routes interactive commands.
  */
-class Orchestrator {
+class ModelManager {
 public:
-  explicit Orchestrator(bool sharing = true) : sharing_(sharing) {}
+  explicit ModelManager(bool sharing = true) : sharing_(sharing) {}
 
   int addService(const std::string &model_path, int pool_size = 2); // create service (+base if sharing)
   void serve(int id);              // interactive serving loop
+  void runSingle(int id, const std::string &prompt); // synchronous single-shot prompt run
   void list();
   void remove(int id);
   bool has(int id) const;
@@ -105,4 +108,4 @@ private:
   std::mutex global_create_mtx_; // serialize all model creation process-wide
 };
 
-#endif // __CAUSALLM_ORCHESTRATOR_H__
+#endif // __CAUSALLM_MODEL_MANAGER_H__
