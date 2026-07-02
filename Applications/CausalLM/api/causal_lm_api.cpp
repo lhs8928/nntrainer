@@ -536,7 +536,11 @@ ErrorCode loadModel(BackendType compute, ModelType modeltype,
     }
 
     g_model->initialize();
-    g_model->load_weight(weight_file);
+    if (architecture == "Lfm2VLVJepa21BModel") {
+      g_model->load_weight(model_dir_path);
+    } else {
+      g_model->load_weight(weight_file);
+    }
 
     g_initialized = true;
     g_architecture = architecture;

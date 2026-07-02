@@ -41,6 +41,9 @@
 #include "qwen3_moe_causallm.h"
 #include "qwen3_slim_moe_causallm.h"
 #include "timm_vit/timm_vit_transformer.h"
+#include "vjepa2_vit/vjepa2_vit.h"
+#include "vjepa_lfm2_vl/vjepa_lfm2_vl.h"
+#include "lfm2_causallm.h"
 #include <models/gemma3/function.h>
 #if !defined(_WIN32)
 #include <sys/resource.h>
@@ -264,6 +267,21 @@ void registerCausalModels() {
       return std::make_unique<causallm::TimmViTTransformer>(cfg, generation_cfg,
                                                             nntr_cfg);
     });
+  causallm::Factory::Instance().registerModel(
+    "VJEPA2ViT", [](json cfg, json generation_cfg, json nntr_cfg) {
+      return std::make_unique<causallm::VJEPA2ViT>(cfg, generation_cfg,
+                                                   nntr_cfg);
+    });
+  causallm::Factory::Instance().registerModel(
+    "Lfm2ForCausalLM", [](json cfg, json generation_cfg, json nntr_cfg) {
+      return std::make_unique<causallm::Lfm2CausalLM>(cfg, generation_cfg,
+                                                      nntr_cfg);
+    });
+  causallm::Factory::Instance().registerModel(
+    "Lfm2VLVJepa21BModel", [](json cfg, json generation_cfg, json nntr_cfg) {
+      return std::make_unique<causallm::VjepaLfm2ForConditionalGeneration>(
+        cfg, generation_cfg, nntr_cfg);
+    });
 }
 
 Config getConfigs(const std::string model_path) {
@@ -323,7 +341,11 @@ buildInstance(Config &config, const std::string &architecture,
   // Explicit reference (not the Factory's implicit base). nullptr -> standalone.
   model->initialize(ref_base);
   // When sharing a loaded ref, NeuralNetwork::load() returns early (no reload).
-  model->load_weight(weight_file);
+  if (architecture == "Lfm2VLVJepa21BModel") {
+    model->load_weight(model_path);
+  } else {
+    model->load_weight(weight_file);
+  }
 
   return model;
 }
@@ -378,20 +400,95 @@ std::string runModel(Config config, std::string architecture,
 
   bool do_sample = generation_cfg.value("do_sample", false);
 
+  if (architecture == "Lfm2VLVJepa21BModel") {
+    if (!nntr_cfg.contains("video_path") ||
+        !nntr_cfg["video_path"].is_string() ||
+        nntr_cfg["video_path"].get<std::string>().empty()) {
+      throw std::invalid_argument(
+        "nntr_config.json must contain a non-empty 'video_path' key "
+        "pointing to a raw float32 [C,T,H,W] video tensor file.");
+    }
+
+    const std::string video_path = nntr_cfg["video_path"].get<std::string>();
+
+    auto vl_model = dynamic_cast<causallm::VjepaLfm2ForConditionalGeneration *>(model.get());
+    if (!vl_model) {
+      throw std::runtime_error("Failed to cast model to VjepaLfm2ForConditionalGeneration");
+    }
+
 #ifdef PROFILE
-  start_peak_tracker();
+    start_peak_tracker();
+#endif
+    vl_model->run_video_bin(video_path, input_text, do_sample, true);
+#ifdef PROFILE
+    stop_and_print_peak();
+#endif
+  } else if (architecture == "VJEPA2ViT") {
+    // Determine video source:
+    //   1) "video_path" in nntr_config.json → directory of image frames
+    //   2) "sample_input" in nntr_config.json → raw binary tensor file
+    std::string video_dir;
+    std::string video_bin_path;
+
+    if (nntr_cfg.contains("video_path") &&
+        nntr_cfg["video_path"].is_string() &&
+        !nntr_cfg["video_path"].get<std::string>().empty()) {
+      video_dir = nntr_cfg["video_path"].get<std::string>();
+      if (std::filesystem::is_directory(video_dir)) {
+        std::cout << "Video source: image frames directory (" << video_dir
+                  << ")" << std::endl;
+      } else {
+        std::string ext = std::filesystem::path(video_dir).extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        if (ext == ".bin" || ext == ".raw" || ext == ".dat" ||
+            ext == ".fp32") {
+          video_bin_path = video_dir;
+          video_dir.clear();
+          std::cout << "Video source: binary tensor file (" << video_bin_path
+                    << ")" << std::endl;
+        } else {
+          std::cerr << "[Error] Video file '" << video_dir
+                    << "' is a compressed video format (" << ext << ").\n"
+                    << "  VJEPA2ViT requires either:\n"
+                    << "    1) A directory of image frames (JPEG/PNG/BMP), or\n"
+                    << "    2) A raw float32 binary file [C,T,H,W].\n";
+          throw std::runtime_error("Invalid video file format for VJEPA2ViT");
+        }
+      }
+    } else {
+      video_bin_path = input_text;
+      std::cout << "Video source: sample_input binary tensor (" << video_bin_path
+                << ")" << std::endl;
+    }
+
+    auto vjepa_model = dynamic_cast<causallm::VJEPA2ViT *>(model.get());
+    if (!vjepa_model) {
+      throw std::runtime_error("Failed to cast model to VJEPA2ViT");
+    }
+
+#ifdef PROFILE
+    start_peak_tracker();
+#endif
+    vjepa_model->run_with_video(video_dir, video_bin_path);
+#ifdef PROFILE
+    stop_and_print_peak();
+#endif
+  } else {
+#ifdef PROFILE
+    start_peak_tracker();
 #endif
 #if defined(_WIN32)
-  model->run(input_text.c_str(), do_sample, system_head_prompt.c_str(),
-             system_tail_prompt.c_str(), false);
+    model->run(input_text.c_str(), do_sample, system_head_prompt.c_str(),
+               system_tail_prompt.c_str(), false);
 #else
-  model->run(input_text, do_sample, system_head_prompt, system_tail_prompt,
-             false);
+    model->run(input_text, do_sample, system_head_prompt, system_tail_prompt,
+               false);
 #endif
 #ifdef PROFILE
-  stop_and_print_peak();
+    stop_and_print_peak();
 #endif
+  }
 
-  auto causal_lm_model = dynamic_cast<causallm::CausalLM *>(model.get());
-  return causal_lm_model->getOutput(0);
+  return model->getOutput(0);
 }

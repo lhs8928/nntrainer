@@ -97,7 +97,9 @@ public:
   /**
    * @brief Initialize and Construct the Transformer model
    */
-  virtual void initialize(std::shared_ptr<Transformer> base_creation = nullptr);
+  virtual void initialize(std::shared_ptr<Transformer> base_creation);
+
+  virtual void initialize();
 
   /**
    * @brief Initialize variant accepting a native library directory. The base
@@ -138,6 +140,16 @@ public:
   virtual void run(const WSTR prompt, bool do_sample = false,
                    const WSTR system_prompt = WSTR(),
                    const WSTR tail_prompt = WSTR(), bool log_output = true);
+
+  /**
+   * @brief Get the generated output text
+   * @param batch_idx Index of the batch item
+   * @return Generated text string
+   */
+  virtual std::string getOutput(int batch_idx = 0) const {
+    (void)batch_idx;
+    return "";
+  }
 
   /** Producer: FP32 element count run_image expects (0 ⇒ legacy 512² calc). */
   virtual size_t expectedPixelElems() const { return 0; }

@@ -800,8 +800,13 @@ int main(int argc, char *argv[]) {
     // =========================================================================
     // Step 3: Load FP32 weights
     // =========================================================================
-    std::cout << "[3/5] Loading FP32 weights from: " << src_weight_path << "\n";
-    model->load_weight(src_weight_path);
+    if (architecture == "Lfm2VLVJepa21BModel") {
+      std::cout << "[3/5] Loading FP32 weights from model path: " << model_path << "\n";
+      model->load_weight(model_path);
+    } else {
+      std::cout << "[3/5] Loading FP32 weights from: " << src_weight_path << "\n";
+      model->load_weight(src_weight_path);
+    }
     std::cout << "  Weights loaded successfully.\n";
 
     // =========================================================================

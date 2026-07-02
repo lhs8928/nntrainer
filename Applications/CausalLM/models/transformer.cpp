@@ -196,6 +196,10 @@ void Transformer::setupParameters(json &cfg, json &generation_cfg,
   return;
 };
 
+void Transformer::initialize() {
+  initialize(std::shared_ptr<Transformer>(nullptr));
+}
+
 /**
  * @brief Build and compile the symbolic transformer graph.
  */

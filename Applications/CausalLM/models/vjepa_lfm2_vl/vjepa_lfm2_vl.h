@@ -79,6 +79,10 @@ public:
    * @brief Initialize all sub-models (build graphs, compile).
    */
   void initialize() override;
+  void initialize(std::shared_ptr<Transformer> base_creation) override {
+    (void)base_creation;
+    initialize();
+  }
   void initialize(const std::string &native_lib_dir) override;
 
   /**
