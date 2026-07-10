@@ -9,6 +9,8 @@
  * @bug		No known bugs except for NYI items
  */
 
+#include <cstdio>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <numeric>
@@ -915,8 +917,28 @@ Tensor &FloatTensor::dotFloat32Float16(Tensor const &input, Tensor &output,
 
   const float *data = (float *)getData();
   const _FP16 *mdata = input.getData<_FP16>();
-  float *rdata = output.getData<float>();
   const float alpha = 1.0f;
+
+  // The mixed-precision BLAS kernels (shgemm/shgemv/hsgemv) always accumulate
+  // and write FP32 output. When the destination tensor is FP16 (e.g. an
+  // FP32-weight / FP16-activation conv whose output activation is FP16), we
+  // cannot hand them the FP16 buffer reinterpreted as float* — that overruns
+  // the half-sized storage and yields NaN. Stage the GEMM through an owned FP32
+  // buffer and convert FP32->FP16 once at the boundary via the Tensor system.
+  const bool out_fp16 = output.getDataType() == Tdatatype::FP16;
+  std::vector<float> out_staging;
+  float *rdata;
+  if (out_fp16) {
+    out_staging.resize(output.size());
+    if (beta != 0.0f) {
+      const _FP16 *od = output.getData<_FP16>();
+      for (size_t i = 0; i < out_staging.size(); ++i)
+        out_staging[i] = static_cast<float>(od[i]);
+    }
+    rdata = out_staging.data();
+  } else {
+    rdata = output.getData<float>();
+  }
 
   /// shortcut handling in case of vector
   /// for vector, (1 * K) == (K * 1) in current memory layout...
@@ -945,6 +967,12 @@ Tensor &FloatTensor::dotFloat32Float16(Tensor const &input, Tensor &output,
   else {
     o->shgemm((unsigned int)dim.getStorageOrder(), trans, trans_in, M, N, K,
               alpha, data, lda, mdata, ldb, beta, rdata, ldc);
+  }
+
+  if (out_fp16) {
+    _FP16 *od = output.getData<_FP16>();
+    for (size_t i = 0; i < out_staging.size(); ++i)
+      od[i] = static_cast<_FP16>(out_staging[i]);
   }
 
   return output;
@@ -1018,6 +1046,25 @@ Tensor &FloatTensor::dotQnK(Tensor const &input, Tensor &output, bool trans,
   }
 #endif
 
+  return output;
+}
+
+Tensor &FloatTensor::convQ4_0Indirect(Tensor const &weight, Tensor &output,
+                                      const ConvGatherParams &geom) const {
+  // `this` is the NCHW FP32 input (gathered on the fly), `weight` is the Q4_0
+  // filter [CRS, out_ch], `output` is [OH*OW, out_ch]. The fused backend op
+  // mirrors col.dot(weight): M = output rows (OH*OW), N = out_ch, K = CRS.
+  const float *in = (const float *)getData();
+  uint8_t *wdata = weight.getData<uint8_t>();
+  float *rdata = output.getData<float>();
+
+  unsigned int M = output.getDim().height();
+  unsigned int N = output.getDim().width();
+  unsigned int K =
+    (unsigned int)geom.in_ch * (unsigned int)geom.k_h * (unsigned int)geom.k_w;
+
+  getOps()->gemm_q4_0_indirect_conv_fp32(M, N, K, in, geom, (void *)wdata, N,
+                                         rdata, N);
   return output;
 }
 
