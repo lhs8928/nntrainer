@@ -248,6 +248,7 @@ LOCAL_C_INCLUDES += \
     $(LOCAL_PATH)/../models/gemma4 \
     $(LOCAL_PATH)/../models/xlm_roberta \
     $(LOCAL_PATH)/../models/lfm2 \
+    $(LOCAL_PATH)/../models/timm_vit
 
 include $(BUILD_EXECUTABLE)
 
