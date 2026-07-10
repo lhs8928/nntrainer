@@ -34,16 +34,7 @@ namespace causallm {
 /**
  * @brief Load a file as a binary string.
  */
-ml::train::ModelFormat
-Transformer::formatFromExtension(const std::string &weight_path) {
-  const auto dot = weight_path.find_last_of('.');
-  if (dot != std::string::npos) {
-    const std::string ext = weight_path.substr(dot + 1);
-    if (ext == "safetensors")
-      return ml::train::ModelFormat::MODEL_FORMAT_SAFETENSORS;
-  }
-  return ml::train::ModelFormat::MODEL_FORMAT_BIN;
-}
+
 
 std::string LoadBytesFromFile(const std::string &path) {
   std::ifstream file(path, std::ios::binary | std::ios::ate);
@@ -292,91 +283,7 @@ std::vector<std::string> Transformer::buildEmbeddingLayerProperties(
 /**
  * @brief Load model weights from a binary nntrainer model file.
  */
-void Transformer::load_weight(const std::string &weight_path) {
-  if (!is_initialized) {
-    throw std::runtime_error(
-      "Transformer model is not initialized. Please call "
-      "initialize() before load_weight().");
-  }
 
-  try {
-    model->load(weight_path, formatFromExtension(weight_path));
-  } catch (const std::exception &e) {
-    throw std::runtime_error("Failed to load model weights: " +
-                             std::string(e.what()));
-  }
-};
-
-/**
- * @brief Save model weights to a binary nntrainer model file.
- */
-void Transformer::save_weight(const std::string &weight_path) {
-
-  if (!is_initialized) {
-    throw std::runtime_error(
-      "Transformer model is not initialized. Please call "
-      "initialize() before save_weight().");
-  }
-
-  try {
-    model->save(weight_path, formatFromExtension(weight_path));
-  } catch (const std::exception &e) {
-    throw std::runtime_error("Failed to save model weights: " +
-                             std::string(e.what()));
-  }
-};
-
-/**
- * @brief Save model weights with optional dtype conversion.
- */
-void Transformer::save_weight(
-  const std::string &weight_path, ml::train::TensorDim::DataType dtype,
-  const std::map<std::string, ml::train::TensorDim::DataType> &layer_dtype_map,
-  ml::train::ISA target_isa) {
-
-  if (!is_initialized) {
-    throw std::runtime_error(
-      "Transformer model is not initialized. Please call "
-      "initialize() before save_weight().");
-  }
-
-  try {
-    model->save(weight_path, formatFromExtension(weight_path), dtype,
-                layer_dtype_map, target_isa);
-
-  } catch (const std::exception &e) {
-    throw std::runtime_error("Failed to save model weights with dtype: " +
-                             std::string(e.what()));
-  }
-};
-
-/**
- * @brief Repack all QS4CX weights after loading.
- */
-void Transformer::repack_weight() {
-  if (!is_initialized) {
-    throw std::runtime_error(
-      "Transformer model is not initialized. Please call "
-      "initialize() before repack_weight().");
-  }
-  std::function<void(ml::train::Layer &, nntrainer::RunLayerContext &, void *)>
-    fn = [](ml::train::Layer &l, nntrainer::RunLayerContext &context, void *) {
-      auto weights = context.getWeights();
-      for (auto &w : weights) {
-        if (w->getVariableRef().getDataType() ==
-            ml::train::TensorDim::DataType::QS4CX) {
-          w->getVariableRef().pack();
-        }
-      }
-    };
-  try {
-    model->forEachLayer(fn, nullptr);
-    ml_logd("QS4CX weights repacked successfully");
-  } catch (const std::exception &e) {
-    throw std::runtime_error("Failed to repack weights: " +
-                             std::string(e.what()));
-  }
-};
 
 /**
  * @brief Run a transformer model for a prompt.
