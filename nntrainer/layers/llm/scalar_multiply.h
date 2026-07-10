@@ -32,7 +32,11 @@
 #include <tensor.h>
 #include <tensor_wrap_specs.h>
 
+<<<<<<<< HEAD:nntrainer/layers/llm/scalar_multiply.h
 namespace nntrainer {
+========
+namespace quick_ai {
+>>>>>>>> 4aaf8bcf ([Applications/quick_ai] Rebrand CausalLM application to generic Quick_AI):Applications/quick_ai/layers/scalar_multiply.h
 
 namespace props {
 
@@ -158,6 +162,10 @@ private:
   float memo_multiplier = 0.0f;
 };
 
+<<<<<<<< HEAD:nntrainer/layers/llm/scalar_multiply.h
 } // namespace nntrainer
+========
+} // namespace quick_ai
+>>>>>>>> 4aaf8bcf ([Applications/quick_ai] Rebrand CausalLM application to generic Quick_AI):Applications/quick_ai/layers/scalar_multiply.h
 
 #endif /* __SCALAR_MULTIPLY_LAYER_H__ */

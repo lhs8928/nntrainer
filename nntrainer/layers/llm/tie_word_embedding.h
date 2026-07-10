@@ -26,7 +26,11 @@
 #include <layer_devel.h>
 #include <layer_impl.h>
 
+<<<<<<<< HEAD:nntrainer/layers/llm/tie_word_embedding.h
 namespace nntrainer {
+========
+namespace quick_ai {
+>>>>>>>> 4aaf8bcf ([Applications/quick_ai] Rebrand CausalLM application to generic Quick_AI):Applications/quick_ai/layers/tie_word_embedding.h
 
 /**
  * @class   TieWordEmbedding
@@ -171,7 +175,11 @@ private:
                                 unsigned int from, unsigned int to,
                                 bool training);
 };
+<<<<<<<< HEAD:nntrainer/layers/llm/tie_word_embedding.h
 } // namespace nntrainer
+========
+} // namespace quick_ai
+>>>>>>>> 4aaf8bcf ([Applications/quick_ai] Rebrand CausalLM application to generic Quick_AI):Applications/quick_ai/layers/tie_word_embedding.h
 
 #endif /* __cplusplus */
 #endif /* __CUSTOM_TIE_WORD_EMBEDDING_H__ */

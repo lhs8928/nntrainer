@@ -26,7 +26,11 @@
 #include <layer_devel.h>
 #include <layer_impl.h>
 
+<<<<<<<< HEAD:nntrainer/layers/llm/lm_head.h
 namespace nntrainer {
+========
+namespace quick_ai {
+>>>>>>>> 4aaf8bcf ([Applications/quick_ai] Rebrand CausalLM application to generic Quick_AI):Applications/quick_ai/layers/lm_head.h
 
 /**
  * @class   LMHead layer
@@ -124,7 +128,11 @@ private:
   std::array<unsigned int, 2> weight_idx; /**< indices of the weights */
   bool skip_prefill = false;
 };
+<<<<<<<< HEAD:nntrainer/layers/llm/lm_head.h
 } // namespace nntrainer
+========
+} // namespace quick_ai
+>>>>>>>> 4aaf8bcf ([Applications/quick_ai] Rebrand CausalLM application to generic Quick_AI):Applications/quick_ai/layers/lm_head.h
 
 #endif
 #endif

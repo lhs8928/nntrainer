@@ -32,7 +32,11 @@
 #include <thread_manager.h>
 #include <util_func.h>
 
+<<<<<<<< HEAD:nntrainer/layers/llm/qkv_layer.cpp
 namespace nntrainer {
+========
+namespace quick_ai {
+>>>>>>>> 4aaf8bcf ([Applications/quick_ai] Rebrand CausalLM application to generic Quick_AI):Applications/quick_ai/layers/qkv_layer.cpp
 
 static constexpr size_t SINGLE_INOUT_IDX = 0;
 
@@ -201,4 +205,8 @@ void QKVLayer::updateTensorsByInputDimensions(
   context.updateOutput(QKVParams::K, Koutput_dim);
   context.updateOutput(QKVParams::V, Voutput_dim);
 }
+<<<<<<<< HEAD:nntrainer/layers/llm/qkv_layer.cpp
 } // namespace nntrainer
+========
+} // namespace quick_ai
+>>>>>>>> 4aaf8bcf ([Applications/quick_ai] Rebrand CausalLM application to generic Quick_AI):Applications/quick_ai/layers/qkv_layer.cpp

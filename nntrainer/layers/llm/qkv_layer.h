@@ -26,7 +26,11 @@
 #include <common_properties.h>
 #include <layer_impl.h>
 
+<<<<<<<< HEAD:nntrainer/layers/llm/qkv_layer.h
 namespace nntrainer {
+========
+namespace quick_ai {
+>>>>>>>> 4aaf8bcf ([Applications/quick_ai] Rebrand CausalLM application to generic Quick_AI):Applications/quick_ai/layers/qkv_layer.h
 
 namespace props {
 
@@ -152,7 +156,11 @@ private:
   std::array<unsigned int, 3> weight_idx; /**< indices of the weights */
 };
 
+<<<<<<<< HEAD:nntrainer/layers/llm/qkv_layer.h
 } // namespace nntrainer
+========
+} // namespace quick_ai
+>>>>>>>> 4aaf8bcf ([Applications/quick_ai] Rebrand CausalLM application to generic Quick_AI):Applications/quick_ai/layers/qkv_layer.h
 
 #endif /* __cplusplus */
 #endif /* __QKV_LAYER_H__ */

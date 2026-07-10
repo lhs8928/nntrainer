@@ -29,7 +29,11 @@
 #include <common_properties.h>
 #include <tensor.h>
 
+<<<<<<<< HEAD:nntrainer/layers/llm/logit_softcapping.h
 namespace nntrainer {
+========
+namespace quick_ai {
+>>>>>>>> 4aaf8bcf ([Applications/quick_ai] Rebrand CausalLM application to generic Quick_AI):Applications/quick_ai/layers/logit_softcapping.h
 
 namespace props {
 
@@ -121,6 +125,10 @@ private:
   bool skip_prefill = false;
 };
 
+<<<<<<<< HEAD:nntrainer/layers/llm/logit_softcapping.h
 } // namespace nntrainer
+========
+} // namespace quick_ai
+>>>>>>>> 4aaf8bcf ([Applications/quick_ai] Rebrand CausalLM application to generic Quick_AI):Applications/quick_ai/layers/logit_softcapping.h
 
 #endif /* __LOGIT_SOFTCAPPING_LAYER_H__ */
