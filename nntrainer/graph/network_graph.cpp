@@ -41,10 +41,15 @@
 #include <util_func.h>
 #include <weight_layer.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <iostream>
+#include <map>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "graph_node.h"
 #include "tensor.h"
