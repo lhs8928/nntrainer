@@ -33,7 +33,13 @@
 #endif
 #endif
 
+/**
+ * @brief Namespace for machine learning APIs
+ */
 namespace ml {
+/**
+ * @brief Namespace for training APIs
+ */
 namespace train {
 
 /**
@@ -66,6 +72,8 @@ public:
     Q4_K,   /** Q4_K quantized*/
     Q6_K,   /** q6 k quantized */
     Q4_0,   /** Q4_0 k quantized */
+    Q8_0,   /** Q8_0 k quantized (8-bit signed + fp16 scale per 32-element
+               block) */
     QS4CX,  /** per-channel int4, the canonical int4 weight format: plain
                row-major nibbles plus one fp32 scale per output channel. */
     UINT4,  /** quantized unsigned int 4*/
