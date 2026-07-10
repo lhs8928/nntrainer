@@ -52,7 +52,7 @@ endif
 
 if get_option('enable-transformer')
   if get_option('platform') != 'tizen'
-    subdir('CausalLM')
+    subdir('quick_ai')
   endif
 endif
 

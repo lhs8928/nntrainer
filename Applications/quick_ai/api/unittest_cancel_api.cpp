@@ -28,7 +28,7 @@ void setAfterActiveRunPublishHookForTest(ActiveRunPublishHook hook,
                                          void *user_data);
 void setBeforeCancelRequestHookForTest(BeforeCancelRequestHook hook,
                                        void *user_data);
-void setModelForTest(std::unique_ptr<quick_ai::Transformer> model,
+void setModelForTest(std::unique_ptr<quick_ai::Model> model,
                      const std::string &architecture);
 void resetForTest();
 std::string resolveNntrConfigPathForTest(const std::string &value,
@@ -86,7 +86,7 @@ public:
   }
 };
 
-std::unique_ptr<quick_ai::Transformer> makeFakeModel() {
+std::unique_ptr<quick_ai::Model> makeFakeModel() {
   return std::make_unique<FakeCausalLM>();
 }
 
