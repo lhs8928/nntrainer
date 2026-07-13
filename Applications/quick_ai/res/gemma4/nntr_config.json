@@ -1,5 +1,5 @@
 {
-    "model_type": "CausalLM",
+    "model_type": "quick_ai",
     "bad_word_ids": [],
     "batch_size": 1,
     "embedding_dtype": "Q6_K",

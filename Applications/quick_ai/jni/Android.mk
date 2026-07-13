@@ -311,7 +311,7 @@ include $(BUILD_STATIC_LIBRARY)
 
 # ---- unittest_quick_ai_models (CausalLM reference/differential gtest suite) ----
 # Builds the recently-added differential tests (quick_ai_test_utils.cpp + every
-# unittest_quick_ai_*.cpp listed in Applications/CausalLM/meson.build). Built
+# unittest_quick_ai_*.cpp listed in Applications/quick_ai/meson.build). Built
 # with the same FP16 ABI flags as quick_ai_core so the prebuilt shared libs link.
 include $(CLEAR_VARS)
 

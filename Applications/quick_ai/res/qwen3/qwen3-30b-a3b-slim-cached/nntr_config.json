@@ -1,5 +1,5 @@
 {
-    "model_type": "CausalLM",
+    "model_type": "quick_ai",
     "model_tensor_type": "Q4_0-FP32",
     "model_file_name": "qwen3-30b-moe-q6k-q40-q40-fp32-x86.bin",
 
@@ -18,6 +18,6 @@
     "max_seq_len": 2048,
     "batch_size": 1,
 
-    "tokenizer_file": "/tmp/nntrainer/Applications/CausalLM/res/qwen3-30b-a3b/tokenizer.json",
+    "tokenizer_file": "/tmp/nntrainer/Applications/quick_ai/res/qwen3-30b-a3b/tokenizer.json",
     "sample_input": "<|im_start|>user\nGive me a short introduction to large language model.<|im_end|>\n<|im_start|>assistant\n"
 }

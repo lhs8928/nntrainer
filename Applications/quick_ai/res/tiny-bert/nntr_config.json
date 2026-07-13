@@ -17,6 +17,6 @@
     "max_seq_len": 512,
     "batch_size": 1,
 
-    "tokenizer_file": "/tmp/nntrainer/Applications/CausalLM/res/tiny-bert/tokenizer.json",
+    "tokenizer_file": "/tmp/nntrainer/Applications/quick_ai/res/tiny-bert/tokenizer.json",
     "sample_input": "This is a sentence"
 }

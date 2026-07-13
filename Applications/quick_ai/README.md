@@ -148,19 +148,19 @@ Run the model:
 
 ```bash
 $ export NNTR_NUM_THREADS=4
-$ ./build/Applications/CausalLM/nntr_quick_ai {your model config folder}
+$ ./build/Applications/quick_ai/nntr_quick_ai {your model config folder}
 ```
 
 e.g.,
 ```bash
-$ ./build/Applications/CausalLM/nntr_quick_ai /tmp/nntrainer/Applications/CausalLM/res/qwen3/qwen3-4b/
+$ ./build/Applications/quick_ai/nntr_quick_ai /tmp/nntrainer/Applications/quick_ai/res/qwen3/qwen3-4b/
 ```
 
 ### 3. Windows Build & Test
 
 Windows CausalLM builds need a `tokenizers_c.lib` that matches the local
 MSVC toolchain. The repository keeps the Linux static library in
-`Applications/CausalLM/lib/`; Windows builds generate the matching library from
+`Applications/quick_ai/lib/`; Windows builds generate the matching library from
 source instead of carrying a checked-in binary.
 
 #### Prerequisites
@@ -221,7 +221,7 @@ The Android build process is modularized to support building the core library, A
 
 #### Build Scripts
 
-The following scripts are provided in `Applications/CausalLM/` to handle the build process:
+The following scripts are provided in `Applications/quick_ai/` to handle the build process:
 
 1.  **`build_android.sh`** (Core + App):
     - Builds `nntrainer` core library for Android.
@@ -253,7 +253,7 @@ The following scripts are provided in `Applications/CausalLM/` to handle the bui
 
 2.  **Build Core & Main App**:
     ```bash
-    cd Applications/CausalLM
+    cd Applications/quick_ai
     ./build_android.sh
     ```
     Artifacts in `jni/libs/arm64-v8a/`:
@@ -319,7 +319,7 @@ The quantization utility is built automatically with the CausalLM application:
 
 ```bash
 meson build && ninja -C build
-# The executable is: build/Applications/CausalLM/nntr_quantize
+# The executable is: build/Applications/quick_ai/nntr_quantize
 ```
 
 ### Usage

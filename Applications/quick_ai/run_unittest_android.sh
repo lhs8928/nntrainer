@@ -7,8 +7,8 @@
 # Prerequisites:
 #   - ANDROID_NDK must be set (e.g. export ANDROID_NDK=/path/to/android-ndk-r26d)
 #   - A device must be connected and visible in `adb devices`
-#   - Applications/CausalLM/lib/libtokenizers_android_c.a (arm64 build)
-#   - Applications/CausalLM/json.hpp
+#   - Applications/quick_ai/lib/libtokenizers_android_c.a (arm64 build)
+#   - Applications/quick_ai/json.hpp
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -182,7 +182,7 @@ echo ""
 adb shell "cd $INSTALL_DIR && \
     LD_LIBRARY_PATH=$INSTALL_DIR \
     TMPDIR=$INSTALL_DIR/tmp \
-    NNTRAINER_CAUSALLM_FIXTURE_DIR=$INSTALL_DIR/quick_ai_reference \
+    NNTRAINER_QUICK_AI_FIXTURE_DIR=$INSTALL_DIR/quick_ai_reference \
     NNTR_QUANTIZE_BIN=$INSTALL_DIR/nntr_quantize \
     $ARGS 2>&1"
 EXIT=$?

@@ -14,7 +14,7 @@
     "init_seq_len": 512,
     "max_seq_len": 512,
     "batch_size": 1,
-    "tokenizer_file": "/tmp/nntrainer/Applications/CausalLM/res/xlm_roberta/tokenizer.json",
+    "tokenizer_file": "/tmp/nntrainer/Applications/quick_ai/res/xlm_roberta/tokenizer.json",
     "sample_input": "This is an example sentence",
     "is_causal": false
 }

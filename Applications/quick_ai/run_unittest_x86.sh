@@ -68,8 +68,8 @@ fi
 
 log_info "Building..."
 ninja -C "$BUILDDIR" \
-    Applications/CausalLM/unittest_quick_ai_models \
-    Applications/CausalLM/nntr_quantize
+    Applications/quick_ai/unittest_quick_ai_models \
+    Applications/quick_ai/nntr_quantize
 
 # ---------------------------------------------------------------------------
 log_step "2/3" "Check fixtures"
@@ -91,8 +91,8 @@ fi
 log_step "3/3" "Run tests"
 # ---------------------------------------------------------------------------
 
-TEST_BIN="$BUILDDIR/Applications/CausalLM/unittest_quick_ai_models"
-QUANTIZE_BIN="$BUILDDIR/Applications/CausalLM/nntr_quantize"
+TEST_BIN="$BUILDDIR/Applications/quick_ai/unittest_quick_ai_models"
+QUANTIZE_BIN="$BUILDDIR/Applications/quick_ai/nntr_quantize"
 
 if [[ ! -x "$TEST_BIN" ]]; then
     log_error "Test binary not found: $TEST_BIN"

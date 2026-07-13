@@ -82,7 +82,7 @@ jobs:
           --bindir=lib/nntrainer/bin \
           --includedir=include \
           -Dinstall-app=true \
-          ${causallm_option} \
+          ${quick_ai_option} \
           -Dreduce-tolerance=false \
           -Denable-debug=true \
           -Dml-api-support=enabled \
@@ -115,10 +115,10 @@ jobs:
         missing_tests = sorted(required_tests - tests)
         if missing_tests:
             raise SystemExit(
-                "Missing CausalLM Meson tests: " + ", ".join(missing_tests)
+                "Missing quick.ai Meson tests: " + ", ".join(missing_tests)
             )
 
-        print("CausalLM Meson model tests enabled: " + ", ".join(sorted(required_tests)))
+        print("quick.ai Meson model tests enabled: " + ", ".join(sorted(required_tests)))
         PY
     - if: env.rebuild == '1'
       run: ninja -C build

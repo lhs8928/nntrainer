@@ -61,9 +61,12 @@ ModelType strToModelType(std::string model_type) {
                  model_type_lower.begin(),
                  [](unsigned char c) { return std::tolower(c); });
 
+  // "causallm" is accepted as a legacy alias so model configs written before
+  // the quick.ai rebrand keep loading unchanged.
   static const std::unordered_map<std::string, ModelType> model_type_map = {
     {"model", ModelType::MODEL},
     {"quick_ai", ModelType::CAUSALLM},
+    {"causallm", ModelType::CAUSALLM},
     {"embedding", ModelType::EMBEDDING}};
 
   if (model_type_map.find(model_type_lower) == model_type_map.end()) {
