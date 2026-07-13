@@ -24,22 +24,22 @@ subdir('layers')
 
 # Add common layers to dependencies
 quick_ai_layer_dependencies += [
-    quick_ai_rms_norm_dep,
-    quick_ai_tie_word_embedding_dep,
-    quick_ai_lm_head_dep,
-    quick_ai_swiglu_dep,
-    quick_ai_mha_core_dep,
-    quick_ai_embedding_layer_dep,
-    quick_ai_lm_head_dep,
-    quick_ai_reshaped_rms_norm_dep,
-    quick_ai_qkv_layer_dep,
-    quick_ai_embedding_pooling_layer_dep,
-    quick_ai_embedding_normalize_layer_dep,
-    quick_ai_deberta_attention_layer_dep,
-    quick_ai_shared_fully_connected_layer_dep,
-    quick_ai_per_layer_slice_dep,
-    quick_ai_scalar_multiply_dep,
-    quick_ai_logit_softcapping_dep,
+    causallm_rms_norm_dep,
+    causallm_tie_word_embedding_dep,
+    causallm_lm_head_dep,
+    causallm_swiglu_dep,
+    causallm_mha_core_dep,
+    causallm_embedding_layer_dep,
+    causallm_lm_head_dep,
+    causallm_reshaped_rms_norm_dep,
+    causallm_qkv_layer_dep,
+    causallm_embedding_pooling_layer_dep,
+    causallm_embedding_normalize_layer_dep,
+    causallm_deberta_attention_layer_dep,
+    causallm_shared_fully_connected_layer_dep,
+    causallm_per_layer_slice_dep,
+    causallm_scalar_multiply_dep,
+    causallm_logit_softcapping_dep,
 ]
 
 subdir('models')
@@ -216,7 +216,7 @@ if get_option('enable-test')
   unittest_embedding_sidecar_lut = executable(
     'unittest_embedding_sidecar_lut',
     meson.current_source_dir() / 'layers' / 'unittest_embedding_sidecar_lut.cpp',
-    dependencies: [nntrainer_dep, gtest_main_dep, quick_ai_embedding_layer_dep],
+    dependencies: [nntrainer_dep, gtest_main_dep, causallm_embedding_layer_dep],
     include_directories: quick_ai_layer_inc,
     build_by_default: true,
     install: false,
