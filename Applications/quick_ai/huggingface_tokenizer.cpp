@@ -1,8 +1,13 @@
-
-/*!
- *  Copyright (c) 2023 by Contributors
- * \file huggingface_tokenizer.cc
- * \brief Huggingface tokenizer
+// SPDX-License-Identifier: Apache-2.0
+/**
+ * Copyright (C) 2023 Samsung Electronics Co., Ltd. All Rights Reserved.
+ *
+ * @file   huggingface_tokenizer.cpp
+ * @date   13 Jul 2026
+ * @brief  Huggingface tokenizer
+ * @see    https://github.com/nntrainer/nntrainer
+ * @author Contributors
+ * @bug    No known bugs
  */
 #include <tokenizers_c.h>
 #include <tokenizers_cpp.h>
@@ -10,8 +15,8 @@
 #include <cassert>
 
 namespace tokenizers {
-/*!
- * \brief A simple c++ header of tokenizer via C API.
+/**
+ * @brief A simple c++ header of tokenizer via C API.
  */
 class HFTokenizer : public Tokenizer {
 public:
