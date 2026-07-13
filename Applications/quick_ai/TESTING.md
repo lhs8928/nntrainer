@@ -40,15 +40,15 @@ Meson automatically extracts the fixture tarballs during build into
 
 ```bash
 # full suite
-./Applications/CausalLM/run_unittest_x86.sh
+./Applications/quick_ai/run_unittest_x86.sh
 
 # rebuild from scratch
-./Applications/CausalLM/run_unittest_x86.sh --rebuild
+./Applications/quick_ai/run_unittest_x86.sh --rebuild
 
 # filter by model or test type
-./Applications/CausalLM/run_unittest_x86.sh --filter '*Gemma4*'
-./Applications/CausalLM/run_unittest_x86.sh --filter '*FP32MatchesHF*'
-./Applications/CausalLM/run_unittest_x86.sh --filter '*Q40*'
+./Applications/quick_ai/run_unittest_x86.sh --filter '*Gemma4*'
+./Applications/quick_ai/run_unittest_x86.sh --filter '*FP32MatchesHF*'
+./Applications/quick_ai/run_unittest_x86.sh --filter '*Q40*'
 ```
 
 The script handles meson setup, ninja build, fixture extraction, and sets
@@ -80,8 +80,8 @@ The script handles meson setup, ninja build, fixture extraction, and sets
 |------|-------|
 | Android NDK r26d | `export ANDROID_NDK=/path/to/android-ndk-r26d && export PATH="$ANDROID_NDK:$PATH"` |
 | Connected device | Verified via `adb devices` |
-| `Applications/CausalLM/lib/libtokenizers_android_c.a` | arm64 build — copy from an existing workspace or build with `./Applications/CausalLM/build_tokenizer_android.sh` (requires Rust + network) |
-| `Applications/CausalLM/json.hpp` | Run `./jni/prepare_encoder.sh builddir 0.2` if absent |
+| `Applications/quick_ai/lib/libtokenizers_android_c.a` | arm64 build — copy from an existing workspace or build with `./Applications/quick_ai/build_tokenizer_android.sh` (requires Rust + network) |
+| `Applications/quick_ai/json.hpp` | Run `./jni/prepare_encoder.sh builddir 0.2` if absent |
 
 ### Step 1: Build core nntrainer for Android
 
@@ -94,7 +94,7 @@ The script handles meson setup, ninja build, fixture extraction, and sets
 
 ```bash
 cp -r $ANDROID_NDK/sources/third_party/googletest \
-      Applications/CausalLM/jni/googletest
+      Applications/quick_ai/jni/googletest
 ```
 
 Skip if `jni/googletest/` already exists.
@@ -103,15 +103,15 @@ Skip if `jni/googletest/` already exists.
 
 ```bash
 ndk-build \
-  -C Applications/CausalLM/jni \
-  NDK_PROJECT_PATH=Applications/CausalLM/jni \
-  NDK_LIBS_OUT=Applications/CausalLM/jni/libs \
-  NDK_OUT=Applications/CausalLM/jni/obj \
-  APP_BUILD_SCRIPT=Applications/CausalLM/jni/Android.mk \
-  NDK_APPLICATION_MK=Applications/CausalLM/jni/Application.mk \
+  -C Applications/quick_ai/jni \
+  NDK_PROJECT_PATH=Applications/quick_ai/jni \
+  NDK_LIBS_OUT=Applications/quick_ai/jni/libs \
+  NDK_OUT=Applications/quick_ai/jni/obj \
+  APP_BUILD_SCRIPT=Applications/quick_ai/jni/Android.mk \
+  NDK_APPLICATION_MK=Applications/quick_ai/jni/Application.mk \
   quick_ai_core nntr_quantize unittest_quick_ai_models \
   -j$(nproc)
-# output: Applications/CausalLM/jni/obj/local/arm64-v8a/
+# output: Applications/quick_ai/jni/obj/local/arm64-v8a/
 ```
 
 ### Step 4: Extract fixtures (if not already done)
@@ -126,7 +126,7 @@ tar xzf packaging/quick_ai_reference_embedding.tar.gz  -C test/unittest/models/
 
 ```bash
 INSTALL=/data/local/tmp/nntr_quick_ai_test
-JNI=Applications/CausalLM/jni/obj/local/arm64-v8a
+JNI=Applications/quick_ai/jni/obj/local/arm64-v8a
 
 adb shell "mkdir -p $INSTALL/quick_ai_reference $INSTALL/tmp"
 
@@ -145,14 +145,14 @@ adb shell "chmod 755 $INSTALL/unittest_quick_ai_models $INSTALL/nntr_quantize"
 
 ```bash
 # full suite
-./Applications/CausalLM/run_unittest_android.sh
+./Applications/quick_ai/run_unittest_android.sh
 
 # reuse existing nntrainer build and ndk-build artifacts
-./Applications/CausalLM/run_unittest_android.sh --cache
+./Applications/quick_ai/run_unittest_android.sh --cache
 
 # filter by model or test type
-./Applications/CausalLM/run_unittest_android.sh --filter '*Gemma4*'
-./Applications/CausalLM/run_unittest_android.sh --cache --filter '*Q40*'
+./Applications/quick_ai/run_unittest_android.sh --filter '*Gemma4*'
+./Applications/quick_ai/run_unittest_android.sh --cache --filter '*Q40*'
 ```
 
 The script runs all six steps above end-to-end. Use `--cache` to skip
@@ -171,14 +171,14 @@ the nntrainer build and ndk-build when only the test execution needs to be re-ru
 |----------|---------|----------|
 | `LD_LIBRARY_PATH` | Locate `.so` files on device | Library load failure at startup |
 | `TMPDIR` | Override `std::filesystem::temp_directory_path()` | Q4_0 tests fail to create temp dir |
-| `NNTRAINER_CAUSALLM_FIXTURE_DIR` | Override fixture root path | Fixtures not found; all differential tests SKIP |
+| `NNTRAINER_QUICK_AI_FIXTURE_DIR` | Override fixture root path | Fixtures not found; all differential tests SKIP |
 | `NNTR_QUANTIZE_BIN` | Path to on-device `nntr_quantize` binary | All Q4_0 tests SKIP |
 
 ### Common failures
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| All differential tests SKIP | `NNTRAINER_CAUSALLM_FIXTURE_DIR` not set or fixtures not pushed | Verify `adb shell ls $INSTALL/quick_ai_reference/` |
+| All differential tests SKIP | `NNTRAINER_QUICK_AI_FIXTURE_DIR` not set or fixtures not pushed | Verify `adb shell ls $INSTALL/quick_ai_reference/` |
 | All Q4_0 tests SKIP | `NNTR_QUANTIZE_BIN` not set or binary not pushed | Verify `adb shell ls $INSTALL/nntr_quantize` |
 | Linker error: `libquick_ai_core.so` not found | Libraries not in `LD_LIBRARY_PATH` | Ensure all `.so` files are in `$INSTALL` |
 

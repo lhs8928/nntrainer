@@ -152,7 +152,7 @@ log_step "3/4" "Prepare json.hpp"
 if [ ! -f "$SCRIPT_DIR/json.hpp" ]; then
     log_info "json.hpp not found. Downloading..."
     # prepare_encoder.sh expects target directory as first argument and version as second
-    # It copies json.hpp to ../Applications/CausalLM/ if version is 0.2
+    # It copies json.hpp to ../Applications/quick_ai/ if version is 0.2
     "$NNTRAINER_ROOT/jni/prepare_encoder.sh" "$NNTRAINER_ROOT/builddir" "0.2"
     
     if [ ! -f "$SCRIPT_DIR/json.hpp" ]; then

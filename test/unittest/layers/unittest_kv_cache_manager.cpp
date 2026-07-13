@@ -40,7 +40,7 @@ protected:
                      HEAD_DIM, ml::train::TensorDim::DataType::FP32);
   }
 
-  causallm::KVCacheManager manager;
+  quick_ai::KVCacheManager manager;
 };
 
 TEST_F(KVCacheManagerTest, allocate_basic) {
@@ -53,7 +53,7 @@ TEST_F(KVCacheManagerTest, allocate_basic) {
 }
 
 TEST_F(KVCacheManagerTest, allocate_invalid_params) {
-  causallm::KVCacheManager m;
+  quick_ai::KVCacheManager m;
   EXPECT_THROW(m.allocate(0, 1, 128, 4, 8), std::invalid_argument);
   EXPECT_THROW(m.allocate(4, 0, 128, 4, 8), std::invalid_argument);
   EXPECT_THROW(m.allocate(4, 1, 0, 4, 8), std::invalid_argument);
@@ -229,7 +229,7 @@ TEST_F(KVCacheManagerTest, save_and_load) {
   manager.save(path);
 
   // Create a new manager and load
-  causallm::KVCacheManager loaded;
+  quick_ai::KVCacheManager loaded;
   loaded.allocate(NUM_LAYERS, BATCH_SIZE, MAX_SEQ_LEN, NUM_HEADS_KV, HEAD_DIM,
                   ml::train::TensorDim::DataType::FP32);
 
@@ -255,7 +255,7 @@ TEST_F(KVCacheManagerTest, save_and_load) {
 }
 
 TEST_F(KVCacheManagerTest, save_load_not_allocated) {
-  causallm::KVCacheManager empty;
+  quick_ai::KVCacheManager empty;
   EXPECT_THROW(empty.save("/tmp/test.bin"), std::runtime_error);
   EXPECT_THROW(empty.load("/tmp/test.bin", 1), std::runtime_error);
 }

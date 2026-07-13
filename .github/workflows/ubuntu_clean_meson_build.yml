@@ -43,9 +43,9 @@ jobs:
     - name: install build systems
       run: sudo apt install meson ninja-build
     - run: |
-        causallm_option="-Denable-transformer=false"
+        quick_ai_option="-Denable-transformer=false"
         if [ "${{ matrix.meson_options }}" = "-Denable-fp16=false" ]; then
-          causallm_option="-Denable-transformer=true"
+          quick_ai_option="-Denable-transformer=true"
         fi
 
         meson \
@@ -56,7 +56,7 @@ jobs:
           --bindir=lib/nntrainer/bin \
           --includedir=include \
           -Dinstall-app=true \
-          ${causallm_option} \
+          ${quick_ai_option} \
           -Dreduce-tolerance=false \
           -Denable-debug=true \
           -Dml-api-support=enabled \
@@ -68,7 +68,7 @@ jobs:
           -Denable-capi=enabled \
           ${{ matrix.meson_options }} \
           build
-    - name: Check CausalLM model tests are enabled
+    - name: Check quick.ai model tests are enabled
       if: ${{ matrix.meson_options == '-Denable-fp16=false' }}
       run: |
         meson introspect build --tests > meson-tests.json
@@ -79,15 +79,15 @@ jobs:
             tests = {test["name"] for test in json.load(test_file)}
 
         required_tests = {
-            "unittest_causallm_models",
+            "unittest_quick_ai_models",
         }
         missing_tests = sorted(required_tests - tests)
         if missing_tests:
             raise SystemExit(
-                "Missing CausalLM Meson tests: " + ", ".join(missing_tests)
+                "Missing quick.ai Meson tests: " + ", ".join(missing_tests)
             )
 
-        print("CausalLM Meson model tests enabled: " + ", ".join(sorted(required_tests)))
+        print("quick.ai Meson model tests enabled: " + ", ".join(sorted(required_tests)))
         PY
     - run: ninja -C build
     - name: run App Tests

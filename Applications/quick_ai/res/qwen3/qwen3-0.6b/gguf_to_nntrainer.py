@@ -702,7 +702,7 @@ def convert(args):
     if args.emit_nntr_config:
         fc_dtype_cfg = {"q4_0": "Q4_0", "q6_k": "Q6_K", "fp32": "FP32"}[args.fc_dtype]
         cfg = {
-            "model_type": "CausalLM",
+            "model_type": "quick_ai",
             "model_tensor_type": f"{fc_dtype_cfg}-FP32",
             "model_file_name": os.path.basename(args.output),
             "fc_layer_dtype": fc_dtype_cfg,
@@ -719,7 +719,7 @@ def convert(args):
             "max_seq_len": 2048,
             "batch_size": 1,
             "tokenizer_file":
-                "/tmp/nntrainer/Applications/CausalLM/res/qwen3-0.6b/tokenizer.json",
+                "/tmp/nntrainer/Applications/quick_ai/res/qwen3-0.6b/tokenizer.json",
             "sample_input":
                 "<|im_start|>user\nGive me a short introduction to large "
                 "language model.<|im_end|>\n<|im_start|>assistant\n",

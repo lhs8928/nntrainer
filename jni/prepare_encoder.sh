@@ -52,7 +52,7 @@ function _untar_encoder {
     if [ -d "../Applications/quick_ai" ]; then
       cp -f json.hpp ../Applications/quick_ai/
     else
-      cp -f json.hpp ../Applications/CausalLM/
+      cp -f json.hpp ../Applications/quick_ai/
     fi
     mv -f ctre-unicode.hpp json.hpp encoder.hpp ../Applications/LLaMA/jni/
     echo "[Encoder] Finish moving encoder \n"

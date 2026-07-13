@@ -14,8 +14,8 @@
     "init_seq_len": 1024,
     "max_seq_len": 2048,
     "batch_size": 1,
-    "module_config_path": "/tmp/nntrainer/Applications/CausalLM/res/kalm-embedding/modules.json",
-    "tokenizer_file": "/tmp/nntrainer/Applications/CausalLM/res/kalm-embedding/tokenizer.json",
+    "module_config_path": "/tmp/nntrainer/Applications/quick_ai/res/kalm-embedding/modules.json",
+    "tokenizer_file": "/tmp/nntrainer/Applications/quick_ai/res/kalm-embedding/tokenizer.json",
     "sample_input": "This is an example sentence",
     "is_causal": false
 }

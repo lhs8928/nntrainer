@@ -45,6 +45,6 @@ jobs:
 
     - name: Build CausalLM for Android
       run: |
-        chmod +x Applications/CausalLM/build_android.sh
-        chmod +x Applications/CausalLM/build_tokenizer_android.sh
-        ./Applications/CausalLM/build_android.sh
+        chmod +x Applications/quick_ai/build_android.sh
+        chmod +x Applications/quick_ai/build_tokenizer_android.sh
+        ./Applications/quick_ai/build_android.sh

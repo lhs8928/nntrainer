@@ -35,13 +35,13 @@ With FSU, NNTrainer loads only the active experts during inference — reducing 
 | ![](./docs/videos/moe-full.gif) | ![](./docs/videos/moe-on-the-fly.gif) |
 | Memory: **16.5 GB** | Memory: **1.3 GB** |
 
-> Try it yourself with `Applications/CausalLM/models/*-slim` models.
+> Try it yourself with `Applications/quick_ai/models/*-slim` models.
 
 ---
 
-## Applications/CausalLM — LLM Inference Engine
+## Applications/quick_ai — LLM Inference Engine
 
-[`Applications/CausalLM`](https://github.com/nntrainer/nntrainer/tree/main/Applications/CausalLM) is NNTrainer's production-ready LLM inference engine optimized for resource-constrained environments.
+[`Applications/quick_ai`](https://github.com/nntrainer/nntrainer/tree/main/Applications/quick_ai) is NNTrainer's production-ready LLM inference engine optimized for resource-constrained environments.
 
 ### Supported Models
 
@@ -65,7 +65,7 @@ With FSU, NNTrainer loads only the active experts during inference — reducing 
 CausalLM supports multiple deployment targets with ready-to-use build scripts:
 
 ```bash
-cd Applications/CausalLM
+cd Applications/quick_ai
 
 # Android
 ./build_android.sh && ./install_android.sh
@@ -167,7 +167,7 @@ NNTrainer provides **20+ ready-to-run example applications**:
 
 | Category | Examples |
 |----------|----------|
-| **LLM / Transformers** | [CausalLM](Applications/CausalLM) 
+| **LLM / Transformers** | [CausalLM](Applications/quick_ai) 
 | **Computer Vision** | [ResNet](Applications/Resnet), [VGG](Applications/VGG), [AlexNet](Applications/AlexNet), [YOLOv2](Applications/YOLOv2), [YOLOv3](Applications/YOLOv3), [MNIST](Applications/MNIST) |
 | **Few-Shot / Transfer** | [SimpleShot](Applications/SimpleShot), [TransferLearning](Applications/TransferLearning) |
 | **RL / Classical ML** | [ReinforcementLearning](Applications/ReinforcementLearning), [KNN](Applications/KNN), [LogisticRegression](Applications/LogisticRegression) |

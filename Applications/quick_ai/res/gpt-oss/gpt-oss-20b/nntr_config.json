@@ -1,5 +1,5 @@
 {
-    "model_type": "CausalLM",
+    "model_type": "quick_ai",
     "model_tensor_type": "FP32-FP32",
     "model_file_name": "nntr_gpt_oss_20b.bin",
 
@@ -18,6 +18,6 @@
     "max_seq_len": 2048,
     "batch_size": 1,
 
-    "tokenizer_file": "/tmp/nntrainer/Applications/CausalLM/res/gpt-oss-20b/tokenizer.json",
+    "tokenizer_file": "/tmp/nntrainer/Applications/quick_ai/res/gpt-oss-20b/tokenizer.json",
     "sample_input": "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\nCurrent date: 2025-09-10\n\nReasoning: low\n\n# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>user<|message|>What is on-device AI?<|im_end|>\n<|end|><|start|>assistant"
 }

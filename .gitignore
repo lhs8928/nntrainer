@@ -21,30 +21,26 @@ Applications/**/data
 cifar-100-binary*
 Applications/**/*.bin
 Applications/**/res/*
-!Applications/CausalLM/res/deberta_v2/
-Applications/CausalLM/res/deberta_v2/*
-!Applications/CausalLM/res/deberta_v2/weight_converter.py
-!Applications/CausalLM/res/xlm_roberta/
-Applications/CausalLM/res/xlm_roberta/*
-!Applications/CausalLM/res/xlm_roberta/weight_converter.py
-!Applications/CausalLM/res/xlm_roberta/nntr_config.json
-!Applications/CausalLM/res/gemma4/
-Applications/CausalLM/res/gemma4/*
-!Applications/CausalLM/res/gemma4/weight_converter.py
-!Applications/CausalLM/res/gemma4/nntr_config.json
-!Applications/CausalLM/res/gemma4/test/
-Applications/CausalLM/res/gemma4/test/*
-!Applications/CausalLM/res/gemma4/test/generate_gemma4_reference.py
-!Applications/CausalLM/res/qwen3/
-Applications/CausalLM/res/qwen3/*
-!Applications/CausalLM/res/qwen3/test/
-Applications/CausalLM/res/qwen3/test/*
-!Applications/CausalLM/res/qwen3/test/generate_qwen3_moe_reference.py
-!Applications/CausalLM/res/qwen3/test/generate_qwen3_reference.py
-!Applications/CausalLM/res/lfm2_vl/
-Applications/CausalLM/res/lfm2_vl/*
-!Applications/CausalLM/res/lfm2_vl/README.md
-!Applications/CausalLM/res/lfm2_vl/*.py
+!Applications/quick_ai/res/deberta_v2/
+Applications/quick_ai/res/deberta_v2/*
+!Applications/quick_ai/res/deberta_v2/weight_converter.py
+!Applications/quick_ai/res/xlm_roberta/
+Applications/quick_ai/res/xlm_roberta/*
+!Applications/quick_ai/res/xlm_roberta/weight_converter.py
+!Applications/quick_ai/res/xlm_roberta/nntr_config.json
+!Applications/quick_ai/res/gemma4/
+Applications/quick_ai/res/gemma4/*
+!Applications/quick_ai/res/gemma4/weight_converter.py
+!Applications/quick_ai/res/gemma4/nntr_config.json
+!Applications/quick_ai/res/gemma4/test/
+Applications/quick_ai/res/gemma4/test/*
+!Applications/quick_ai/res/gemma4/test/generate_gemma4_reference.py
+!Applications/quick_ai/res/qwen3/
+Applications/quick_ai/res/qwen3/*
+!Applications/quick_ai/res/qwen3/test/
+Applications/quick_ai/res/qwen3/test/*
+!Applications/quick_ai/res/qwen3/test/generate_qwen3_moe_reference.py
+!Applications/quick_ai/res/qwen3/test/generate_qwen3_reference.py
 Applications/**/tokenizers-cpp-build/*
 
 # CTag
@@ -68,7 +64,7 @@ Applications/**/tokenizers-cpp-build/*
 *.o
 *.a
 # allow tokenizer lib only
-!Applications/CausalLM/lib/libtokenizers_c.a
+!Applications/quick_ai/lib/libtokenizers_c.a
 
 *.o.d
 *.nnlayergolden

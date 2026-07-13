@@ -234,9 +234,9 @@ def main():
 if __name__ == "__main__":
     """
     How to use:
-      python3 Applications/CausalLM/repeat_perf_test.py {model_path} {options}
-      python3 Applications/CausalLM/repeat_perf_test.py ./models/qwen3-0.6b --omp=4
-      python3 Applications/CausalLM/repeat_perf_test.py ./models/qwen3-0.6b --runs=5
+      python3 Applications/quick_ai/repeat_perf_test.py {model_path} {options}
+      python3 Applications/quick_ai/repeat_perf_test.py ./models/qwen3-0.6b --omp=4
+      python3 Applications/quick_ai/repeat_perf_test.py ./models/qwen3-0.6b --runs=5
 
     Benchmark measures three metrics per iteration:
       - Prefill TPS:    from normal prompt run (prefill phase)
