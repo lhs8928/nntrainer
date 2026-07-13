@@ -40,7 +40,7 @@ using TinyQwen3MoECausalLM =
 void setupQwen3MoEDeterministicWeights(TinyQwen3MoECausalLM &model) {
   model.forEachLayer(
     [](ml::train::Layer &layer, nntrainer::RunLayerContext &context, void *) {
-      if (layer.getName() == "output_of_quick_ai")
+      if (layer.getName() == "output_of_causallm")
         return;
 
       if (layer.getType() == "qwen_moe") {
@@ -141,7 +141,7 @@ std::map<std::string, ml::train::TensorDim::DataType> makeQwen3MoELayerDtypeMap(
   }
 
   if (data_type.lmhead_dtype != "FP32")
-    dtype_map["output_of_quick_ai"] =
+    dtype_map["output_of_causallm"] =
       quick_ai_test::toTensorDataType(data_type.lmhead_dtype);
 
   return dtype_map;
