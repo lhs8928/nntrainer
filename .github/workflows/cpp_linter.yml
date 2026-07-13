@@ -11,10 +11,6 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-        with:
-          # Full history is required so cpp-linter can compute the changed-file
-          # list from the local git diff (use-git-diff) instead of the PR API.
-          fetch-depth: 0
       - name: install dev packages
         run: |
           echo "Install mandatory dev packages to avoid false-positive reports from cpp-linter"
@@ -28,11 +24,6 @@ jobs:
           style: file
           version: 14
           lines-changed-only: true
-          # Fetch the changed-file list from the local git diff instead of the
-          # pull-request API. Large rebrand/refactor PRs exceed GitHub's
-          # 300-file diff limit (HTTP 406), which crashes the linter before it
-          # can run clang-format; the local git diff has no such limit.
-          use-git-diff: true
           file-annotations: false
           step-summary: true
           format-review: true
