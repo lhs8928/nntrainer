@@ -59,7 +59,7 @@ public:
 void setupGemma3DeterministicWeights(TinyGemma3CausalLM &model) {
   model.forEachLayer(
     [](ml::train::Layer &layer, nntrainer::RunLayerContext &context, void *) {
-      if (layer.getName() == "output_of_quick_ai")
+      if (layer.getName() == "output_of_causallm")
         return;
 
       for (unsigned int i = 0; i < context.getNumWeights(); ++i) {
@@ -351,7 +351,7 @@ makeGemma3LayerDtypeMap(const quick_ai_test::TinyCausalLMDataType &data_type) {
   }
 
   if (data_type.lmhead_dtype != "FP32")
-    dtype_map["output_of_quick_ai"] =
+    dtype_map["output_of_causallm"] =
       quick_ai_test::toTensorDataType(data_type.lmhead_dtype);
 
   return dtype_map;

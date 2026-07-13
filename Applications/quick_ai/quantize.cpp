@@ -488,12 +488,12 @@ void printUsage(const char *prog) {
  *   - layer{i}_ffn_up/gate/down : FFN layers (FC layers)
  *   - layer{i}_attention_norm, layer{i}_ffn_norm : RMSNorm layers
  *   - output_norm          : final RMSNorm
- *   - output_of_quick_ai   : LM head (FC layer)
+ *   - output_of_causallm   : LM head (FC layer)
  *
  * The dtype map assigns:
  *   - embedding0             -> embd_dtype
  *   - All FC layers (wq, wk, wv, attention_out, ffn_*) -> fc_dtype
- *   - output_of_quick_ai     -> lmhead_dtype
+ *   - output_of_causallm     -> lmhead_dtype
  *   - RMSNorm / other layers -> FP32 (not quantized)
  */
 std::map<std::string, DataType>
@@ -572,7 +572,7 @@ buildLayerDtypeMap(int num_layers, DataType fc_dtype, DataType embd_dtype,
   // LM Head layer
   if (include_lmhead && lmhead_dtype != DataType::FP32 &&
       lmhead_dtype != DataType::NONE) {
-    dtype_map["output_of_quick_ai"] = lmhead_dtype;
+    dtype_map["output_of_causallm"] = lmhead_dtype;
   }
 
   return dtype_map;
