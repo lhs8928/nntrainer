@@ -11,29 +11,31 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - name: install dev packages
-        run: |
-          echo "Install mandatory dev packages to avoid false-positive reports from cpp-linter"
-          sudo apt-get update
-          sudo apt-get install libstdc++-*-dev
-      - uses: cpp-linter/cpp-linter-action@v2.9.0
-        id: linter
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          style: file
-          version: 14
-          lines-changed-only: true
-          file-annotations: false
-          step-summary: true
-          format-review: true
-          tidy-checks: '-*' # disable clang-tidy checks.
-          # third_party/ holds vendored upstream code (minja, ...) that is not
-          # formatted to nntrainer style; skip it like static.check.yml does.
-          ignore: '.github|Applications/quick_ai/third_party'
+          # Required to compare against the base branch
+          fetch-depth: 0
 
-      - name: failing fast
-        if: steps.linter.outputs.clang-format-checks-failed > 0
+      - name: install clang-format and dev packages
         run: |
-          echo "This PR failed to pass the C++ source file format checks."
-          exit 1
+          sudo apt-get update
+          sudo apt-get install -y clang-format libstdc++-*-dev
+
+      - name: Run C++ format check on changed files
+        run: |
+          # Fetch main branch from origin
+          git fetch origin main --depth=1 || true
+
+          # Find all changed non-third-party C/C++ files
+          changed_files=$(git diff --name-only origin/main HEAD | grep -E "\.(c|h|cc|hh|cpp|hpp)$" | grep -v "third_party" || true)
+
+          if [ -z "$changed_files" ]; then
+            echo "No C++ files changed, skipping format check."
+            exit 0
+          fi
+
+          echo "Checking formatting of the following files:"
+          echo "$changed_files"
+
+          # Run clang-format to check for formatting errors
+          clang-format --dry-run --Werror --style=file $changed_files
+          echo "All C++ files are perfectly formatted!"
