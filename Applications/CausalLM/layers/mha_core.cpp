@@ -225,13 +225,15 @@ std::vector<nntrainer::TensorDim> MHACoreLayer::updateTensorsByInputDimensions(
 
   max_timestep = height + max_new_tokens;
 
-  tensor_dims[AttentionParams::cache_key].height(max_timestep);
-  tensor_dims[AttentionParams::cache_value].height(max_timestep);
+  if (!use_external_cache) {
+    tensor_dims[AttentionParams::cache_key].height(max_timestep);
+    tensor_dims[AttentionParams::cache_value].height(max_timestep);
 
-  run_context.updateTensor(tensor_idx[AttentionParams::cache_key],
-                           tensor_dims[AttentionParams::cache_key]);
-  run_context.updateTensor(tensor_idx[AttentionParams::cache_value],
-                           tensor_dims[AttentionParams::cache_value]);
+    run_context.updateTensor(tensor_idx[AttentionParams::cache_key],
+                             tensor_dims[AttentionParams::cache_key]);
+    run_context.updateTensor(tensor_idx[AttentionParams::cache_value],
+                             tensor_dims[AttentionParams::cache_value]);
+  }
 
   return output_dims;
 }
@@ -1471,8 +1473,10 @@ void MHACoreLayer::setBatch(nntrainer::RunLayerContext &context,
 
   const float dropout_rate =
     std::get<nntrainer::props::DropOutRate>(mha_core_props).get();
-  context.updateTensor(tensor_idx[AttentionParams::cache_key], batch);
-  context.updateTensor(tensor_idx[AttentionParams::cache_value], batch);
+  if (!use_external_cache) {
+    context.updateTensor(tensor_idx[AttentionParams::cache_key], batch);
+    context.updateTensor(tensor_idx[AttentionParams::cache_value], batch);
+  }
   // context.updateTensor(tensor_idx[AttentionParams::attention_weight], batch);
   if (dropout_rate > epsilon) {
     context.updateTensor(tensor_idx[AttentionParams::dropout_mask], batch);
