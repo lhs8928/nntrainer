@@ -4,7 +4,11 @@
  *
  * @file   vision_embedding_layer.h
  * @date   17 April 2026
- * @brief  This is Vision Embedding Layer Class of Neural Network
+ * @brief  This is the Vision Embedding Layer Class of Neural Network.
+ * @details The Vision Embedding Layer maps a sequence of token IDs into their
+ *          corresponding word embeddings and dynamically blends in precomputed
+ *          image embeddings (e.g., from a Vision Transformer/ViT) wherever
+ *          the token ID matches the configured `image_start_token`.
  * @see    https://github.com/nntrainer/nntrainer
  * @author Hyeonseok Lee <hs89.lee@samsung.com>
  * @bug    No known bugs except for NYI items
