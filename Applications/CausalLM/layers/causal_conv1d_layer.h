@@ -68,9 +68,9 @@ public:
   void calcDerivative(nntrainer::RunLayerContext &context) override;
   void calcGradient(nntrainer::RunLayerContext &context) override;
 
-  void updateTensorsByInputDimensions(
-    nntrainer::RunLayerContext &context,
-    std::vector<nntrainer::TensorDim> input_dimensions) override;
+  std::vector<nntrainer::TensorDim> updateTensorsByInputDimensions(
+    nntrainer::InitLayerContext &init_context,
+    nntrainer::RunLayerContext &run_context) override;
 
   const std::string getType() const override { return type; }
 

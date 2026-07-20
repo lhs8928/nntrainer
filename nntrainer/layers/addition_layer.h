@@ -100,10 +100,6 @@ public:
    */
   const std::string getType() const override { return AdditionLayer::type; };
 
-  void updateTensorsByInputDimensions(
-    nntrainer::RunLayerContext &context,
-    std::vector<nntrainer::TensorDim> input_dimensions) override;
-
   std::tuple<props::Print, props::SkipPrefill>
     add_props; /**< fc layer properties : unit - number of output neurons */
   bool skip_prefill = false;

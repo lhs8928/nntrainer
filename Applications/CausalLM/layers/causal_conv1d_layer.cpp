@@ -155,10 +155,14 @@ void CausalConv1DLayer::calcGradient(nntrainer::RunLayerContext &context) {
     "[CausalConv1DLayer] calcGradient() not implemented (inference only).");
 }
 
-void CausalConv1DLayer::updateTensorsByInputDimensions(
-  nntrainer::RunLayerContext &context,
-  std::vector<nntrainer::TensorDim> input_dimensions) {
-  // No dynamic updates needed
+std::vector<nntrainer::TensorDim> CausalConv1DLayer::updateTensorsByInputDimensions(
+  nntrainer::InitLayerContext &init_context,
+  nntrainer::RunLayerContext &run_context) {
+  auto input_dimensions = init_context.getInputDimensions();
+  run_context.updateInput(SINGLE_INOUT_IDX, input_dimensions[SINGLE_INOUT_IDX]);
+  run_context.updateOutput(SINGLE_INOUT_IDX, input_dimensions[SINGLE_INOUT_IDX]);
+
+  return {input_dimensions[SINGLE_INOUT_IDX]};
 }
 
 void CausalConv1DLayer::exportTo(nntrainer::Exporter &exporter,

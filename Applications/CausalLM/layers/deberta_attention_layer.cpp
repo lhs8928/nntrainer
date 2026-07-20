@@ -1011,10 +1011,13 @@ void DebertaAttentionLayer::setBatch(nntrainer::RunLayerContext &context,
   context.updateTensor(tensor_idx[AttentionParams::cache_value], batch);
 }
 
-void DebertaAttentionLayer::updateTensorsByInputDimensions(
-  nntrainer::RunLayerContext &context,
-  std::vector<nntrainer::TensorDim> input_dimensions) {
+std::vector<nntrainer::TensorDim> DebertaAttentionLayer::updateTensorsByInputDimensions(
+  nntrainer::InitLayerContext &init_context,
+  nntrainer::RunLayerContext &run_context) {
+  [[maybe_unused]] auto [output_dims, weight_dims, tensor_dims] =
+    getLayerDimensions(init_context);
 
+  auto input_dimensions = init_context.getInputDimensions();
   ml::train::TensorDim q_dim = input_dimensions[INPUT_IDX_Q];
   ml::train::TensorDim k_dim = input_dimensions[INPUT_IDX_K];
   ml::train::TensorDim v_dim = input_dimensions[INPUT_IDX_V];
@@ -1027,16 +1030,18 @@ void DebertaAttentionLayer::updateTensorsByInputDimensions(
   v_dim.setDataType(input_dimensions[INPUT_IDX_V].getDataType());
 #endif
 
-  context.updateInput(INPUT_IDX_Q, input_dimensions[INPUT_IDX_Q]);
-  context.updateInput(INPUT_IDX_K, input_dimensions[INPUT_IDX_K]);
-  context.updateInput(INPUT_IDX_V, input_dimensions[INPUT_IDX_V]);
-  context.updateOutput(OUTPUT_IDX, input_dimensions[INPUT_IDX_Q]);
+  run_context.updateInput(INPUT_IDX_Q, input_dimensions[INPUT_IDX_Q]);
+  run_context.updateInput(INPUT_IDX_K, input_dimensions[INPUT_IDX_K]);
+  run_context.updateInput(INPUT_IDX_V, input_dimensions[INPUT_IDX_V]);
+  run_context.updateOutput(OUTPUT_IDX, output_dims[OUTPUT_IDX]);
 
-  context.updateTensor(tensor_idx[AttentionParams::cache_key], k_dim);
-  context.updateTensor(tensor_idx[AttentionParams::cache_value], v_dim);
+  run_context.updateTensor(tensor_idx[AttentionParams::cache_key], k_dim);
+  run_context.updateTensor(tensor_idx[AttentionParams::cache_value], v_dim);
 
   prepare_bucket_table(std::max<unsigned int>(
     input_dimensions[INPUT_IDX_Q].height(), max_position_embeddings));
+
+  return output_dims;
 }
 
 void DebertaAttentionLayer::calcDerivative(

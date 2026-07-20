@@ -324,10 +324,6 @@ public:
   WIN_EXPORT void setBatch(nntrainer::RunLayerContext &context,
                            unsigned int batch) override;
 
-  WIN_EXPORT void updateTensorsByInputDimensions(
-    nntrainer::RunLayerContext &context,
-    std::vector<nntrainer::TensorDim> input_dimensions) override;
-
   /**
    * @brief Set the cache index for external cache mode.
    *        Must be called before forwarding() when use_external_cache is true.

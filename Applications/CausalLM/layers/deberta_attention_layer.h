@@ -195,9 +195,9 @@ public:
   /**
    * @copydoc Layer::updateTensorsByInputDimensions(...)
    */
-  void updateTensorsByInputDimensions(
-    nntrainer::RunLayerContext &context,
-    std::vector<nntrainer::TensorDim> input_dimensions) override;
+  std::vector<nntrainer::TensorDim> updateTensorsByInputDimensions(
+    nntrainer::InitLayerContext &init_context,
+    nntrainer::RunLayerContext &run_context) override;
 
   /**
    * @brief wrapper around nntrainer::compute_kcaches
