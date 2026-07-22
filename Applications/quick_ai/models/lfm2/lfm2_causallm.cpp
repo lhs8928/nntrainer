@@ -33,7 +33,7 @@
 
 using ml::train::Tensor;
 
-namespace causallm {
+namespace quick_ai {
 
 Lfm2CausalLM::Lfm2CausalLM(json &cfg, json &generation_cfg, json &nntr_cfg) :
   Transformer(cfg, generation_cfg, nntr_cfg, ModelType::CAUSALLM),
@@ -205,9 +205,9 @@ void Lfm2Transformer::registerCustomLayers() {
     }
   };
 
-  tryRegister(nntrainer::createLayer<causallm::ReshapedRMSNormLayer>);
-  tryRegister(nntrainer::createLayer<causallm::CustomMultiplyLayer>);
-  tryRegister(nntrainer::createLayer<causallm::CausalConv1DLayer>);
+  tryRegister(nntrainer::createLayer<quick_ai::ReshapedRMSNormLayer>);
+  tryRegister(nntrainer::createLayer<quick_ai::CustomMultiplyLayer>);
+  tryRegister(nntrainer::createLayer<quick_ai::CausalConv1DLayer>);
 }
 
 void Lfm2Transformer::setupLfm2Parameters(json &cfg, json &generation_cfg,
@@ -791,4 +791,4 @@ void Lfm2CausalLM::loadEmbeddingWeight() {
   embedding_weight_cached_ = true;
 }
 
-} // namespace causallm
+} // namespace quick_ai

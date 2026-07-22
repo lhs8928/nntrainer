@@ -383,7 +383,7 @@ void registerAllModels() {
                         });
   factory.registerModel("Lfm2ForCausalLM",
                         [](json cfg, json generation_cfg, json nntr_cfg) {
-                          return std::make_unique<causallm::Lfm2CausalLM>(
+                          return std::make_unique<quick_ai::Lfm2CausalLM>(
                             cfg, generation_cfg, nntr_cfg);
                         });
   factory.registerModel("DebertaV2", [](json cfg, json generation_cfg,

@@ -4,5 +4,5 @@ lfm2_src = [
 
 lfm2_inc = include_directories('.')
 
-causallm_src += lfm2_src
-causallm_inc += lfm2_inc
+quick_ai_src += lfm2_src
+quick_ai_inc += lfm2_inc

@@ -23,7 +23,7 @@
 
 #include "causal_lm.h"
 
-namespace causallm {
+namespace quick_ai {
 
 /**
  * @brief Lfm2Transformer - model-specific attention variant and conv block
@@ -156,6 +156,6 @@ private:
   void loadEmbeddingWeight();
 };
 
-} // namespace causallm
+} // namespace quick_ai
 
 #endif // __LFM2_CAUSALLM_H__

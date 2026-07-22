@@ -318,9 +318,9 @@ int main(int argc, char *argv[]) {
       return std::make_unique<quick_ai::TimmViTTransformer>(cfg, generation_cfg,
                                                             nntr_cfg);
     });
-  causallm::Factory::Instance().registerModel(
+  quick_ai::Factory::Instance().registerModel(
     "Lfm2ForCausalLM", [](json cfg, json generation_cfg, json nntr_cfg) {
-      return std::make_unique<causallm::Lfm2CausalLM>(cfg, generation_cfg,
+      return std::make_unique<quick_ai::Lfm2CausalLM>(cfg, generation_cfg,
                                                       nntr_cfg);
     });
 

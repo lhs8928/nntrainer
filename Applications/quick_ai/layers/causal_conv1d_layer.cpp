@@ -22,7 +22,7 @@
 #include <nntrainer_error.h>
 #include <nntrainer_log.h>
 
-namespace causallm {
+namespace quick_ai {
 
 // ===========================================================================
 
@@ -170,19 +170,19 @@ void CausalConv1DLayer::setProperty(const std::vector<std::string> &values) {
   LayerImpl::setProperty(values);
 }
 
-} // namespace causallm
+} // namespace quick_ai
 
 #ifdef PLUGGABLE
 extern "C" {
 
 nntrainer::Layer *create_causal_conv1d_layer() {
-  return new causallm::CausalConv1DLayer();
+  return new quick_ai::CausalConv1DLayer();
 }
 
 void destroy_causal_conv1d_layer(nntrainer::Layer *layer) { delete layer; }
 
 nntrainer::LayerPluggable ml_train_layer_pluggable{
   create_causal_conv1d_layer, destroy_causal_conv1d_layer,
-  causallm::CausalConv1DLayer::type};
+  quick_ai::CausalConv1DLayer::type};
 }
 #endif

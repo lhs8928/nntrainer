@@ -41,7 +41,7 @@
 #include <layer_impl.h>
 #include <tensor_dim.h>
 
-namespace causallm {
+namespace quick_ai {
 
 /**
  * @brief Causal depthwise Conv1D layer with conv-state cache for CausalLM
@@ -97,6 +97,6 @@ private:
   void validateInputShape(const nntrainer::TensorDim &input_dim) const;
 };
 
-} // namespace causallm
+} // namespace quick_ai
 
 #endif // __CAUSAL_LM_CAUSAL_CONV1D_LAYER_H__

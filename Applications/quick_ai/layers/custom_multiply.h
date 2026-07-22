@@ -27,7 +27,7 @@
 #include <layer_devel.h>
 #include <node_exporter.h>
 
-namespace causallm {
+namespace quick_ai {
 
 /**
  * @brief Custom elementwise multiply layer.
@@ -118,7 +118,7 @@ private:
   static constexpr size_t INPUT_IDX_1 = 1;
 };
 
-} // namespace causallm
+} // namespace quick_ai
 
 #endif /* __cplusplus */
 #endif /* __CUSTOM_MULTIPLY_LAYER_H__ */

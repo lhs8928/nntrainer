@@ -17,7 +17,7 @@
 #include <nntrainer_log.h>
 #include <util_func.h>
 
-namespace causallm {
+namespace quick_ai {
 
 CustomMultiplyLayer::CustomMultiplyLayer() :
   Layer(),
@@ -155,4 +155,4 @@ nntrainer::LayerPluggable ml_train_layer_pluggable{
 
 #endif
 
-} // namespace causallm
+} // namespace quick_ai
