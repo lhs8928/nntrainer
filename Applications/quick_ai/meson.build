@@ -40,6 +40,8 @@ quick_ai_layer_dependencies += [
     causallm_per_layer_slice_dep,
     causallm_scalar_multiply_dep,
     causallm_logit_softcapping_dep,
+    causallm_rtmcc_gau_dep,
+    causallm_rtmcc_head_dep,
 ]
 
 subdir('models')
@@ -179,7 +181,8 @@ quantize_src = [
 
 e_quantize = executable('nntr_quantize',
     quantize_src,
-    include_directories: quick_ai_inc,
+    include_directories: [quick_ai_inc, quick_ai_layer_inc,
+        include_directories('models/YOLOv7Pose')],
     dependencies: [nntrainer_dep, nntrainer_ccapi_dep, quick_ai_layer_dependencies, quick_ai_dep],
 )
 

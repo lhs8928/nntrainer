@@ -97,7 +97,7 @@
 #if !defined(_WIN32) && !defined(__ANDROID__)
 #include "timm_vit/timm_vit_transformer.h"
 #endif
-#include "YOLOv11/yolov11.h"
+#include "YOLOv7Pose/yolov7_pose.h"
 
 using json = nlohmann::json;
 using DataType = ml::train::TensorDim::DataType;
@@ -414,8 +414,9 @@ void registerAllModels() {
                         });
 #endif
   factory.registerModel(
-    "YOLOv11ForDetection", [](json cfg, json generation_cfg, json nntr_cfg) {
-      return std::make_unique<quick_ai::Yolov11>(cfg, generation_cfg, nntr_cfg);
+    "YOLOv7ReIDtiny", [](json cfg, json generation_cfg, json nntr_cfg) {
+      return std::make_unique<quick_ai::Yolov7Pose>(cfg, generation_cfg,
+                                                    nntr_cfg);
     });
 }
 
