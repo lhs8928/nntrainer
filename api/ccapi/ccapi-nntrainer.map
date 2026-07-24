@@ -1,0 +1,11 @@
+{
+  global:
+    _ZN2ml5train*;
+    _ZNK2ml5train*;
+    _ZTVN2ml5train*;
+    _ZTTN2ml5train*;
+    _ZTIN2ml5train*;
+    _ZTSN2ml5train*;
+  local:
+    *;
+};

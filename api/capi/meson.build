@@ -45,12 +45,21 @@ endif
 if get_option('platform') == 'android'
   nntrainer_capi_dep = declare_dependency(include_directories: capi_inc)
 else
+  capi_link_args = []
+  capi_link_depends = []
+  if host_machine.system() != 'windows'
+    capi_link_args += ['-Wl,--version-script=' + meson.current_source_dir() / 'capi-nntrainer.map']
+    capi_link_depends += [meson.current_source_dir() / 'capi-nntrainer.map']
+  endif
+
   shared_library('capi-nntrainer',
     capi_src,
     dependencies: capi_deps,
     include_directories: capi_inc,
     install: true,
     install_dir: nntrainer_libdir,
+    link_args: capi_link_args,
+    link_depends: capi_link_depends,
   )
 
   nntrainer_capi_lib = static_library('capi-nntrainer',
