@@ -30,12 +30,21 @@ ccapi_deps = [
 if get_option('platform') == 'android'
   nntrainer_ccapi_dep = declare_dependency(include_directories: ccapi_inc)
 else
+  ccapi_link_args = []
+  ccapi_link_depends = []
+  if host_machine.system() != 'windows'
+    ccapi_link_args += ['-Wl,--version-script=' + meson.current_source_dir() / 'ccapi-nntrainer.map']
+    ccapi_link_depends += [meson.current_source_dir() / 'ccapi-nntrainer.map']
+  endif
+
   shared_library('ccapi-nntrainer',
     ccapi_src,
     dependencies: ccapi_deps,
     include_directories: ccapi_inc,
     install: true,
     install_dir: nntrainer_libdir,
+    link_args: ccapi_link_args,
+    link_depends: ccapi_link_depends,
   )
 
   nntrainer_ccapi_lib = static_library('ccapi-nntrainer',
