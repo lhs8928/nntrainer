@@ -76,7 +76,11 @@ else
         error('causallm-tokenizer-lib is only supported for Windows CausalLM builds.')
     endif
 
-    tokenizer_path = meson.current_source_dir() / 'lib' / 'libtokenizers_c.a'
+    if host_machine.cpu_family() == 'aarch64'
+        tokenizer_path = meson.current_source_dir() / 'lib' / 'libtokenizers_tizen_c.a'
+    else
+        tokenizer_path = meson.current_source_dir() / 'lib' / 'libtokenizers_c.a'
+    endif
 endif
 
 generate_windows_tokenizer = tokenizer_option == ''
@@ -172,6 +176,8 @@ e = executable('nntr_causallm',
     executable_src,
     include_directories: [causallm_inc, causallm_inc_minja_inc, causallm_inc_nlohmann_inc],
     dependencies: [nntrainer_dep, nntrainer_ccapi_dep, causallm_layer_dependencies, causallm_dep],
+    install: get_option('install-app'),
+    install_dir: application_install_dir
 )
 
 
@@ -196,6 +202,8 @@ e_safetensors_info = executable('nntr_safetensors_info',
     safetensors_info_src,
     include_directories: causallm_inc,
     dependencies: [nntrainer_dep],
+    install: get_option('install-app'),
+    install_dir: application_install_dir
 )
 
 
@@ -364,4 +372,10 @@ if get_option('enable-test')
       env: {'NNTR_QUANTIZE_BIN': e_quantize.full_path()}
     )
   endif
+endif
+
+if get_option('install-app')
+  install_subdir('res/qwen3-0.6b',
+    install_dir: application_install_dir / 'res'
+  )
 endif

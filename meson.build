@@ -397,7 +397,7 @@ endif
 if get_option('install-app')
 # add a script to install resources from installs to application_install_dir
 meson.add_install_script(
-  'sh', '-c', 'cp -r @0@ ${DESTDIR}@1@'.format(nntrainer_resdir, application_install_dir)
+  'sh', '-c', 'mkdir -p ${DESTDIR}@1@ && cp -r @0@ ${DESTDIR}@1@'.format(nntrainer_resdir, application_install_dir)
 )
 endif
 
