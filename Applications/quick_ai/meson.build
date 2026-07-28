@@ -42,7 +42,10 @@ quick_ai_layer_dependencies += [
     causallm_logit_softcapping_dep,
     causallm_rtmcc_gau_dep,
     causallm_rtmcc_head_dep,
+    causallm_causal_conv1d_dep,
+    causallm_custom_multiply_dep,
 ]
+
 
 subdir('models')
 
@@ -177,14 +180,18 @@ e = executable('nntr_quick_ai',
 
 quantize_src = [
     meson.current_source_dir() / 'quantize.cpp',
+    meson.current_source_dir() / 'models/FastViTKeyword/jni/fastvit_attention_layer.cpp',
 ]
 
 e_quantize = executable('nntr_quantize',
     quantize_src,
     include_directories: [quick_ai_inc, quick_ai_layer_inc,
-        include_directories('models/YOLOv7Pose')],
+        include_directories('models/YOLOv7Pose'),
+        include_directories('models/FastViTKeyword'),
+        include_directories('models/FastViTKeyword/jni')],
     dependencies: [nntrainer_dep, nntrainer_ccapi_dep, quick_ai_layer_dependencies, quick_ai_dep],
 )
+
 
 
 safetensors_info_src = [

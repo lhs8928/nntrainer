@@ -97,7 +97,9 @@
 #if !defined(_WIN32) && !defined(__ANDROID__)
 #include "timm_vit/timm_vit_transformer.h"
 #endif
+#include "FastViTKeyword/fastvit_keyword_model.h"
 #include "YOLOv7Pose/yolov7_pose.h"
+
 
 using json = nlohmann::json;
 using DataType = ml::train::TensorDim::DataType;
@@ -418,7 +420,13 @@ void registerAllModels() {
       return std::make_unique<quick_ai::Yolov7Pose>(cfg, generation_cfg,
                                                     nntr_cfg);
     });
+  factory.registerModel(
+    "FastViTKeyword", [](json cfg, json generation_cfg, json nntr_cfg) {
+      return std::make_unique<quick_ai::FastViTKeywordModel>(cfg, generation_cfg,
+                                                             nntr_cfg);
+    });
 }
+
 
 /**
  * @brief Print usage information
