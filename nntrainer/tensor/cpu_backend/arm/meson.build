@@ -30,22 +30,22 @@ if get_option('enable-fp16')
 
   # arm_arch_opt = get_option('arm-arch')
   if arm_arch_opt != 'armv7l' and arm_arch_opt != 'armv8-a'
-    arm_compute_backend_sources += 'kleidiai_interface_qai8dxp_qsi4cxp.cpp'
-    arm_compute_backend_sources += 'kleidiai_interface_qsi8d32p_qsi4c32p.cpp'
+
+
     
     # Select thread backend for kleidiai parallel implementation
     if get_option('thread-backend') == 'bstp'
-      arm_compute_backend_sources += 'kleidiai_interface_qsi8d32p_qsi4c32p_stdthread.cpp'
+
     elif get_option('thread-backend') == 'omp'
-      arm_compute_backend_sources += 'kleidiai_interface_qsi8d32p_qsi4c32p_omp.cpp'
+
     elif get_option('thread-backend') == 'mixed'
-      arm_compute_backend_sources += 'kleidiai_interface_qsi8d32p_qsi4c32p_omp.cpp'
+
     else
       message('Unknown thread-backend meson option! Use omp as a default for kleidiai.')
-      arm_compute_backend_sources += 'kleidiai_interface_qsi8d32p_qsi4c32p_omp.cpp'
+
     endif
     
-    arm_compute_backend_headers += 'kleidiai_interface.h'
+
 
     subdir('kai')
     nntrainer_inc += include_directories('kai')
