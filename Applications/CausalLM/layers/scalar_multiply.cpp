@@ -115,7 +115,8 @@ void ScalarMultiplyLayer::incremental_forwarding(
   }
 }
 
-std::vector<nntrainer::TensorDim> ScalarMultiplyLayer::updateTensorsByInputDimensions(
+std::vector<nntrainer::TensorDim>
+ScalarMultiplyLayer::updateTensorsByInputDimensions(
   nntrainer::InitLayerContext &init_context,
   nntrainer::RunLayerContext &run_context) {
   auto input_dimensions = init_context.getInputDimensions();

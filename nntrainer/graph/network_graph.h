@@ -36,6 +36,7 @@ class Connection;
  */
 class NetworkGraph {
   friend class NeuralNetwork;
+
 public:
   /**
    * @brief     Constructor of NeuralNetwork Graph Class

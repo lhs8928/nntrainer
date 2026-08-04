@@ -345,7 +345,7 @@ void NetworkGraph::resetInputDimension(
 
   size_t cnt = 0;
 
-  for (unsigned int idx = 0; idx < graph.size() - 1; ++idx) {
+  for (unsigned int idx = 0; idx < graph.size(); ++idx) {
     auto const &lnode = getSortedLayerNode(idx);
     std::vector<TensorDim> input_dims = {};
     if (!is_input_node(lnode.get())) {

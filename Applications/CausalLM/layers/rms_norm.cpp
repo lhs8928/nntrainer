@@ -31,7 +31,8 @@ void RMSNormLayer::finalize(nntrainer::InitLayerContext &context) {
     skip_prefill = std::get<nntrainer::props::SkipPrefill>(rms_props).get();
 
   // gamma is unquantized and stored as FP32 in the bin. Force request as FP32.
-  weight_dims[RMSParams::gamma].setDataType(nntrainer::TensorDim::DataType::FP32);
+  weight_dims[RMSParams::gamma].setDataType(
+    nntrainer::TensorDim::DataType::FP32);
 
   wt_idx[RMSParams::gamma] = context.requestWeight(
     weight_dims[RMSParams::gamma],

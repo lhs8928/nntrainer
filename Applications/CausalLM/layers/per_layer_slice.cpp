@@ -97,7 +97,8 @@ void PerLayerSliceLayer::incremental_forwarding(
   }
 }
 
-std::vector<nntrainer::TensorDim> PerLayerSliceLayer::updateTensorsByInputDimensions(
+std::vector<nntrainer::TensorDim>
+PerLayerSliceLayer::updateTensorsByInputDimensions(
   nntrainer::InitLayerContext &init_context,
   nntrainer::RunLayerContext &run_context) {
   auto input_dimensions = init_context.getInputDimensions();

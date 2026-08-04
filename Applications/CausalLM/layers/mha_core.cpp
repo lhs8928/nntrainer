@@ -192,8 +192,8 @@ void MHACoreLayer::finalize(nntrainer::InitLayerContext &context) {
 
   if (!use_external_cache) {
     tensor_idx[AttentionParams::cache_key] =
-      context.requestTensor(tensor_dims[AttentionParams::cache_key], "cache_key",
-                            nntrainer::Initializer::NONE, false,
+      context.requestTensor(tensor_dims[AttentionParams::cache_key],
+                            "cache_key", nntrainer::Initializer::NONE, false,
                             nntrainer::TensorLifespan::MAX_LIFESPAN);
     tensor_idx[AttentionParams::cache_value] =
       context.requestTensor(tensor_dims[AttentionParams::cache_value],
@@ -1531,7 +1531,9 @@ std::array<std::vector<nntrainer::TensorDim>, 3>
 MHACoreLayer::getLayerDimensions(nntrainer::InitLayerContext &context) {
   NNTR_THROW_IF(context.getNumInputs() < 3 || context.getNumInputs() > 5,
                 std::invalid_argument)
-    << "Multi head Attention layer needs 3, 4, or 5 inputs. (query, key, value; mask is optional; external cache_key + cache_value for external cache mode)";
+    << "Multi head Attention layer needs 3, 4, or 5 inputs. (query, key, "
+       "value; mask is optional; external cache_key + cache_value for external "
+       "cache mode)";
 
   const std::vector<ml::train::TensorDim> &input_dims =
     context.getInputDimensions();

@@ -455,6 +455,8 @@ EmbeddingLayer::EmbeddingLayer() :
   weight_idx(std::numeric_limits<unsigned>::max()) {}
 
 void EmbeddingLayer::finalize(nntrainer::InitLayerContext &context) {
+  context.setInputDataType(nntrainer::TensorDim::DataType::FP32);
+
   [[maybe_unused]] auto [output_dims, weight_dims, tensor_dims] =
     getLayerDimensions(context);
 
@@ -820,10 +822,6 @@ EmbeddingLayer::getLayerDimensions(nntrainer::InitLayerContext &context) {
     context.getInputDimensions()[SINGLE_INOUT_IDX];
   NNTR_THROW_IF(input_dim.channel() != 1, std::invalid_argument)
     << "Embedding layer takes only one for channel size";
-
-  NNTR_THROW_IF(input_dim.getDataType() != nntrainer::TensorDim::DataType::FP32,
-                std::invalid_argument)
-    << "Embedding layer takes only FP32 input data";
 
   size_t in_dim =
     static_cast<size_t>(std::get<nntrainer::props::InDim>(embedding_props));

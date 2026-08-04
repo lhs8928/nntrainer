@@ -1011,7 +1011,8 @@ void DebertaAttentionLayer::setBatch(nntrainer::RunLayerContext &context,
   context.updateTensor(tensor_idx[AttentionParams::cache_value], batch);
 }
 
-std::vector<nntrainer::TensorDim> DebertaAttentionLayer::updateTensorsByInputDimensions(
+std::vector<nntrainer::TensorDim>
+DebertaAttentionLayer::updateTensorsByInputDimensions(
   nntrainer::InitLayerContext &init_context,
   nntrainer::RunLayerContext &run_context) {
   [[maybe_unused]] auto [output_dims, weight_dims, tensor_dims] =

@@ -501,4 +501,26 @@ void CachedSlimMoELayer::exportTo(
   exporter.saveResult(moe_props, method, this); // Save MoE specific properties
 }
 
+std::array<std::vector<nntrainer::TensorDim>, 3>
+CachedSlimMoELayer::getLayerDimensions(nntrainer::InitLayerContext &context) {
+  const auto &in_dim = context.getInputDimensions()[SINGLE_INOUT_IDX];
+  std::vector<nntrainer::TensorDim> output_dims(1);
+  output_dims[SINGLE_INOUT_IDX] = in_dim;
+  return {output_dims, {}, {}};
+}
+
+std::vector<nntrainer::TensorDim>
+CachedSlimMoELayer::updateTensorsByInputDimensions(
+  nntrainer::InitLayerContext &init_context,
+  nntrainer::RunLayerContext &run_context) {
+  [[maybe_unused]] auto [output_dims, weight_dims, tensor_dims] =
+    getLayerDimensions(init_context);
+
+  run_context.updateInput(SINGLE_INOUT_IDX,
+                          init_context.getInputDimensions()[SINGLE_INOUT_IDX]);
+  run_context.updateOutput(SINGLE_INOUT_IDX, output_dims[SINGLE_INOUT_IDX]);
+
+  return output_dims;
+}
+
 } // namespace causallm

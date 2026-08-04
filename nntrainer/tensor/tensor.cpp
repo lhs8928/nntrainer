@@ -159,7 +159,9 @@ Tensor::Tensor(std::string name_, Tformat fm, Tdatatype d_type) {
 #endif
   } else {
     throw std::invalid_argument(
-      "Error: Tensor cannot be constructed because the given d_type (" + std::to_string((int)d_type) + ") is not "
+      "Error: Tensor cannot be constructed because the given d_type (" +
+      std::to_string((int)d_type) +
+      ") is not "
       "compatible with itensor. The supported d_types are: FP32, FP16 "
       "(if built with ENABLE_FP16).");
   }
@@ -215,7 +217,9 @@ Tensor::Tensor(const TensorDim &d, bool alloc_now, Initializer init,
 #endif
   } else {
     throw std::invalid_argument(
-      "Error: Tensor cannot be constructed because the given d_type (" + std::to_string((int)d.getDataType()) + ") is not "
+      "Error: Tensor cannot be constructed because the given d_type (" +
+      std::to_string((int)d.getDataType()) +
+      ") is not "
       "compatible with itensor. The supported d_types are: FP32, FP16 "
       "(if built with ENABLE_FP16).");
   }
@@ -266,7 +270,9 @@ Tensor::Tensor(const TensorDim &d, const void *buf, QScheme qscheme) {
 #endif
   } else {
     throw std::invalid_argument(
-      "Error: Tensor cannot be constructed because the given d_type (" + std::to_string((int)d.getDataType()) + ") is not "
+      "Error: Tensor cannot be constructed because the given d_type (" +
+      std::to_string((int)d.getDataType()) +
+      ") is not "
       "compatible with itensor. The supported d_types are: FP32, FP16 "
       "(if built with ENABLE_FP16).");
   }

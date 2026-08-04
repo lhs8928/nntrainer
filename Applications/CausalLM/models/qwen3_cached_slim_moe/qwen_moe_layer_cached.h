@@ -71,6 +71,20 @@ public:
   void finalize(nntrainer::InitLayerContext &context) override;
 
   /**
+   * @copydoc Layer::getLayerDimensions(InitLayerContext &context)
+   */
+  std::array<std::vector<nntrainer::TensorDim>, 3>
+  getLayerDimensions(nntrainer::InitLayerContext &context);
+
+  /**
+   * @copydoc Layer::updateTensorsByInputDimensions(InitLayerContext &context,
+   * RunLayerContext &run_context)
+   */
+  std::vector<nntrainer::TensorDim> updateTensorsByInputDimensions(
+    nntrainer::InitLayerContext &init_context,
+    nntrainer::RunLayerContext &run_context) override;
+
+  /**
    * @copydoc Layer::forwarding(RunLayerContext &context, bool training)
    */
   void forwarding(nntrainer::RunLayerContext &context, bool training) override;
