@@ -115,6 +115,7 @@ void VisionEmbeddingLayer::forwarding(nntrainer::RunLayerContext &context,
     float *tokens_data =
       tokens.getAddress<float>(b * tokens.getDim().getFeatureLen());
     nntrainer::Tensor batchsliced_hidden = hidden_.getBatchSlice(b, 1);
+    nntrainer::Tensor batchsliced_image = image.getBatchSlice(b, 1);
 
     size_t image_start_token_idx = 0;
 
@@ -141,17 +142,35 @@ void VisionEmbeddingLayer::forwarding(nntrainer::RunLayerContext &context,
       if (weight.getDataType() == nntrainer::TensorDim::DataType::Q6_K) {
         ///@note this should be replaced with quantizer operation
         int num_blocks_per_row = (weight.width() + 256 - 1) / 256;
-        nntrainer::dequantize_row_q6_K(
-          (void *)((char *)weight.getData<uint8_t>() +
-                   (210 * num_blocks_per_row) * embed_idx),
-          out_tensor.getData(), out_dim);
+        const void *src = (void *)((char *)weight.getData<uint8_t>() +
+                                   (210 * num_blocks_per_row) * embed_idx);
+        if (out_tensor.getDataType() == nntrainer::TensorDim::DataType::FP32) {
+          nntrainer::dequantize_row_q6_K(src, out_tensor.getData(), out_dim);
+        } else {
+          nntrainer::TensorDim fp32_dim(
+            {1, 1, 1, out_dim},
+            nntrainer::TensorDim::TensorType(
+              out_token_dim.getFormat(), nntrainer::TensorDim::DataType::FP32));
+          nntrainer::Tensor tmp(fp32_dim, true);
+          nntrainer::dequantize_row_q6_K(src, tmp.getData(), out_dim);
+          out_tensor.copyData(tmp);
+        }
       } else if (weight.getDataType() == nntrainer::TensorDim::DataType::Q4_0) {
         ///@note this should be replaced with quantizer operation
         int num_blocks_per_row = (weight.width() + 32 - 1) / 32;
-        nntrainer::dequantize_row_q4_0(
-          (void *)((char *)weight.getData<uint8_t>() +
-                   (18 * num_blocks_per_row) * embed_idx),
-          out_tensor.getData(), out_dim);
+        const void *src = (void *)((char *)weight.getData<uint8_t>() +
+                                   (18 * num_blocks_per_row) * embed_idx);
+        if (out_tensor.getDataType() == nntrainer::TensorDim::DataType::FP32) {
+          nntrainer::dequantize_row_q4_0(src, out_tensor.getData(), out_dim);
+        } else {
+          nntrainer::TensorDim fp32_dim(
+            {1, 1, 1, out_dim},
+            nntrainer::TensorDim::TensorType(
+              out_token_dim.getFormat(), nntrainer::TensorDim::DataType::FP32));
+          nntrainer::Tensor tmp(fp32_dim, true);
+          nntrainer::dequantize_row_q4_0(src, tmp.getData(), out_dim);
+          out_tensor.copyData(tmp);
+        }
       } else {
         out_tensor.copyData(cur_weight);
       }
@@ -164,7 +183,7 @@ void VisionEmbeddingLayer::forwarding(nntrainer::RunLayerContext &context,
         nntrainer::Tensor out_image_tensor =
           batchsliced_hidden.getSharedDataTensor(out_image_dim,
                                                  (i + 1) * out_dim);
-        out_image_tensor.copyData(image);
+        out_image_tensor.copyData(batchsliced_image);
 
         if (scale != 1.0f) {
           out_image_tensor.multiply_i(scale);
@@ -204,6 +223,7 @@ void VisionEmbeddingLayer::incremental_forwarding(
     float *tokens_data =
       tokens.getAddress<float>(b * tokens.getDim().getFeatureLen());
     nntrainer::Tensor batchsliced_hidden = hidden_.getBatchSlice(b, 1);
+    nntrainer::Tensor batchsliced_image = image.getBatchSlice(b, 1);
 
     int iter = to - from;
 
@@ -233,17 +253,35 @@ void VisionEmbeddingLayer::incremental_forwarding(
       if (weight.getDataType() == nntrainer::TensorDim::DataType::Q6_K) {
         ///@note this should be replaced with quantizer operation
         int num_blocks_per_row = (weight.width() + 256 - 1) / 256;
-        nntrainer::dequantize_row_q6_K(
-          (void *)((char *)weight.getData<uint8_t>() +
-                   (210 * num_blocks_per_row) * embed_idx),
-          out_tensor.getData(), out_dim);
+        const void *src = (void *)((char *)weight.getData<uint8_t>() +
+                                   (210 * num_blocks_per_row) * embed_idx);
+        if (out_tensor.getDataType() == nntrainer::TensorDim::DataType::FP32) {
+          nntrainer::dequantize_row_q6_K(src, out_tensor.getData(), out_dim);
+        } else {
+          nntrainer::TensorDim fp32_dim(
+            {1, 1, 1, out_dim},
+            nntrainer::TensorDim::TensorType(
+              out_token_dim.getFormat(), nntrainer::TensorDim::DataType::FP32));
+          nntrainer::Tensor tmp(fp32_dim, true);
+          nntrainer::dequantize_row_q6_K(src, tmp.getData(), out_dim);
+          out_tensor.copyData(tmp);
+        }
       } else if (weight.getDataType() == nntrainer::TensorDim::DataType::Q4_0) {
         ///@note this should be replaced with quantizer operation
         int num_blocks_per_row = (weight.width() + 32 - 1) / 32;
-        nntrainer::dequantize_row_q4_0(
-          (void *)((char *)weight.getData<uint8_t>() +
-                   (18 * num_blocks_per_row) * embed_idx),
-          out_tensor.getData(), out_dim);
+        const void *src = (void *)((char *)weight.getData<uint8_t>() +
+                                   (18 * num_blocks_per_row) * embed_idx);
+        if (out_tensor.getDataType() == nntrainer::TensorDim::DataType::FP32) {
+          nntrainer::dequantize_row_q4_0(src, out_tensor.getData(), out_dim);
+        } else {
+          nntrainer::TensorDim fp32_dim(
+            {1, 1, 1, out_dim},
+            nntrainer::TensorDim::TensorType(
+              out_token_dim.getFormat(), nntrainer::TensorDim::DataType::FP32));
+          nntrainer::Tensor tmp(fp32_dim, true);
+          nntrainer::dequantize_row_q4_0(src, tmp.getData(), out_dim);
+          out_tensor.copyData(tmp);
+        }
       } else {
         out_tensor.copyData(cur_weight);
       }
@@ -256,7 +294,7 @@ void VisionEmbeddingLayer::incremental_forwarding(
         nntrainer::Tensor out_image_tensor =
           batchsliced_hidden.getSharedDataTensor(out_image_dim,
                                                  (out_slot + 1) * out_dim);
-        out_image_tensor.copyData(image);
+        out_image_tensor.copyData(batchsliced_image);
 
         if (scale != 1.0f) {
           out_image_tensor.multiply_i(scale);
