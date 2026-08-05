@@ -140,6 +140,14 @@ std::vector<TensorDim> FullyConnectedLayer::updateTensorsByInputDimensions(
                           init_context.getInputDimensions()[SINGLE_INOUT_IDX]);
   run_context.updateOutput(SINGLE_INOUT_IDX, output_dims[SINGLE_INOUT_IDX]);
 
+  const auto &lora_rank = (std::get<props::LoraRank>(fc_props).empty())
+                            ? 0
+                            : std::get<props::LoraRank>(fc_props).get();
+  if (lora_rank) {
+    run_context.updateTensor(lora_idx[LORAParams::loraTmp], tensor_dims[0]);
+    run_context.updateTensor(lora_idx[LORAParams::loraOut], tensor_dims[1]);
+  }
+
   return output_dims;
 }
 
