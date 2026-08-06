@@ -61,6 +61,9 @@ void CachedSlimMoELayer::finalize(nntrainer::InitLayerContext &context) {
   NNTR_THROW_IF(context.getNumInputs() != 1, std::invalid_argument)
     << "MoE layer only supports single input";
 
+  [[maybe_unused]] auto [output_dims, weight_dims, tensor_dims] =
+    getLayerDimensions(context);
+
   auto &weight_regularizer =
     std::get<nntrainer::props::WeightRegularizer>(*layer_impl_props);
   auto &weight_regularizer_constant =
@@ -71,18 +74,11 @@ void CachedSlimMoELayer::finalize(nntrainer::InitLayerContext &context) {
     std::get<nntrainer::props::WeightDecay>(*layer_impl_props);
 
   // 2. Set output dimensions (same as input)
-  const auto &in_dim = context.getInputDimensions()[SINGLE_INOUT_IDX];
-  const bool is_nchw = context.getFormat() == nntrainer::Tformat::NCHW;
-  std::vector<nntrainer::TensorDim> output_dims(1);
-  output_dims[SINGLE_INOUT_IDX] = in_dim;
   context.setOutputDimensions(output_dims);
 
   // 3. Get MoE properties
   num_experts = std::get<props::NumExperts>(moe_props).get();
   topk = std::get<props::NumExpertsPerToken>(moe_props).get();
-  const unsigned int intermediate_size =
-    std::get<nntrainer::props::Unit>(moe_props).get();
-  const unsigned int hidden_size = in_dim.width(); // Feature dimension
 
   // activation function
   if (std::get<props::MoEActivation>(moe_props).empty()) {
@@ -98,15 +94,8 @@ void CachedSlimMoELayer::finalize(nntrainer::InitLayerContext &context) {
   }
 
   // 4. Initialie gate layer (router)
-  nntrainer::TensorDim gate_dim(
-    1, is_nchw ? 1 : num_experts, is_nchw ? hidden_size : 1,
-    is_nchw ? num_experts : hidden_size,
-    nntrainer::TensorDim::TensorType(context.getFormat(),
-                                     nntrainer::TensorDim::DataType::FP32),
-    is_nchw ? 0b0011 : 0b0101);
-
   gate_idx = context.requestWeight(
-    gate_dim, weight_initializer, weight_regularizer,
+    weight_dims[0], weight_initializer, weight_regularizer,
     weight_regularizer_constant, weight_decay, "gate", true);
 
   // 5. Initializer expert weights
@@ -114,51 +103,35 @@ void CachedSlimMoELayer::finalize(nntrainer::InitLayerContext &context) {
   expert_up_proj_indices.reserve(num_experts);
   expert_down_proj_indices.reserve(num_experts);
 
-  nntrainer::TensorDim expert_gate_dim(
-    1, is_nchw ? 1 : intermediate_size, is_nchw ? hidden_size : 1,
-    is_nchw ? intermediate_size : hidden_size,
-    nntrainer::TensorDim::TensorType(context.getFormat(),
-                                     context.getWeightDataType()),
-    is_nchw ? 0b0011 : 0b0101);
-
-  nntrainer::TensorDim expert_down_dim(
-    1, is_nchw ? 1 : hidden_size, is_nchw ? intermediate_size : 1,
-    is_nchw ? hidden_size : intermediate_size,
-    nntrainer::TensorDim::TensorType(context.getFormat(),
-                                     context.getWeightDataType()),
-    is_nchw ? 0b0011 : 0b0101);
-
   for (unsigned int i = 0; i < num_experts; ++i) {
     // Up projection
     expert_up_proj_indices.push_back(context.requestWeight(
-      expert_gate_dim, // Same dimensions as gate projection
-      weight_initializer, weight_regularizer, weight_regularizer_constant,
-      weight_decay, "expert_up_" + std::to_string(i), false, true));
+      weight_dims[1 + 3 * i], weight_initializer, weight_regularizer,
+      weight_regularizer_constant, weight_decay,
+      "expert_up_" + std::to_string(i), false, true));
 
     // Gate projection
     expert_gate_proj_indices.push_back(context.requestWeight(
-      expert_gate_dim, weight_initializer, weight_regularizer,
+      weight_dims[2 + 3 * i], weight_initializer, weight_regularizer,
       weight_regularizer_constant, weight_decay,
       "expert_gate_" + std::to_string(i), false, true));
 
     // Down projection
     expert_down_proj_indices.push_back(context.requestWeight(
-      expert_down_dim, weight_initializer, weight_regularizer,
+      weight_dims[3 + 3 * i], weight_initializer, weight_regularizer,
       weight_regularizer_constant, weight_decay,
       "expert_down_" + std::to_string(i), false, true));
     need_load.push_back(true);
   }
 
   // 6. Request intermediate tensors
-  const unsigned batch_size = in_dim.batch();
-  const unsigned seq_len = in_dim.height();
-  const unsigned total_tokens = batch_size * seq_len;
+  router_logits_idx = context.requestTensor(
+    tensor_dims[0], "router_logits", nntrainer::Initializer::NONE, false,
+    nntrainer::TensorLifespan::FORWARD_FUNC_LIFESPAN);
 
-  // Router logits :  [batch * seq, num_experts]
-  router_logits_idx =
-    context.requestTensor({total_tokens, 1, 1, num_experts}, "router_logits",
-                          nntrainer::Initializer::NONE, false,
-                          nntrainer::TensorLifespan::FORWARD_FUNC_LIFESPAN);
+  expert_mask_idx = context.requestTensor(
+    tensor_dims[1], "expert_mask", nntrainer::Initializer::ZEROS, false,
+    nntrainer::TensorLifespan::FORWARD_FUNC_LIFESPAN);
 }
 
 void CachedSlimMoELayer::forwarding(nntrainer::RunLayerContext &context,
@@ -504,9 +477,62 @@ void CachedSlimMoELayer::exportTo(
 std::array<std::vector<nntrainer::TensorDim>, 3>
 CachedSlimMoELayer::getLayerDimensions(nntrainer::InitLayerContext &context) {
   const auto &in_dim = context.getInputDimensions()[SINGLE_INOUT_IDX];
+  const bool is_nchw = context.getFormat() == nntrainer::Tformat::NCHW;
+  const unsigned batch_size = in_dim.batch();
+  const unsigned seq_len = in_dim.height();
+  const unsigned total_tokens = batch_size * seq_len;
+
   std::vector<nntrainer::TensorDim> output_dims(1);
   output_dims[SINGLE_INOUT_IDX] = in_dim;
-  return {output_dims, {}, {}};
+
+  // Num experts, topk, intermediate size, hidden size
+  unsigned int num_experts = std::get<props::NumExperts>(moe_props).get();
+  unsigned int topk = std::get<props::NumExpertsPerToken>(moe_props).get();
+  const unsigned int intermediate_size =
+    std::get<nntrainer::props::Unit>(moe_props).get();
+  const unsigned int hidden_size = in_dim.width(); // Feature dimension
+
+  // 1. Gather Weight Dimensions (Gate + Experts)
+  std::vector<nntrainer::TensorDim> weight_dims;
+
+  // Gate Weight
+  nntrainer::TensorDim gate_dim(
+    1, is_nchw ? 1 : num_experts, is_nchw ? hidden_size : 1,
+    is_nchw ? num_experts : hidden_size,
+    nntrainer::TensorDim::TensorType(context.getFormat(),
+                                     nntrainer::TensorDim::DataType::FP32),
+    is_nchw ? 0b0011 : 0b0101);
+  weight_dims.push_back(gate_dim);
+
+  // Expert Weights (Up, Gate, Down for each expert)
+  nntrainer::TensorDim expert_gate_dim(
+    1, is_nchw ? 1 : intermediate_size, is_nchw ? hidden_size : 1,
+    is_nchw ? intermediate_size : hidden_size,
+    nntrainer::TensorDim::TensorType(context.getFormat(),
+                                     context.getWeightDataType()),
+    is_nchw ? 0b0011 : 0b0101);
+
+  nntrainer::TensorDim expert_down_dim(
+    1, is_nchw ? 1 : hidden_size, is_nchw ? intermediate_size : 1,
+    is_nchw ? hidden_size : intermediate_size,
+    nntrainer::TensorDim::TensorType(context.getFormat(),
+                                     context.getWeightDataType()),
+    is_nchw ? 0b0011 : 0b0101);
+
+  for (unsigned int i = 0; i < num_experts; ++i) {
+    weight_dims.push_back(
+      expert_gate_dim); // Up projection (using same gate dim shape)
+    weight_dims.push_back(expert_gate_dim); // Gate projection
+    weight_dims.push_back(expert_down_dim); // Down projection
+  }
+
+  // 2. Gather Temporary Tensor Dimensions
+  std::vector<nntrainer::TensorDim> tensor_dims(2);
+  tensor_dims[0] = nntrainer::TensorDim({total_tokens, 1, 1, num_experts});
+  tensor_dims[1] = nntrainer::TensorDim({num_experts, 1, topk, total_tokens});
+
+  return std::array<std::vector<nntrainer::TensorDim>, 3>{
+    output_dims, weight_dims, tensor_dims};
 }
 
 std::vector<nntrainer::TensorDim>
@@ -519,6 +545,9 @@ CachedSlimMoELayer::updateTensorsByInputDimensions(
   run_context.updateInput(SINGLE_INOUT_IDX,
                           init_context.getInputDimensions()[SINGLE_INOUT_IDX]);
   run_context.updateOutput(SINGLE_INOUT_IDX, output_dims[SINGLE_INOUT_IDX]);
+
+  run_context.updateTensor(router_logits_idx, tensor_dims[0]);
+  run_context.updateTensor(expert_mask_idx, tensor_dims[1]);
 
   return output_dims;
 }

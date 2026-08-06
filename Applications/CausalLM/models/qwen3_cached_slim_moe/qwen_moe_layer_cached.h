@@ -74,11 +74,10 @@ public:
    * @copydoc Layer::getLayerDimensions(InitLayerContext &context)
    */
   std::array<std::vector<nntrainer::TensorDim>, 3>
-  getLayerDimensions(nntrainer::InitLayerContext &context);
+  getLayerDimensions(nntrainer::InitLayerContext &context) override;
 
   /**
-   * @copydoc Layer::updateTensorsByInputDimensions(InitLayerContext &context,
-   * RunLayerContext &run_context)
+   * @copydoc Layer::updateTensorsByInputDimensions(...)
    */
   std::vector<nntrainer::TensorDim> updateTensorsByInputDimensions(
     nntrainer::InitLayerContext &init_context,
