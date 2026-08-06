@@ -60,11 +60,12 @@ public:
   getLayerDimensions(nntrainer::InitLayerContext &context) override;
 
   /**
-   * @copydoc Layer::updateTensorsByInputDimensions(InitLayerContext &context, RunLayerContext &run_context)
+   * @copydoc Layer::updateTensorsByInputDimensions(InitLayerContext &context,
+   * RunLayerContext &run_context)
    */
-  std::vector<nntrainer::TensorDim>
-  updateTensorsByInputDimensions(nntrainer::InitLayerContext &init_context,
-                                 nntrainer::RunLayerContext &run_context) override;
+  std::vector<nntrainer::TensorDim> updateTensorsByInputDimensions(
+    nntrainer::InitLayerContext &init_context,
+    nntrainer::RunLayerContext &run_context) override;
 
   /** Full forwarding is unused; use incremental_forwarding. */
   void forwarding(nntrainer::RunLayerContext &context, bool training) override;
