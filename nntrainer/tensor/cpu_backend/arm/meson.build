@@ -32,7 +32,7 @@ if get_option('enable-fp16')
   if arm_arch_opt != 'armv7l' and arm_arch_opt != 'armv8-a'
 
 
-    
+
     # Select thread backend for kleidiai parallel implementation
     if get_option('thread-backend') == 'bstp'
 
@@ -44,7 +44,7 @@ if get_option('enable-fp16')
       message('Unknown thread-backend meson option! Use omp as a default for kleidiai.')
 
     endif
-    
+
 
 
     #subdir('kai')
