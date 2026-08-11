@@ -195,13 +195,16 @@ int NetworkGraph::addLossLayer(const std::string &loss_type_) {
 void NetworkGraph::setOutputConnections() {
   for (auto layer_iter = cbegin(); layer_iter != cend(); layer_iter++) {
     const auto &node = *layer_iter;
-    for (auto i = 0u, num_inode = node->getNumInputConnections(); i < num_inode;
-         ++i) {
+    for (unsigned int i = 0; i < node->getNumInputConnections(); ++i) {
       const auto &name = node->getInputConnectionName(i);
       const auto &idx = node->getInputConnectionIndex(i);
 
       auto node_setting_output = getLayerNode(name);
-      node_setting_output->setOutputConnection(idx, node->getName(), i);
+      if (node_setting_output) {
+        node_setting_output->setOutputConnection(idx, node->getName(), i);
+      } else {
+        ml_logi("node_setting_output not found for connection %s", name.c_str());
+      }
     }
   }
 }
@@ -354,7 +357,7 @@ void NetworkGraph::resetInputDimension(
         input_dims = it->second;
       }
     } else {
-      input_dims = {model_input_dims[cnt++]};
+      input_dims.push_back(model_input_dims[cnt++]);
     }
 
     auto output_dims = lnode->updateTensorsByInputDimensions(input_dims);
@@ -370,7 +373,7 @@ void NetworkGraph::resetInputDimension(
 
       auto sink_node = getLayerNode(conn->getName());
       [[maybe_unused]] auto [it, b] =
-        input_map.try_emplace({sink_node->getName(), {}});
+        input_map.try_emplace(sink_node->getName());
 
       NNTR_THROW_IF(sink_node->getInputConnectionName(conn->getIndex()) !=
                       lnode->getName(),
@@ -1268,7 +1271,7 @@ int NetworkGraph::initialize(ExecutionMode mode,
 
       auto sink_node = getLayerNode(conn->getName());
       [[maybe_unused]] auto [it, b] =
-        input_map.try_emplace({sink_node->getName(), {}});
+        input_map.try_emplace(sink_node->getName());
 
       NNTR_THROW_IF(sink_node->getInputConnectionName(conn->getIndex()) !=
                       lnode->getName(),
