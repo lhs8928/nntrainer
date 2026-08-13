@@ -128,10 +128,6 @@ void CachedSlimMoELayer::finalize(nntrainer::InitLayerContext &context) {
   router_logits_idx = context.requestTensor(
     tensor_dims[0], "router_logits", nntrainer::Initializer::NONE, false,
     nntrainer::TensorLifespan::FORWARD_FUNC_LIFESPAN);
-
-  expert_mask_idx = context.requestTensor(
-    tensor_dims[1], "expert_mask", nntrainer::Initializer::ZEROS, false,
-    nntrainer::TensorLifespan::FORWARD_FUNC_LIFESPAN);
 }
 
 void CachedSlimMoELayer::forwarding(nntrainer::RunLayerContext &context,
@@ -547,7 +543,6 @@ CachedSlimMoELayer::updateTensorsByInputDimensions(
   run_context.updateOutput(SINGLE_INOUT_IDX, output_dims[SINGLE_INOUT_IDX]);
 
   run_context.updateTensor(router_logits_idx, tensor_dims[0]);
-  run_context.updateTensor(expert_mask_idx, tensor_dims[1]);
 
   return output_dims;
 }

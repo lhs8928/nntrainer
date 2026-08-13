@@ -203,7 +203,8 @@ void NetworkGraph::setOutputConnections() {
       if (node_setting_output) {
         node_setting_output->setOutputConnection(idx, node->getName(), i);
       } else {
-        ml_logi("node_setting_output not found for connection %s", name.c_str());
+        ml_logi("node_setting_output not found for connection %s",
+                name.c_str());
       }
     }
   }
