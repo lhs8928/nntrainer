@@ -11,9 +11,11 @@ arm_compute_backend_sources = [
 
 arch = host_machine.cpu_family()
 if arch != 'arm'
-  subdir('kai_interface')
-  nntrainer_inc += include_directories('kai_interface')
-  nntrainer_inc_abs += meson.current_source_dir() / 'kai_interface'
+  if arm_arch_opt != 'armv7l' and arm_arch_opt != 'armv8-a'
+    subdir('kai_interface')
+    nntrainer_inc += include_directories('kai_interface')
+    nntrainer_inc_abs += meson.current_source_dir() / 'kai_interface'
+  endif
 endif
 
 subdir('matrix_transpose_neon')
@@ -27,30 +29,6 @@ if get_option('enable-fp16')
   subdir('hgemm')
   nntrainer_inc += include_directories('hgemm')
   nntrainer_inc_abs += meson.current_source_dir() / 'hgemm'
-
-  # arm_arch_opt = get_option('arm-arch')
-  if arm_arch_opt != 'armv7l' and arm_arch_opt != 'armv8-a'
-
-
-
-    # Select thread backend for kleidiai parallel implementation
-    if get_option('thread-backend') == 'bstp'
-
-    elif get_option('thread-backend') == 'omp'
-
-    elif get_option('thread-backend') == 'mixed'
-
-    else
-      message('Unknown thread-backend meson option! Use omp as a default for kleidiai.')
-
-    endif
-
-
-
-    #subdir('kai')
-    #nntrainer_inc += include_directories('kai')
-    #nntrainer_inc_abs += meson.current_source_dir() / 'kai'
-  endif
 endif
 
 if arch == 'arm'
