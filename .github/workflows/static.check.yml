@@ -70,6 +70,7 @@ jobs:
         # Originally from "pr-prebuild-doxygen-tag"
         # Need "grep"
         run: |
+          sed -i '/Applications\/CausalLM\/json.hpp/d' $changed_file_list
           bash .github/workflows/static.check.scripts/doxygen-tag.sh $changed_file_list 1
       - name: /Checker/ Indent check
         # Originally from "pr-prebuild-indent"
