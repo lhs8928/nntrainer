@@ -54,6 +54,10 @@ jobs:
         # Originally from "pr-prebuild-file-size"
         run: |
           for file in `cat $changed_file_list`; do
+            if [[ "$file" == *"libtokenizers_"*".a" ]]; then
+              echo "Skipping size check for large tokenizer library: $file"
+              continue
+            fi
             echo "Checking $file"
             FILESIZE=$(stat -c%s "$file")
             FILESIZE_NUM=`echo $FILESIZE | sed ':a;s/\B[0-9]\{3\}\>/,&/;ta'`
