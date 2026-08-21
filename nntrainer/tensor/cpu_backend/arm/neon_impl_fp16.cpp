@@ -2248,7 +2248,7 @@ void compute_rotary_emb_value(unsigned int width, unsigned int dim,
   }
 }
 
-static __fp16 hsumq_f16(float16x8_t v) {
+[[maybe_unused]] static __fp16 hsumq_f16(float16x8_t v) {
   float16x4_t lo = vget_low_f16(v);
   float16x4_t hi = vget_high_f16(v);
   float16x4_t s4 = vadd_f16(lo, hi);
