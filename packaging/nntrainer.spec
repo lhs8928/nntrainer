@@ -93,6 +93,44 @@
 %endif # enable_fp16
 
 
+## Device-specific ARM tuning
+## The Tizen reference optflags target the oldest supported core:
+##   armv7l : -march=armv7-a -mtune=cortex-a8 -mfpu=neon -mfloat-abi=softfp -mthumb
+##   aarch64: -march=armv8-a+fp+simd+crc+crypto -mtune=cortex-a57.cortex-a53
+## A build pinned to a known newer device can raise that baseline. The value is
+## appended to CFLAGS/CXXFLAGS last in %build, so it beats both the reference
+## optflags and the -march that meson.build hardcodes for aarch64 (meson places
+## environment flags after add_project_arguments()).
+##   gbs build -A armv7l --define "arm_tune -march=armv8.2-a+dotprod -mtune=cortex-a76 -mfpu=neon-fp-armv8 -mfp16-format=ieee"
+##
+## On armv7l that exact set is what turns on the A32 dot-product kernels for
+## q4_0 in nntr_ggml_impl_fallback.cpp; without it they stay scalar:
+##   armv8.2-a       gcc rejects +dotprod on plain armv8-a for A32
+##   +dotprod        defines __ARM_FEATURE_DOTPROD, which gates the kernels
+##   neon-fp-armv8   FMA and fp16<->fp32 conversion
+##   -mfp16-format=ieee  needed for float16x4_t / the scale conversions
+## Cortex-A76 implements FEAT_DotProd at EL0 in AArch32, so VSDOT is available
+## even though the userspace is 32-bit.
+##
+## Do not put -mfloat-abi here: softfp is part of the armv7l ABI. Do not add
+## +i8mm for Cortex-A76 either; FEAT_I8MM is armv8.6-a and the core lacks it.
+## The resulting rpm no longer runs on cores below the baseline you pick.
+
+
+## HuggingFace tokenizer for the quick_ai applications
+## Applications/quick_ai/lib only carries an x86_64 libtokenizers_c.a, so a
+## Tizen ARM build cannot link it. Models that set "skip_tokenizer" -- CED and
+## the other audio classifiers -- never construct a tokenizer, so the default
+## here is off and every factory throws if one is asked for. Turn it back on
+## with --define "_with_quick_ai_tokenizer 1" once an ARM archive exists.
+%bcond_with quick_ai_tokenizer
+
+%if %{with quick_ai_tokenizer}
+%define quick_ai_tokenizer_support -Dquick_ai-tokenizer=true
+%else
+%define quick_ai_tokenizer_support -Dquick_ai-tokenizer=false
+%endif # quick_ai_tokenizer
+
 ## GPU flag
 ## To enable OpenCL, pass the flag to gbs build with: --define "_with_gpu 1"
 %bcond_with gpu
@@ -467,6 +505,12 @@ export CFLAGS+=" -march=armv8.2-a+fp16+dotprod+i8mm"
 export CXXFLAGS+=" -march=armv8.2-a+fp16+dotprod+i8mm"
 %endif
 
+# Appended last: see the arm_tune comment near the top of this spec.
+%ifarch %arm aarch64
+export CFLAGS+=" %{?arm_tune}"
+export CXXFLAGS+=" %{?arm_tune}"
+%endif
+
 # Add backward competibility for tizen < 6
 %if 0%{tizen_version_major} < 6
 ln -sf %{_includedir}/nnstreamer/nnstreamer.h %{_includedir}/nnstreamer/ml-api-common.h
@@ -494,7 +538,8 @@ meson --buildtype=plain --prefix=%{_prefix} --sysconfdir=%{_sysconfdir} \
       %{enable_reduce_tolerance} %{configure_subplugin_install_path} %{enable_debug} \
       -Dml-api-support=enabled -Denable-nnstreamer-tensor-filter=enabled \
       -Denable-nnstreamer-tensor-trainer=enabled -Denable-capi=enabled \
-      %{fp16_support} %{opencl_support} build --wrap-mode=nodownload
+      %{fp16_support} %{opencl_support} %{quick_ai_tokenizer_support} \
+      build --wrap-mode=nodownload
 
 ninja -C build %{?_smp_mflags}
 
