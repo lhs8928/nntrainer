@@ -74,6 +74,50 @@ inline void expandFp16(const uint16_t *src, float *dst, int n) {
 }
 
 /**
+ * @brief Dot product of an FP32 vector with a half-precision one.
+ *
+ * The cache is only read once per dot, so widening it into a scratch buffer
+ * first costs a store and a reload of every value for nothing. Converting a
+ * vector at a time straight into the multiply keeps it in registers.
+ */
+inline float dotFp32Fp16(const float *a, const uint16_t *h, int n) {
+  int i = 0;
+  float sum = 0.0f;
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+  float32x4_t acc0 = vdupq_n_f32(0.0f), acc1 = vdupq_n_f32(0.0f);
+  for (; i + 8 <= n; i += 8) {
+    acc0 = vmlaq_f32(acc0, vld1q_f32(a + i),
+                     vcvt_f32_f16(vld1_f16((const __fp16 *)(h + i))));
+    acc1 = vmlaq_f32(acc1, vld1q_f32(a + i + 4),
+                     vcvt_f32_f16(vld1_f16((const __fp16 *)(h + i + 4))));
+  }
+  for (; i + 4 <= n; i += 4)
+    acc0 = vmlaq_f32(acc0, vld1q_f32(a + i),
+                     vcvt_f32_f16(vld1_f16((const __fp16 *)(h + i))));
+  sum = vaddvq_f32(vaddq_f32(acc0, acc1));
+#endif
+  for (; i < n; ++i)
+    sum += a[i] * nntrainer::compute_fp16_to_fp32(h[i]);
+  return sum;
+}
+
+/**
+ * @brief `acc[0..n) += scale * fp32(h[0..n))`.
+ */
+inline void axpyFp16(float *acc, const uint16_t *h, float scale, int n) {
+  int i = 0;
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+  const float32x4_t s = vdupq_n_f32(scale);
+  for (; i + 4 <= n; i += 4)
+    vst1q_f32(acc + i,
+              vmlaq_f32(vld1q_f32(acc + i),
+                        vcvt_f32_f16(vld1_f16((const __fp16 *)(h + i))), s));
+#endif
+  for (; i < n; ++i)
+    acc[i] += scale * nntrainer::compute_fp16_to_fp32(h[i]);
+}
+
+/**
  * @brief Dot product of two FP32 vectors.
  */
 inline float dotFp32(const float *a, const float *b, int n) {
@@ -807,21 +851,31 @@ void __fallback_compute_fp16vcache_fp32_transposed(
   const bool windowed = (size_t)row_num >= local_window_size;
   const int first_row = windowed ? row_num + 1 - (int)local_window_size : 0;
 
-  std::vector<float> v_row(head_dim);
+  // Same reasoning as compute_kcaches: one query per KV head means the widened
+  // row would be used once.
+  std::vector<float> v_row;
+  if (gqa_size > 1)
+    v_row.resize(head_dim);
 
   for (int n = head_start; n < actual_head_end; ++n) {
     float *out_head = output + (size_t)n * gqa_size * head_dim;
     std::fill(out_head, out_head + (size_t)gqa_size * head_dim, 0.0f);
 
     for (int j = first_row; j <= row_num; ++j) {
-      expandFp16(vcache + (size_t)(j * num_cache_head + n) * head_dim,
-                 v_row.data(), head_dim);
+      const uint16_t *vrow =
+        vcache + (size_t)(j * num_cache_head + n) * head_dim;
+      if (gqa_size > 1)
+        expandFp16(vrow, v_row.data(), head_dim);
       const size_t a_row = (size_t)(j - first_row);
       for (int h = 0; h < gqa_size; ++h) {
         const float a_val =
           in[a_row * (size_t)(gqa_size * num_cache_head) +
              (size_t)(n * gqa_size) + h];
-        axpyFp32(out_head + (size_t)h * head_dim, v_row.data(), a_val, head_dim);
+        if (gqa_size > 1)
+          axpyFp32(out_head + (size_t)h * head_dim, v_row.data(), a_val,
+                   head_dim);
+        else
+          axpyFp16(out_head, vrow, a_val, head_dim);
       }
     }
   }
@@ -846,23 +900,34 @@ void __fallback_compute_kcaches(const float *in, const uint16_t *kcache,
   const int row_cnt = windowed ? (int)local_window_size : num_rows;
 
   const float inv_sqrt_dim = 1.0f / std::sqrt((float)head_dim);
-  std::vector<float> k_row(head_dim);
 
   // tile_size only changes the traversal order, not the result: every (row,
   // head, group) triple is visited exactly once either way, so the loop is
   // flat here and tile_size is accepted for signature compatibility.
   (void)tile_size;
 
+  // With one query per KV head the cache row feeds exactly one dot product, so
+  // it is widened inside the multiply. Grouped-query attention reuses it
+  // gqa_size times and is better off widening once into a buffer.
+  std::vector<float> k_row;
+  if (gqa_size > 1)
+    k_row.resize(head_dim);
+
   for (int n = head_start; n < actual_head_end; ++n) {
     for (int r = 0; r < row_cnt; ++r) {
       const int row = start_row + r;
-      expandFp16(kcache + (size_t)(row * num_cache_head + n) * head_dim,
-                 k_row.data(), head_dim);
+      const uint16_t *krow =
+        kcache + (size_t)(row * num_cache_head + n) * head_dim;
+      if (gqa_size > 1)
+        expandFp16(krow, k_row.data(), head_dim);
       for (int g = 0; g < gqa_size; ++g) {
         const float *in_ptr =
           in + (size_t)n * gqa_size * head_dim + (size_t)g * head_dim;
+        const float d = gqa_size > 1
+                          ? dotFp32(in_ptr, k_row.data(), head_dim)
+                          : dotFp32Fp16(in_ptr, krow, head_dim);
         output[(size_t)r * num_cache_head * gqa_size + (size_t)n * gqa_size +
-               g] = dotFp32(in_ptr, k_row.data(), head_dim) * inv_sqrt_dim;
+               g] = d * inv_sqrt_dim;
       }
     }
   }
