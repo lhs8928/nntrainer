@@ -34,6 +34,9 @@
 
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
 #include <arm_neon.h>
+#if defined(ARMV7) && ARMV7
+#include <armv7_neon.h>
+#endif
 #endif
 
 namespace nntrainer {

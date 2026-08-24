@@ -302,39 +302,23 @@ void CedTransformer::run(const WSTR prompt, bool do_sample,
 }
 
 /**
- * @brief Run a batch of mel windows through the graph.
+ * @brief Run one mel window through the graph.
  *
- * @param mels  windows laid out contiguously, [windows][n_mels * frames]
- * @param count number of windows in the buffer
- * @return raw head output, [count][NUM_CLASSES]
- *
- * All windows go through in a single call on purpose. incremental_inference
- * re-runs allocateTensors() whenever `from` is 0, so calling it once per window
- * re-plans the tensor pool on every window and aborts on the second one; one
- * batched call plans once. Memory therefore scales with the clip length, which
- * is fine for the clip-at-a-time usage this runner targets.
+ * @param mel  one window, [n_mels * frames]
+ * @param out  raw head output for this window, NUM_CLASSES floats
  */
-std::vector<float> CedTransformer::inferWindows(std::vector<float> &mels,
-                                                unsigned int count) {
-  std::vector<float> all(static_cast<size_t>(count) * NUM_CLASSES);
-  const size_t mel_len =
-    static_cast<size_t>(INPUT_HEIGHT) * static_cast<size_t>(INPUT_WIDTH);
+void CedTransformer::inferWindow(std::vector<float> &mel, float *out) {
+  // Each window is an independent clip, so the attention caches must start
+  // from position 0 again; without this they keep advancing across windows
+  // and run past max_timestep.
+  resetAttentionCache();
 
-  for (unsigned int i = 0; i < count; ++i) {
-    // Each window is an independent clip, so the attention caches must start
-    // from position 0 again; without this they keep advancing across windows
-    // and run past max_timestep.
-    resetAttentionCache();
-
-    std::vector<float *> input{mels.data() + static_cast<size_t>(i) * mel_len};
-    std::vector<float *> label;
-    std::vector<float *> output = model->incremental_inference(
-      BATCH_SIZE, input, label, NUM_PATCHES, 0, NUM_PATCHES, false);
-    std::copy(output[0], output[0] + NUM_CLASSES,
-              all.begin() + static_cast<size_t>(i) * NUM_CLASSES);
-    delete[] output[0];
-  }
-  return all;
+  std::vector<float *> input{mel.data()};
+  std::vector<float *> label;
+  std::vector<float *> output = model->incremental_inference(
+    BATCH_SIZE, input, label, NUM_PATCHES, 0, NUM_PATCHES, false);
+  std::copy(output[0], output[0] + NUM_CLASSES, out);
+  delete[] output[0];
 }
 
 /**
@@ -359,10 +343,10 @@ void CedTransformer::resetAttentionCache() {
  * diffed directly.
  */
 void CedTransformer::runAudioFile(const std::string &path) {
-  const audio::Waveform wav = audio::readWav16(path, NORMALIZE_DIVISOR);
-  if (wav.sample_rate != FRONT_END.sample_rate) {
+  audio::WavStream wav(path, NORMALIZE_DIVISOR);
+  if (wav.sampleRate() != FRONT_END.sample_rate) {
     throw std::runtime_error(
-      "wav sample rate is " + std::to_string(wav.sample_rate) +
+      "wav sample rate is " + std::to_string(wav.sampleRate()) +
       " but the model expects " + std::to_string(FRONT_END.sample_rate) +
       "; resampling is not part of this port, please resample beforehand");
   }
@@ -386,9 +370,10 @@ void CedTransformer::runAudioFile(const std::string &path) {
   // Window count is known up front, so the header can be printed before the
   // first inference and each row streamed as it is produced.
   const unsigned int total =
-    wav.samples.size() >= WINDOW_SAMPLES
-      ? static_cast<unsigned int>(
-          (wav.samples.size() - WINDOW_SAMPLES) / STRIDE_SAMPLES + 1)
+    wav.frames() >= WINDOW_SAMPLES
+      ? static_cast<unsigned int>((wav.frames() - WINDOW_SAMPLES) /
+                                    STRIDE_SAMPLES +
+                                  1)
       : 0u;
   // AD_JSON switches to the reference runtime's machine-readable stream; the
   // human-readable table stays the default.
@@ -402,30 +387,39 @@ void CedTransformer::runAudioFile(const std::string &path) {
   double frontend_ms = 0.0;
   double infer_ms = 0.0;
 
-  // Front-end first for every window, then one batched inference.
+  // One window at a time: the front-end writes into a single reused buffer and
+  // the window is inferred before the next one is computed. Holding every
+  // window's mel first made the front-end buffer O(clip length) -- 64 x 301
+  // floats per window, so ~1.9 MB for a 27 s clip and unbounded for a stream --
+  // for no benefit, since inferWindows already ran one incremental_inference
+  // per window.
   const size_t mel_len =
     static_cast<size_t>(INPUT_HEIGHT) * static_cast<size_t>(INPUT_WIDTH);
-  std::vector<float> mels(static_cast<size_t>(total) * mel_len);
-  const auto fe_start = clock::now();
+  std::vector<float> mel;
+  mel.reserve(mel_len);
+  std::vector<float> samples;
+  samples.reserve(WINDOW_SAMPLES);
+  std::vector<float> scores_all(static_cast<size_t>(total) * NUM_CLASSES);
+
   for (unsigned int i = 0; i < total; ++i) {
-    std::vector<float> mel;
+    const auto fe_start = clock::now();
+    wav.window(static_cast<size_t>(i) * STRIDE_SAMPLES, WINDOW_SAMPLES,
+               samples);
     const unsigned int frames = audio::logMelSpectrogram(
-      FRONT_END, wav.samples.data() + static_cast<size_t>(i) * STRIDE_SAMPLES,
-      WINDOW_SAMPLES, mel);
+      FRONT_END, samples.data(), WINDOW_SAMPLES, mel);
     if (frames != INPUT_WIDTH) {
       throw std::runtime_error("front-end produced " + std::to_string(frames) +
                                " frames but the graph input width is " +
                                std::to_string(INPUT_WIDTH));
     }
-    std::copy(mel.begin(), mel.end(), mels.begin() + i * mel_len);
-  }
-  frontend_ms =
-    std::chrono::duration<double, std::milli>(clock::now() - fe_start).count();
+    frontend_ms +=
+      std::chrono::duration<double, std::milli>(clock::now() - fe_start).count();
 
-  const auto inf_start = clock::now();
-  std::vector<float> scores_all = inferWindows(mels, total);
-  infer_ms =
-    std::chrono::duration<double, std::milli>(clock::now() - inf_start).count();
+    const auto inf_start = clock::now();
+    inferWindow(mel, scores_all.data() + static_cast<size_t>(i) * NUM_CLASSES);
+    infer_ms +=
+      std::chrono::duration<double, std::milli>(clock::now() - inf_start).count();
+  }
 
   // The graph applies the sigmoid only for the plain-average pooling modes;
   // otherwise it belongs to post-processing, as in the reference.
@@ -536,7 +530,7 @@ void CedTransformer::runAudioFile(const std::string &path) {
   }
 
   const double audio_ms =
-    1000.0 * static_cast<double>(wav.samples.size()) / FRONT_END.sample_rate;
+    1000.0 * static_cast<double>(wav.frames()) / FRONT_END.sample_rate;
   std::cout << std::fixed << std::setprecision(2)
             << "[AD_TIME] windows=" << total << " frontend=" << frontend_ms
             << "ms infer=" << infer_ms

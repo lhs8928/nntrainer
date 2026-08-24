@@ -20,6 +20,12 @@
 #include <cstring>
 #include <fallback_internal.h>
 #include <fp16.h>
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+#if defined(ARMV7) && ARMV7
+#include <armv7_neon.h>
+#endif
+#endif
 #include <limits>
 #include <nntr_ggml_impl.h>
 #include <q4_0_utils.h>
@@ -45,6 +51,65 @@
     }                                                                          \
   } while (0);
 namespace nntrainer {
+
+namespace {
+
+/**
+ * @brief Expand `n` half-precision values into FP32.
+ *
+ * The KV cache is stored as raw fp16 bit patterns in a uint16_t array, which
+ * is how it reaches this file on a target without _FP16. AArch32 with
+ * -mfpu=neon-fp-armv8 still has the VCVT.F32.F16 conversion instruction even
+ * though it cannot do fp16 *arithmetic*, so the cache stays half-sized in
+ * memory and only widens a vector at a time on the way into the dot product.
+ */
+inline void expandFp16(const uint16_t *src, float *dst, int n) {
+  int i = 0;
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+  for (; i + 4 <= n; i += 4)
+    vst1q_f32(dst + i, vcvt_f32_f16(vld1_f16((const __fp16 *)(src + i))));
+#endif
+  for (; i < n; ++i)
+    dst[i] = nntrainer::compute_fp16_to_fp32(src[i]);
+}
+
+/**
+ * @brief Dot product of two FP32 vectors.
+ */
+inline float dotFp32(const float *a, const float *b, int n) {
+  int i = 0;
+  float sum = 0.0f;
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+  float32x4_t acc0 = vdupq_n_f32(0.0f), acc1 = vdupq_n_f32(0.0f);
+  for (; i + 8 <= n; i += 8) {
+    acc0 = vmlaq_f32(acc0, vld1q_f32(a + i), vld1q_f32(b + i));
+    acc1 = vmlaq_f32(acc1, vld1q_f32(a + i + 4), vld1q_f32(b + i + 4));
+  }
+  for (; i + 4 <= n; i += 4)
+    acc0 = vmlaq_f32(acc0, vld1q_f32(a + i), vld1q_f32(b + i));
+  sum = vaddvq_f32(vaddq_f32(acc0, acc1));
+#endif
+  for (; i < n; ++i)
+    sum += a[i] * b[i];
+  return sum;
+}
+
+/**
+ * @brief `acc[0..n) += scale * v[0..n)`.
+ */
+inline void axpyFp32(float *acc, const float *v, float scale, int n) {
+  int i = 0;
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+  const float32x4_t s = vdupq_n_f32(scale);
+  for (; i + 4 <= n; i += 4)
+    vst1q_f32(acc + i, vmlaq_f32(vld1q_f32(acc + i), vld1q_f32(v + i), s));
+#endif
+  for (; i < n; ++i)
+    acc[i] += scale * v[i];
+}
+
+} // namespace
+
 
 /**
  * @brief struct of q4_0x8 block
@@ -675,20 +740,91 @@ void __fallback_unpack_q4_0_8_to_q4_0(const void *in_q4_0x, void *out_q4_0,
 
 void __fallback_softmax_row_inplace(float *qk_out, size_t start_row,
                                     size_t end_row, size_t num_heads) {
-  throw std::runtime_error("NYI : __fallback_softmax_row_inplace");
+  if (start_row >= end_row || num_heads == 0)
+    return;
+
+  // Softmax runs down the rows, independently per head: qk_out is
+  // [row][head] and the reduction is over rows, so every pass walks the rows
+  // and keeps one accumulator per head.
+  std::vector<float> max_vals(num_heads);
+  std::memcpy(max_vals.data(), qk_out + start_row * num_heads,
+              num_heads * sizeof(float));
+
+  for (size_t r = start_row + 1; r < end_row; ++r) {
+    const float *row = qk_out + num_heads * r;
+    size_t c = 0;
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+    for (; c + 4 <= num_heads; c += 4)
+      vst1q_f32(max_vals.data() + c,
+                vmaxq_f32(vld1q_f32(max_vals.data() + c), vld1q_f32(row + c)));
+#endif
+    for (; c < num_heads; ++c)
+      max_vals[c] = std::max(max_vals[c], row[c]);
+  }
+
+  std::vector<float> sum_vals(num_heads, 0.0f);
+  for (size_t r = start_row; r < end_row; ++r) {
+    float *row = qk_out + num_heads * r;
+    for (size_t c = 0; c < num_heads; ++c) {
+      const float e = std::exp(row[c] - max_vals[c]);
+      row[c] = e;
+      sum_vals[c] += e;
+    }
+  }
+
+  for (size_t c = 0; c < num_heads; ++c)
+    sum_vals[c] = sum_vals[c] > 0.0f ? 1.0f / sum_vals[c] : 0.0f;
+
+  for (size_t r = start_row; r < end_row; ++r) {
+    float *row = qk_out + num_heads * r;
+    size_t c = 0;
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+    for (; c + 4 <= num_heads; c += 4)
+      vst1q_f32(row + c,
+                vmulq_f32(vld1q_f32(row + c), vld1q_f32(sum_vals.data() + c)));
+#endif
+    for (; c < num_heads; ++c)
+      row[c] *= sum_vals[c];
+  }
 }
 
 void __fallback_softmax_row(float *qk_out, size_t start_row, size_t end_row,
                             size_t num_heads) {
-  throw std::runtime_error("NYI : __fallback_softmax_row");
+  __fallback_softmax_row_inplace(qk_out, start_row, end_row, num_heads);
 }
 
 void __fallback_compute_fp16vcache_fp32_transposed(
   int row_num, const float *in, const uint16_t *vcache, float *output,
   int num_cache_head, int gqa_size, int head_dim, size_t local_window_size,
   int head_start, int head_end) {
-  throw std::runtime_error(
-    "NYI : __fallback_compute_fp16vcache_fp32_transposed");
+  const int actual_head_end = (head_end < 0) ? num_cache_head : head_end;
+  NNTR_THROW_IF(head_start >= actual_head_end, std::invalid_argument)
+    << "head_start (" << head_start << ") must be less than head_end ("
+    << actual_head_end << ")";
+
+  // Under a local window the attention weights in `in` are indexed from the
+  // first row still inside the window, not from row 0.
+  const bool windowed = (size_t)row_num >= local_window_size;
+  const int first_row = windowed ? row_num + 1 - (int)local_window_size : 0;
+
+  std::vector<float> v_row(head_dim);
+
+  for (int n = head_start; n < actual_head_end; ++n) {
+    float *out_head = output + (size_t)n * gqa_size * head_dim;
+    std::fill(out_head, out_head + (size_t)gqa_size * head_dim, 0.0f);
+
+    for (int j = first_row; j <= row_num; ++j) {
+      expandFp16(vcache + (size_t)(j * num_cache_head + n) * head_dim,
+                 v_row.data(), head_dim);
+      const size_t a_row = (size_t)(j - first_row);
+      for (int h = 0; h < gqa_size; ++h) {
+        const float a_val =
+          in[a_row * (size_t)(gqa_size * num_cache_head) +
+             (size_t)(n * gqa_size) + h];
+        axpyFp32(out_head + (size_t)h * head_dim, v_row.data(), a_val, head_dim);
+      }
+    }
+  }
 }
 
 template <>
@@ -697,7 +833,39 @@ void __fallback_compute_kcaches(const float *in, const uint16_t *kcache,
                                 int head_dim, int gqa_size, int tile_size,
                                 size_t local_window_size, int head_start,
                                 int head_end) {
-  throw std::runtime_error("NYI : __fallback_compute_kcaches");
+  const int actual_head_end = (head_end < 0) ? num_cache_head : head_end;
+  NNTR_THROW_IF(head_start >= actual_head_end, std::invalid_argument)
+    << "head_start (" << head_start << ") must be less than head_end ("
+    << actual_head_end << ")";
+
+  // local_window_size defaults to UINT_MAX, so the comparison has to stay in
+  // the unsigned domain: narrowing it to int first turns the sentinel into -1
+  // and inverts every one of these tests.
+  const bool windowed = (size_t)num_rows >= local_window_size;
+  const int start_row = windowed ? num_rows - (int)local_window_size : 0;
+  const int row_cnt = windowed ? (int)local_window_size : num_rows;
+
+  const float inv_sqrt_dim = 1.0f / std::sqrt((float)head_dim);
+  std::vector<float> k_row(head_dim);
+
+  // tile_size only changes the traversal order, not the result: every (row,
+  // head, group) triple is visited exactly once either way, so the loop is
+  // flat here and tile_size is accepted for signature compatibility.
+  (void)tile_size;
+
+  for (int n = head_start; n < actual_head_end; ++n) {
+    for (int r = 0; r < row_cnt; ++r) {
+      const int row = start_row + r;
+      expandFp16(kcache + (size_t)(row * num_cache_head + n) * head_dim,
+                 k_row.data(), head_dim);
+      for (int g = 0; g < gqa_size; ++g) {
+        const float *in_ptr =
+          in + (size_t)n * gqa_size * head_dim + (size_t)g * head_dim;
+        output[(size_t)r * num_cache_head * gqa_size + (size_t)n * gqa_size +
+               g] = dotFp32(in_ptr, k_row.data(), head_dim) * inv_sqrt_dim;
+      }
+    }
+  }
 }
 
 void __fallback_compute_rotary_emb_value(unsigned int width, unsigned int dim,

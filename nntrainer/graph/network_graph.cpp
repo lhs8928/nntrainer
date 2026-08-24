@@ -395,6 +395,42 @@ void NetworkGraph::applyGradients(
   }
 }
 
+
+namespace {
+/**
+ * @brief Print a per-layer output fingerprint when NNTR_DUMP_LAYERS is set.
+ *
+ * Cross-checking a port (armv7l against x86, say) needs the first layer whose
+ * output diverges, not the final logits. Only FP32 outputs are summarised;
+ * anything else prints its type so the gap in the trace is visible.
+ */
+void dumpLayerOutput(const std::shared_ptr<nntrainer::LayerNode> &ln) {
+  static const bool on = std::getenv("NNTR_DUMP_LAYERS") != nullptr;
+  if (!on)
+    return;
+  for (unsigned int i = 0; i < ln->getNumOutputs(); ++i) {
+    const nntrainer::Tensor &t = ln->getOutput(i);
+    if (t.getDataType() != nntrainer::TensorDim::DataType::FP32) {
+      printf("[LDUMP] %-34s out%u dtype=%d\n", ln->getName().c_str(), i,
+             (int)t.getDataType());
+      continue;
+    }
+    const float *d = t.getData<float>();
+    const size_t n = t.size();
+    double sum = 0.0, sumsq = 0.0, mn = 1e300, mx = -1e300;
+    for (size_t k = 0; k < n; ++k) {
+      sum += d[k];
+      sumsq += (double)d[k] * d[k];
+      mn = std::min(mn, (double)d[k]);
+      mx = std::max(mx, (double)d[k]);
+    }
+    printf("[LDUMP] %-34s out%u n=%-7zu mean=%+.6f rms=%.6f min=%+.6f "
+           "max=%+.6f\n",
+           ln->getName().c_str(), i, n, sum / n, std::sqrt(sumsq / n), mn, mx);
+  }
+}
+} // namespace
+
 sharedConstTensors NetworkGraph::forwarding(
   bool training,
   std::function<void(std::shared_ptr<LayerNode>, bool)> forwarding_op,
@@ -404,6 +440,7 @@ sharedConstTensors NetworkGraph::forwarding(
     PROFILE_TIME_START(profile_keys.at(ln->getType()));
     forwarding_op(*iter, training);
     PROFILE_TIME_END(profile_keys.at(ln->getType()));
+    dumpLayerOutput(ln);
   }
 
   sharedConstTensors out;
@@ -429,6 +466,7 @@ sharedConstTensors NetworkGraph::incremental_forwarding(
     PROFILE_TIME_START(profile_keys.at(ln->getType()));
     forwarding_op(*iter, training);
     PROFILE_TIME_END(profile_keys.at(ln->getType()));
+    dumpLayerOutput(ln);
   }
 
   sharedConstTensors out;

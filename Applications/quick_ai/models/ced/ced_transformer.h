@@ -77,10 +77,9 @@ protected:
 
 private:
   /**
-   * @brief Run a batch of already-computed mel windows and return the raw
-   * head output for each.
+   * @brief Run one already-computed mel window and write its raw head output.
    */
-  std::vector<float> inferWindows(std::vector<float> &mels, unsigned int count);
+  void inferWindow(std::vector<float> &mel, float *out);
 
   /**
    * @brief Rewind every attention layer's KV cache write position to 0.

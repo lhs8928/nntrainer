@@ -15,6 +15,7 @@
 #define __CED_AUDIO_FRONTEND_H__
 
 #include <cstdint>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -75,6 +76,43 @@ struct Waveform {
  * @throw std::runtime_error on an unreadable or unsupported file
  */
 Waveform readWav16(const std::string &path, float divisor = 32768.0f);
+
+/**
+ * @brief A 16-bit PCM RIFF/WAVE file read one window at a time.
+ *
+ * readWav16 decodes the whole file, which costs 4 bytes per frame for as long
+ * as the clip lasts -- 1.7 MB for 27 s, and unbounded for a live stream. A
+ * sliding-window detector only ever looks at WINDOW_SAMPLES at once, so this
+ * keeps the file open and pulls each window on demand: the resident cost stops
+ * depending on the clip length.
+ */
+class WavStream {
+public:
+  /**
+   * @brief Open a file and locate its data chunk.
+   * @throw std::runtime_error on an unreadable or unsupported file
+   */
+  WavStream(const std::string &path, float divisor = 32768.0f);
+
+  /**
+   * @brief Decode `count` frames starting at frame `from` as mono float.
+   * @param out resized to `count`; reused across calls
+   */
+  void window(size_t from, size_t count, std::vector<float> &out);
+
+  unsigned int sampleRate() const { return sample_rate_; }
+  unsigned int channels() const { return channels_; }
+  size_t frames() const { return frames_; }
+
+private:
+  std::ifstream f_;
+  std::vector<int16_t> pcm_;   /**< scratch for the current window */
+  std::streamoff data_off_ = 0;
+  unsigned int sample_rate_ = 0;
+  unsigned int channels_ = 0;
+  size_t frames_ = 0;
+  float inv_ = 1.0f;
+};
 
 /**
  * @brief Number of frames the front-end produces for a given sample count.

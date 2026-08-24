@@ -67,6 +67,17 @@ static inline float vmaxvq_f32(float32x4_t a) {
 }
 
 /**
+ * @brief vaddvq_s32
+ *
+ * @param a input vector
+ * @return int32_t horizontal sum of the four lanes
+ */
+static inline int32_t vaddvq_s32(int32x4_t a) {
+  const int32x2_t p = vpadd_s32(vget_low_s32(a), vget_high_s32(a));
+  return vget_lane_s32(vpadd_s32(p, p), 0);
+}
+
+/**
  * @brief vaddvq_f32
  *
  * @param a input vector

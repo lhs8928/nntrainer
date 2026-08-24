@@ -17,6 +17,7 @@
 #endif
 #include <compute_ops.h>
 #include <fallback_internal.h>
+#include <fp16.h>
 #include <ggml_interface.h>
 #ifndef ARMV7
 #include <kleidiai_interface.h>
@@ -149,7 +150,23 @@ void copy_fp32_u32(const unsigned int N, const float *X, uint32_t *Y) {
 }
 
 void copy_fp32_u16(const unsigned int N, const float *X, uint16_t *Y) {
-  __fallback_copy_fp32_u16(N, X, Y);
+  // A uint16_t destination for a float source means an fp16 *bit pattern*, not
+  // a numeric cast -- x86 routes the same call through avx2::copy_f32_f16.
+  // __fallback_copy_fp32_u16 does static_cast<uint16_t>, which turns every key
+  // below 1.0 into 0 and wraps every negative one. mha_core's KV cache is
+  // UINT16 whenever ENABLE_FP16 is off and is filled by exactly this copy on
+  // the !use_rope path (a ViT), so on such a build the whole attention block
+  // read back garbage. AArch64 hid it by having _FP16 and thus an FP16-typed
+  // cache that never takes this path.
+  unsigned int i = 0;
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+  // VCVT.F16.F32 exists in AArch32 too (-mfpu=neon-fp-armv8): the core cannot
+  // do fp16 arithmetic, but it can convert.
+  for (; i + 4 <= N; i += 4)
+    vst1_u16(Y + i, vreinterpret_u16_f16(vcvt_f16_f32(vld1q_f32(X + i))));
+#endif
+  for (; i < N; ++i)
+    Y[i] = compute_fp32_to_fp16(X[i]);
 }
 
 void copy_fp32_u8(const unsigned int N, const float *X, uint8_t *Y) {

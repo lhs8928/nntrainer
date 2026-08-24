@@ -153,11 +153,25 @@ void Manager::reinitialize() {
   tensor_pool.reinitialize();
 }
 
+/**
+ * @brief Report pool sizes when NNTR_POOL_REPORT is set.
+ *
+ * Peak RSS on its own does not say whether the weights or the activation
+ * working set is the thing to shrink, and the two pools are planned
+ * separately.
+ */
+static void reportPool(const char *what, TensorPool &p) {
+  if (std::getenv("NNTR_POOL_REPORT") == nullptr)
+    return;
+  printf("[POOL] %-10s %.3f MB\n", what, p.size() / 1048576.0);
+}
+
 void Manager::allocateWeights(unsigned int max_exec_order_, bool init) {
   max_exec_order = max_exec_order_;
   if (!weight_pool.isAllocated()) {
     finalizeTensorPool(weight_pool, 0, max_exec_order_);
     weight_pool.allocate(init);
+    reportPool("weights", weight_pool);
   }
 }
 
@@ -266,6 +280,7 @@ void Manager::allocateTensors(unsigned int max_exec_order_) {
   if (!tensor_pool.isAllocated()) {
     finalizeTensorPool(tensor_pool, 0, max_exec_order_);
     tensor_pool.allocate();
+    reportPool("activation", tensor_pool);
   }
 }
 

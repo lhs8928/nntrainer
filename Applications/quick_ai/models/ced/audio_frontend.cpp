@@ -20,6 +20,10 @@
 #include <limits>
 #include <stdexcept>
 
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+#endif
+
 namespace quick_ai {
 namespace audio {
 
@@ -61,7 +65,21 @@ double melToHz(double m) { return 700.0 * (std::pow(10.0, m / 2595.0) - 1.0); }
  * than shipped: this reproduces the checkpoint's stored filterbank to 5e-6,
  * which is below the float32 noise of the spectrogram itself.
  */
-std::vector<float> melFilterbank(unsigned int n_freqs, unsigned int n_mels,
+/**
+ * @brief One mel filter as a contiguous run of non-zero weights.
+ *
+ * A mel triangle only overlaps a handful of FFT bins -- for 64 mels over 257
+ * bins, 501 of the 16448 dense entries are non-zero (3%). Storing the dense
+ * matrix also forced the accumulation to walk it with an n_mels stride, so
+ * every one of those 16448 loads per frame missed. Keeping [first, first+w)
+ * per filter makes the inner loop a contiguous dot product.
+ */
+struct MelFilter {
+  unsigned int first = 0;   /**< index of the first non-zero FFT bin */
+  std::vector<float> weight; /**< weights for bins [first, first + size()) */
+};
+
+std::vector<MelFilter> melFilterbank(unsigned int n_freqs, unsigned int n_mels,
                                  unsigned int sample_rate, double f_min,
                                  double f_max) {
   std::vector<double> all_freqs(n_freqs);
@@ -75,16 +93,29 @@ std::vector<float> melFilterbank(unsigned int n_freqs, unsigned int n_mels,
   for (unsigned int i = 0; i < n_mels + 2; ++i)
     f_pts[i] = melToHz(m_min + (m_max - m_min) * i / (n_mels + 1));
 
-  std::vector<float> fb(static_cast<size_t>(n_freqs) * n_mels, 0.0f);
+  std::vector<MelFilter> fb(n_mels);
   for (unsigned int m = 0; m < n_mels; ++m) {
     const double d_lo = f_pts[m + 1] - f_pts[m];
     const double d_hi = f_pts[m + 2] - f_pts[m + 1];
+    unsigned int lo = n_freqs, hi = 0;
     for (unsigned int k = 0; k < n_freqs; ++k) {
       const double down = (all_freqs[k] - f_pts[m]) / d_lo;
       const double up = (f_pts[m + 2] - all_freqs[k]) / d_hi;
+      if (std::min(down, up) > 0.0) {
+        if (k < lo)
+          lo = k;
+        hi = k;
+      }
+    }
+    if (lo > hi)
+      continue; // filter falls entirely outside the bin grid
+    fb[m].first = lo;
+    fb[m].weight.resize(hi - lo + 1);
+    for (unsigned int k = lo; k <= hi; ++k) {
+      const double down = (all_freqs[k] - f_pts[m]) / d_lo;
+      const double up = (f_pts[m + 2] - all_freqs[k]) / d_hi;
       const double v = std::min(down, up);
-      fb[static_cast<size_t>(k) * n_mels + m] =
-        static_cast<float>(v > 0.0 ? v : 0.0);
+      fb[m].weight[k - lo] = static_cast<float>(v > 0.0 ? v : 0.0);
     }
   }
   return fb;
@@ -173,6 +204,79 @@ void fftInPlace(std::vector<float> &re, std::vector<float> &im) {
 
 } // namespace
 
+WavStream::WavStream(const std::string &path, float divisor) :
+  f_(path, std::ios::binary), inv_(1.0f / divisor) {
+  if (!f_)
+    throw std::runtime_error("Failed to open wav: " + path);
+
+  char riff[4], wave[4];
+  f_.read(riff, 4);
+  (void)readLE<uint32_t>(f_); // total size, unused
+  f_.read(wave, 4);
+  if (std::memcmp(riff, "RIFF", 4) != 0 || std::memcmp(wave, "WAVE", 4) != 0)
+    throw std::runtime_error("Not a RIFF/WAVE file: " + path);
+
+  unsigned int bits = 0;
+  bool have_fmt = false;
+
+  // Same chunk walk as readWav16: encoders routinely insert LIST/fact chunks
+  // before `data`, so the canonical 44-byte header cannot be assumed.
+  while (f_ && f_.peek() != EOF) {
+    char id[4];
+    f_.read(id, 4);
+    if (f_.gcount() != 4)
+      break;
+    const uint32_t size = readLE<uint32_t>(f_);
+    if (std::memcmp(id, "fmt ", 4) == 0) {
+      const uint16_t format = readLE<uint16_t>(f_);
+      channels_ = readLE<uint16_t>(f_);
+      sample_rate_ = readLE<uint32_t>(f_);
+      (void)readLE<uint32_t>(f_); // byte rate
+      (void)readLE<uint16_t>(f_); // block align
+      bits = readLE<uint16_t>(f_);
+      if (format != 1)
+        throw std::runtime_error("Only PCM wav is supported: " + path);
+      f_.seekg(static_cast<std::streamoff>(size) - 16, std::ios::cur);
+      have_fmt = true;
+    } else if (std::memcmp(id, "data", 4) == 0) {
+      if (!have_fmt)
+        throw std::runtime_error("wav data chunk precedes fmt: " + path);
+      if (bits != 16)
+        throw std::runtime_error("Only 16-bit PCM wav is supported: " + path);
+      if (channels_ == 0)
+        channels_ = 1;
+      data_off_ = f_.tellg();
+      frames_ = (size / 2) / channels_;
+      return;
+    } else {
+      f_.seekg(static_cast<std::streamoff>(size + (size & 1)), std::ios::cur);
+    }
+  }
+  throw std::runtime_error("No data chunk found in wav: " + path);
+}
+
+void WavStream::window(size_t from, size_t count, std::vector<float> &out) {
+  out.resize(count);
+  if (count == 0)
+    return;
+  const size_t avail = from < frames_ ? frames_ - from : 0;
+  const size_t take = std::min(count, avail);
+
+  pcm_.resize(take * channels_);
+  if (take) {
+    f_.clear();
+    f_.seekg(data_off_ +
+             static_cast<std::streamoff>(from * channels_ * sizeof(int16_t)));
+    f_.read(reinterpret_cast<char *>(pcm_.data()),
+            static_cast<std::streamsize>(take * channels_ * sizeof(int16_t)));
+    for (size_t i = 0; i < take; ++i)
+      out[i] = static_cast<float>(pcm_[i * channels_]) * inv_;
+  }
+  // A window that runs past the end is zero-padded, which is what a decoded
+  // buffer would give a caller that read past its length.
+  std::fill(out.begin() + static_cast<std::ptrdiff_t>(take), out.end(), 0.0f);
+}
+
 Waveform readWav16(const std::string &path, float divisor) {
   std::ifstream f(path, std::ios::binary);
   if (!f)
@@ -217,15 +321,25 @@ Waveform readWav16(const std::string &path, float divisor) {
       if (!have_fmt)
         throw std::runtime_error("wav data chunk precedes fmt: " + path);
       const size_t n_total = size / 2;
-      std::vector<int16_t> pcm(n_total);
-      f.read(reinterpret_cast<char *>(pcm.data()),
-             static_cast<std::streamsize>(n_total * 2));
       const unsigned int ch = wav.channels ? wav.channels : 1;
       wav.samples.resize(n_total / ch);
       // Match the reference: take channel 0, then scale the int16.
       const float inv = 1.0f / divisor;
-      for (size_t i = 0; i < wav.samples.size(); ++i)
-        wav.samples[i] = static_cast<float>(pcm[i * ch]) * inv;
+
+      // Read in chunks rather than slurping the whole file into an int16
+      // buffer first: for a 27 s clip that buffer is 0.86 MB alive at the same
+      // time as the 1.7 MB float result, and both grow with the clip.
+      constexpr size_t kChunkFrames = 8192;
+      std::vector<int16_t> pcm(kChunkFrames * ch);
+      size_t done = 0;
+      while (done < wav.samples.size()) {
+        const size_t want = std::min(kChunkFrames, wav.samples.size() - done);
+        f.read(reinterpret_cast<char *>(pcm.data()),
+               static_cast<std::streamsize>(want * ch * 2));
+        for (size_t i = 0; i < want; ++i)
+          wav.samples[done + i] = static_cast<float>(pcm[i * ch]) * inv;
+        done += want;
+      }
       return wav;
     } else {
       f.seekg(static_cast<std::streamoff>(size + (size & 1)), std::ios::cur);
@@ -263,7 +377,7 @@ unsigned int logMelSpectrogram(const FrontEndConfig &cfg, const float *samples,
   }
 
   const std::vector<float> &win = hannWindow(cfg.win_size);
-  static std::vector<float> fb;
+  static std::vector<MelFilter> fb;
   static unsigned int fb_key = 0;
   const unsigned int key = n_freqs * 1000u + n_mels;
   if (fb_key != key) {
@@ -277,16 +391,49 @@ unsigned int logMelSpectrogram(const FrontEndConfig &cfg, const float *samples,
   for (unsigned int t = 0; t < frames; ++t) {
     const float *seg = x.data() + static_cast<size_t>(t) * cfg.hop_size;
     std::fill(im.begin(), im.end(), 0.0f);
-    for (unsigned int i = 0; i < n_fft; ++i)
-      re[i] = i < cfg.win_size ? seg[i] * win[i] : 0.0f;
+    {
+      const unsigned int nw = std::min(n_fft, cfg.win_size);
+      unsigned int i = 0;
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+      for (; i + 4 <= nw; i += 4)
+        vst1q_f32(re.data() + i,
+                  vmulq_f32(vld1q_f32(seg + i), vld1q_f32(win.data() + i)));
+#endif
+      for (; i < nw; ++i)
+        re[i] = seg[i] * win[i];
+      for (; i < n_fft; ++i)
+        re[i] = 0.0f;
+    }
     fftInPlace(re, im);
-    for (unsigned int k = 0; k < n_freqs; ++k)
-      power[k] = re[k] * re[k] + im[k] * im[k];
+    {
+      unsigned int k = 0;
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+      for (; k + 4 <= n_freqs; k += 4) {
+        const float32x4_t r = vld1q_f32(re.data() + k);
+        const float32x4_t m = vld1q_f32(im.data() + k);
+        vst1q_f32(power.data() + k, vmlaq_f32(vmulq_f32(r, r), m, m));
+      }
+#endif
+      for (; k < n_freqs; ++k)
+        power[k] = re[k] * re[k] + im[k] * im[k];
+    }
 
     for (unsigned int m = 0; m < n_mels; ++m) {
+      const MelFilter &f = fb[m];
+      const float *p = power.data() + f.first;
+      const float *w = f.weight.data();
+      const unsigned int n = (unsigned int)f.weight.size();
       float acc = 0.0f;
-      for (unsigned int k = 0; k < n_freqs; ++k)
-        acc += power[k] * fb[static_cast<size_t>(k) * n_mels + m];
+      unsigned int k = 0;
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+      float32x4_t v = vdupq_n_f32(0.0f);
+      for (; k + 4 <= n; k += 4)
+        v = vmlaq_f32(v, vld1q_f32(p + k), vld1q_f32(w + k));
+      float32x2_t h = vadd_f32(vget_low_f32(v), vget_high_f32(v));
+      acc = vget_lane_f32(vpadd_f32(h, h), 0);
+#endif
+      for (; k < n; ++k)
+        acc += p[k] * w[k];
       out[static_cast<size_t>(m) * frames + t] = acc;
     }
   }

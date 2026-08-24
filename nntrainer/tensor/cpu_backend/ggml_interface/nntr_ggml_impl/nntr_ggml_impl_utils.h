@@ -890,12 +890,13 @@ inline static int32x4_t vpaddq_s32(int32x4_t a, int32x4_t b) {
   return vcombine_s32(a0, b0);
 }
 
+#if not(defined(ARMV7)) || !(ARMV7)
+
+/* On ARMV7 this comes from armv7_neon.h, which int8_gemm.h also pulls in. */
 inline static int32_t vaddvq_s32(int32x4_t v) {
   return vgetq_lane_s32(v, 0) + vgetq_lane_s32(v, 1) + vgetq_lane_s32(v, 2) +
          vgetq_lane_s32(v, 3);
 }
-
-#if not(defined(ARMV7)) || !(ARMV7)
 
 inline static float vaddvq_f32(float32x4_t v) {
   return vgetq_lane_f32(v, 0) + vgetq_lane_f32(v, 1) + vgetq_lane_f32(v, 2) +

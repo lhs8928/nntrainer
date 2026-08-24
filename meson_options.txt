@@ -80,6 +80,8 @@ option('nnstreamer-subplugin-install-path', type: 'string', value: 'lib/nnstream
 
 # application related options
 option('enable-transformer', type: 'boolean', value: false)
+option('quick_ai-tokenizer', type: 'boolean', value: true,
+       description: 'link the HuggingFace tokenizer into quick_ai. The library is a prebuilt x86_64 Rust archive, so cross builds that only run models with skip_tokenizer (CED and other audio classifiers) must turn this off.')
 option('quick_ai-tokenizer-lib', type: 'string', value: '',
        description: 'Windows-only path to tokenizers_c.lib for CausalLM. The default is generated under <builddir>/tokenizers_c_win/target.')
 

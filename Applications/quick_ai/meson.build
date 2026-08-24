@@ -1,6 +1,5 @@
 quick_ai_src = [
     meson.current_source_dir() / 'chat_template.cpp',
-    meson.current_source_dir() / 'huggingface_tokenizer.cpp',
     meson.current_source_dir() / 'llm_util.cpp',
     meson.current_source_dir() / 'api' / 'callback_streamer.cpp',
     meson.current_source_dir() / 'api' / 'causal_lm_api.cpp',
@@ -56,6 +55,13 @@ elif get_option('platform') != 'tizen'
     run_command([meson.source_root() / 'jni' / 'prepare_encoder.sh', meson.build_root(), '0.2'], check: true)
 endif
 
+quick_ai_use_tokenizer = get_option('quick_ai-tokenizer')
+if quick_ai_use_tokenizer
+    quick_ai_src += meson.current_source_dir() / 'huggingface_tokenizer.cpp'
+else
+    quick_ai_src += meson.current_source_dir() / 'huggingface_tokenizer_stub.cpp'
+endif
+
 tokenizer_dependencies = []
 tokenizer_option = get_option('quick_ai-tokenizer-lib')
 tokenizer_rust_target = ''
@@ -103,7 +109,7 @@ if generate_windows_tokenizer
     )
 endif
 
-if not fs.exists(tokenizer_path)
+if quick_ai_use_tokenizer and not fs.exists(tokenizer_path)
     if get_option('platform') == 'windows'
         tokenizer_error = 'CausalLM Windows build requires tokenizers_c.lib. Run Applications\\CausalLM\\build_tokenizer_windows.ps1 -BuildDir @0@ or pass -Dquick_ai-tokenizer-lib=/path/to/tokenizers_c.lib.'
         error(tokenizer_error.format(meson.build_root()))
@@ -112,7 +118,7 @@ if not fs.exists(tokenizer_path)
     endif
 endif
 
-tokenizer_link_args = [tokenizer_path]
+tokenizer_link_args = quick_ai_use_tokenizer ? [tokenizer_path] : []
 if get_option('platform') == 'windows'
     tokenizer_link_args += [
         'bcrypt.lib',
