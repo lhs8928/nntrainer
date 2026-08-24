@@ -52,4 +52,4 @@ endif
 
 
 subdir('Optimizers/jni')
-subdir('quick_ai/models/YOLOv7/jni')
+subdir('quick_ai')
