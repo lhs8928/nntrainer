@@ -55,6 +55,7 @@
 #include "qwen3_embedding.h"
 #include "qwen3_moe_causallm.h"
 #include "qwen3_slim_moe_causallm.h"
+#include "ced/ced_transformer.h"
 #include "timm_vit/timm_vit_transformer.h"
 #include <models/gemma3/function.h>
 #if !defined(_WIN32)
@@ -317,6 +318,12 @@ int main(int argc, char *argv[]) {
     "TimmViT", [](json cfg, json generation_cfg, json nntr_cfg) {
       return std::make_unique<quick_ai::TimmViTTransformer>(cfg, generation_cfg,
                                                             nntr_cfg);
+    });
+  quick_ai::Factory::Instance().registerModel(
+    "CedForAudioClassification",
+    [](json cfg, json generation_cfg, json nntr_cfg) {
+      return std::make_unique<quick_ai::CedTransformer>(cfg, generation_cfg,
+                                                        nntr_cfg);
     });
   quick_ai::Factory::Instance().registerModel(
     "Lfm2ForCausalLM", [](json cfg, json generation_cfg, json nntr_cfg) {
