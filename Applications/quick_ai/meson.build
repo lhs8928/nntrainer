@@ -183,7 +183,11 @@ e = executable('nntr_quick_ai',
     include_directories: [quick_ai_inc, quick_ai_inc_minja_inc, quick_ai_inc_nlohmann_inc],
     dependencies: [nntrainer_dep, nntrainer_ccapi_dep, quick_ai_layer_dependencies, quick_ai_dep],
     install: get_option('install-app'),
-    install_dir: application_install_dir
+    install_dir: application_install_dir,
+    # libquick_ai.so is installed next to the executable, not in a default
+    # search path, so without this the installed binary dies with
+    # "cannot open shared object file: libquick_ai.so".
+    install_rpath: application_install_dir
 )
 
 
@@ -200,7 +204,11 @@ e_quantize = executable('nntr_quantize',
         include_directories('models/FastViTKeyword/jni')],
     dependencies: [nntrainer_dep, nntrainer_ccapi_dep, quick_ai_layer_dependencies, quick_ai_dep],
     install: get_option('install-app'),
-    install_dir: application_install_dir
+    install_dir: application_install_dir,
+    # libquick_ai.so is installed next to the executable, not in a default
+    # search path, so without this the installed binary dies with
+    # "cannot open shared object file: libquick_ai.so".
+    install_rpath: application_install_dir
 )
 
 
