@@ -182,6 +182,8 @@ e = executable('nntr_quick_ai',
     executable_src,
     include_directories: [quick_ai_inc, quick_ai_inc_minja_inc, quick_ai_inc_nlohmann_inc],
     dependencies: [nntrainer_dep, nntrainer_ccapi_dep, quick_ai_layer_dependencies, quick_ai_dep],
+    install: get_option('install-app'),
+    install_dir: application_install_dir
 )
 
 
@@ -197,6 +199,8 @@ e_quantize = executable('nntr_quantize',
         include_directories('models/FastViTKeyword'),
         include_directories('models/FastViTKeyword/jni')],
     dependencies: [nntrainer_dep, nntrainer_ccapi_dep, quick_ai_layer_dependencies, quick_ai_dep],
+    install: get_option('install-app'),
+    install_dir: application_install_dir
 )
 
 
