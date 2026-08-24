@@ -44,6 +44,7 @@ quick_ai_layer_dependencies += [
     causallm_rtmcc_head_dep,
     causallm_causal_conv1d_dep,
     causallm_custom_multiply_dep,
+    causallm_xi_pooling_dep,
 ]
 
 
