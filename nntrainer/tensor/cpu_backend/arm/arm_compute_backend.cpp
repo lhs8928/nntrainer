@@ -77,9 +77,15 @@ void tanh_gelu_v2(const unsigned int N, const float *X, float *Y) {
 
 void gelu_v2(const unsigned int N, const float *X, float *Y) {
 #ifdef __ARM_NEON
+  // The #else was missing: the NEON kernel ran and the scalar std::erf loop
+  // then overwrote every value it had just written, so the vectorization was
+  // dead code and each GELU cost a libm erf per element. On CED that was 22%
+  // of inference -- the second largest layer type after the GEMMs, for 12
+  // calls.
   nntrainer::neon::gelu_v2(N, X, Y);
-#endif
+#else
   __fallback_gelu_v2(N, X, Y);
+#endif
 }
 
 #ifdef ENABLE_FP16

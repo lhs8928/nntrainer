@@ -404,6 +404,47 @@ namespace {
  * output diverges, not the final logits. Only FP32 outputs are summarised;
  * anything else prints its type so the gap in the trace is visible.
  */
+/**
+ * @brief Accumulate wall time per layer type when NNTR_PROFILE_LAYERS is set.
+ *
+ * The model-level timers say how long inference took but not which operator
+ * spent it, and on a target where the arithmetic is 20x faster than the
+ * observed rate the answer is usually not the operator anyone was optimising.
+ * Totals print once at exit, sorted by time.
+ */
+struct LayerProfile {
+  std::map<std::string, std::pair<double, unsigned long>> by_type;
+
+  ~LayerProfile() {
+    if (by_type.empty())
+      return;
+    std::vector<std::pair<std::string, std::pair<double, unsigned long>>> v(
+      by_type.begin(), by_type.end());
+    std::sort(v.begin(), v.end(),
+              [](auto &a, auto &b) { return a.second.first > b.second.first; });
+    double total = 0.0;
+    for (auto &e : v)
+      total += e.second.first;
+    printf("\n[LPROF] %-28s %10s %9s %8s %12s\n", "layer type", "ms", "share",
+           "calls", "us/call");
+    for (auto &e : v)
+      printf("[LPROF] %-28s %10.2f %8.1f%% %8lu %12.1f\n", e.first.c_str(),
+             e.second.first, 100.0 * e.second.first / total, e.second.second,
+             1000.0 * e.second.first / (double)e.second.second);
+    printf("[LPROF] %-28s %10.2f\n", "total", total);
+  }
+};
+
+LayerProfile &layerProfile() {
+  static LayerProfile p;
+  return p;
+}
+
+bool layerProfileOn() {
+  static const bool on = std::getenv("NNTR_PROFILE_LAYERS") != nullptr;
+  return on;
+}
+
 void dumpLayerOutput(const std::shared_ptr<nntrainer::LayerNode> &ln) {
   static const bool on = std::getenv("NNTR_DUMP_LAYERS") != nullptr;
   if (!on)
@@ -438,7 +479,17 @@ sharedConstTensors NetworkGraph::forwarding(
   for (auto iter = cbegin(); iter != cend() && !stop_cb(userdata); iter++) {
     auto &ln = *iter;
     PROFILE_TIME_START(profile_keys.at(ln->getType()));
-    forwarding_op(*iter, training);
+    if (layerProfileOn()) {
+      const auto t0 = std::chrono::steady_clock::now();
+      forwarding_op(*iter, training);
+      auto &e = layerProfile().by_type[ln->getType()];
+      e.first += std::chrono::duration<double, std::milli>(
+                   std::chrono::steady_clock::now() - t0)
+                   .count();
+      e.second++;
+    } else {
+      forwarding_op(*iter, training);
+    }
     PROFILE_TIME_END(profile_keys.at(ln->getType()));
     dumpLayerOutput(ln);
   }
@@ -464,7 +515,17 @@ sharedConstTensors NetworkGraph::incremental_forwarding(
   for (auto iter = cbegin(); iter != cend() && !stop_cb(userdata); iter++) {
     auto &ln = *iter;
     PROFILE_TIME_START(profile_keys.at(ln->getType()));
-    forwarding_op(*iter, training);
+    if (layerProfileOn()) {
+      const auto t0 = std::chrono::steady_clock::now();
+      forwarding_op(*iter, training);
+      auto &e = layerProfile().by_type[ln->getType()];
+      e.first += std::chrono::duration<double, std::milli>(
+                   std::chrono::steady_clock::now() - t0)
+                   .count();
+      e.second++;
+    } else {
+      forwarding_op(*iter, training);
+    }
     PROFILE_TIME_END(profile_keys.at(ln->getType()));
     dumpLayerOutput(ln);
   }
