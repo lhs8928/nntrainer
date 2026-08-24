@@ -45,8 +45,6 @@
 #pragma GCC diagnostic pop
 #endif
 
-extern "C" void openblas_set_num_threads(int);
-
 using ml::train::createLayer;
 using ml::train::LayerHandle;
 using ml::train::Tensor;
@@ -283,8 +281,6 @@ void printPeakRSS() {
 } // namespace
 
 int main(int argc, char **argv) {
-  openblas_set_num_threads(1);
-
   if (argc > 1) {
     RES_DIR = argv[1];
   }

@@ -17,7 +17,10 @@
 #include <cstdlib>
 #include <fallback_internal.h>
 #include <ggml_interface.h>
+#ifndef ARMV7
+// KleidiAI is aarch64-only; arm/meson.build excludes it for arch == 'arm'.
 #include <kleidiai_interface.h>
+#endif
 #include <neon_impl.h>
 #include <nntrainer_error.h>
 #ifdef USE_BLAS
@@ -467,6 +470,9 @@ void rms_norm_wrt_width_fp16_intrinsic(const float *__restrict X,
   neon::rms_norm_wrt_width_fp16_intrinsic(X, Y, H, W, epsilon);
 }
 
+#ifndef ARMV7
+// The KleidiAI qsi8d32p/qsi4c32p wrappers below call into kai_interface,
+// which arm/meson.build builds only for arch != 'arm'.
 void nntr_quant_qs4c32_f32(size_t n, size_t k, size_t bl,
                            void *rhs_native_mtx_f32,
                            void *rhs_native_mtx_qs4c32) {
@@ -512,5 +518,7 @@ void nntr_gemm_qsi8d32p_qsi4c32p_packed(size_t m, size_t n, size_t k,
     m, n, k, lhs_native_mtx_f32, rhs_packed_mtx_qs4cx, dst_act_mtx_f32,
     idx_variant, transB, lower_bound, upper_bound);
 }
+#endif // !ARMV7
+
 
 } /* namespace nntrainer */

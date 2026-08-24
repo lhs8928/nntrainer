@@ -46,7 +46,13 @@
 namespace nntrainer {
 
 #ifdef __ARM_NEON
+#if defined(ARMV7) && ARMV7
+// A32 needs the compatibility shims (vmaxvq_f32, vfmaq_n_f32, ...);
+// armv7_neon.h pulls in arm_neon.h itself.
+#include <armv7_neon.h>
+#else
 #include <arm_neon.h>
+#endif
 #endif
 
 static constexpr size_t SINGLE_INOUT_IDX = 0;

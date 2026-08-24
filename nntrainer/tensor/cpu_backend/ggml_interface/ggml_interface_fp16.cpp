@@ -34,7 +34,13 @@
 #include <thread_manager.h>
 
 #if defined(__ARM_NEON)
+#if defined(ARMV7) && ARMV7
+// A32 lacks the horizontal / by-lane / zip1-zip2 forms these kernels use;
+// armv7_neon.h supplies them and pulls in arm_neon.h itself.
+#include <armv7_neon.h>
+#else
 #include <arm_neon.h>
+#endif
 #endif
 
 namespace nntrainer {

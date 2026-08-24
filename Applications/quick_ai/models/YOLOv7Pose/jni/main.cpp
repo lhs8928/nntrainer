@@ -35,8 +35,6 @@
 #include <model.h>
 #include <tensor_api.h>
 
-extern "C" void openblas_set_num_threads(int);
-
 using ml::train::createLayer;
 using ml::train::Tensor;
 using ModelHandle = std::unique_ptr<ml::train::Model>;
@@ -105,8 +103,6 @@ long peakRSSKB() {
 
 int main(int argc, char **argv) {
   auto t_start = std::chrono::steady_clock::now();
-  openblas_set_num_threads(4);
-
   std::string res_dir = (argc > 1) ? argv[1] : ".";
   std::string input_path =
     (argc > 2) ? argv[2] : res_dir + "/input_320.bin";

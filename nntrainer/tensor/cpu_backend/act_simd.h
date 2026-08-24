@@ -24,7 +24,14 @@
 #define __NNTR_ACT_SIMD_H__
 
 #if defined(__ARM_NEON)
+#if defined(ARMV7) && ARMV7
+// A32 lacks the horizontal/rounding intrinsics this header uses
+// (vmaxvq_f32, vcvtnq_s32_f32, vcvtaq_s32_f32, vpmaxq_f32, vfmaq_n_f32);
+// armv7_neon.h supplies them and pulls in arm_neon.h itself.
+#include <armv7_neon.h>
+#else
 #include <arm_neon.h>
+#endif
 #endif
 
 #include <algorithm>

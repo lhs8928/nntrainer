@@ -438,6 +438,45 @@ void nntr_gemm_q8ch_4x4_f32(int n, float *__restrict s, size_t bs,
   const int nb = n / QK8_0;
   const block_q8_0x4 *a_sbase = (const block_q8_0x4 *)vy;
   const block_q8_0x4 *b_sbase = (const block_q8_0x4 *)vx;
+#if defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+  /**
+   * A32 dot-product path. The reduction is a plain int32 accumulate over the
+   * whole of K (the per-block fp16 d fields are ignored here), so four column
+   * accumulators stay live across every block and only one scale multiply
+   * happens at the end. Both operands are 8-byte groups at
+   * qs[32*sub + r*8], which is exactly one VSDOT lane group.
+   */
+  for (int m = 0; m < nr; ++m) {
+    const block_q8_0x4 *a = a_sbase + (size_t)(m / 4) * nb;
+    const int ar = m % 4;
+    for (int j0 = 0; j0 < nc; j0 += 4) {
+      const block_q8_0x4 *b = b_sbase + (size_t)(j0 / 4) * nb;
+      int32x4_t r0 = vdupq_n_s32(0);
+      int32x4_t r1 = vdupq_n_s32(0);
+      for (int bi = 0; bi < nb; ++bi) {
+        const int8_t *aq = (const int8_t *)a[bi].qs + ar * 8;
+        const int8_t *bq = (const int8_t *)b[bi].qs;
+        for (int sub = 0; sub < 4; ++sub) {
+          int8x8_t t = vld1_s8(aq + 32 * sub);
+          int8x16_t av = vcombine_s8(t, t);
+          r0 = vdotq_s32(r0, vld1q_s8(bq + 32 * sub), av);      // cols 0-1
+          r1 = vdotq_s32(r1, vld1q_s8(bq + 32 * sub + 16), av); // cols 2-3
+        }
+      }
+      // { col0, col1, col2, col3 } once each column's two lanes are folded
+      float32x4_t acc = vcvtq_f32_s32(vpaddq_s32(r0, r1));
+      const int lanes = (nc - j0) < 4 ? (nc - j0) : 4;
+      float *out = s + (size_t)m * bs + j0;
+      if (lanes == 4) {
+        vst1q_f32(out, vmulq_n_f32(vmulq_f32(acc, vld1q_f32(w_scale + j0)),
+                                   a_scale));
+      } else {
+        for (int t2 = 0; t2 < lanes; ++t2)
+          out[t2] = a_scale * w_scale[j0 + t2] * acc[t2];
+      }
+    }
+  }
+#else
   auto int_dot = [&](const block_q8_0x4 *a, int ar, const block_q8_0x4 *b,
                      int wr) -> int32_t {
     int32_t si = 0;
@@ -456,6 +495,7 @@ void nntr_gemm_q8ch_4x4_f32(int n, float *__restrict s, size_t bs,
         a_scale * w_scale[j] *
         (float)int_dot(a, ar, b_sbase + (size_t)(j / 4) * nb, j % 4);
   }
+#endif
 }
 // PLAIN row-major int8 activation variant of nntr_gemm_q8ch_4x4_f32 (scalar).
 void nntr_gemm_q8ch_plainA_f32(int n, float *__restrict s, size_t bs,
@@ -465,6 +505,38 @@ void nntr_gemm_q8ch_plainA_f32(int n, float *__restrict s, size_t bs,
                                float a_scale, int nr, int nc) {
   const int nb = n / QK8_0;
   const block_q8_0x4 *b_sbase = (const block_q8_0x4 *)vx;
+#if defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+  // Same shape as nntr_gemm_q8ch_4x4_f32 above; A is plain row-major here, so
+  // each row's 8-byte group is simply contiguous at a[bi*32 + sub*8].
+  for (int m = 0; m < nr; ++m) {
+    const int8_t *arow = A + (size_t)m * lda;
+    for (int j0 = 0; j0 < nc; j0 += 4) {
+      const block_q8_0x4 *b = b_sbase + (size_t)(j0 / 4) * nb;
+      int32x4_t r0 = vdupq_n_s32(0);
+      int32x4_t r1 = vdupq_n_s32(0);
+      for (int bi = 0; bi < nb; ++bi) {
+        const int8_t *aq = arow + bi * 32;
+        const int8_t *bq = (const int8_t *)b[bi].qs;
+        for (int sub = 0; sub < 4; ++sub) {
+          int8x8_t t = vld1_s8(aq + sub * 8);
+          int8x16_t av = vcombine_s8(t, t);
+          r0 = vdotq_s32(r0, vld1q_s8(bq + 32 * sub), av);
+          r1 = vdotq_s32(r1, vld1q_s8(bq + 32 * sub + 16), av);
+        }
+      }
+      float32x4_t acc = vcvtq_f32_s32(vpaddq_s32(r0, r1));
+      const int lanes = (nc - j0) < 4 ? (nc - j0) : 4;
+      float *out = s + (size_t)m * bs + j0;
+      if (lanes == 4) {
+        vst1q_f32(out, vmulq_n_f32(vmulq_f32(acc, vld1q_f32(w_scale + j0)),
+                                   a_scale));
+      } else {
+        for (int t2 = 0; t2 < lanes; ++t2)
+          out[t2] = a_scale * w_scale[j0 + t2] * acc[t2];
+      }
+    }
+  }
+#else
   auto int_dot = [&](int ar, const block_q8_0x4 *b, int wr) -> int32_t {
     const int8_t *a = A + (size_t)ar * lda;
     int32_t si = 0;
@@ -480,6 +552,7 @@ void nntr_gemm_q8ch_plainA_f32(int n, float *__restrict s, size_t bs,
       s[(size_t)m * bs + j] =
         a_scale * w_scale[j] *
         (float)int_dot(m, b_sbase + (size_t)(j / 4) * nb, j % 4);
+#endif
 }
 
 //============================================================================

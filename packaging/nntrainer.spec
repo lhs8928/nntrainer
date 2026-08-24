@@ -1,5 +1,27 @@
 # Execute gbs with --define "testcoverage 1" in case that you must get unittest coverage statistics
+
+## Optional runtime dependencies
+## Both default to on, so a plain build is unchanged. A device image that does
+## not ship these can drop them; nothing in the quantized (W8A8/q4_0/q8_0)
+## inference path calls into either, so only the FP32 dense GEMM and the
+## opencv-backed preprocess_translate layer lose their acceleration:
+##   gbs build -A armv7l --define "_without_blas 1" --define "_without_opencv 1"
+## That takes libnntrainer.so's NEEDED list down to libiniparser + libc/libstdc++
+## (openblas additionally drags in libgfortran and libgomp).
+## tflite: the backbone layer and the tflite-export interpreter. Neither is on
+## any inference path for a quantized model, and they are by far the largest
+## single contributor to libnntrainer.so (measured on armv7l: 8.0 MB -> 3.0 MB
+## with both off, since the static tensorflow2-lite pulls in gemmlowp/Eigen/
+## flatbuffers and the opencv link).
+%bcond_without blas
+%bcond_without opencv
+%bcond_without tflite
+
+%if %{with blas}
 %define         use_cblas 1
+%else
+%define         use_cblas 0
+%endif
 %define         nnstreamer_filter 1
 %define         nnstreamer_trainer 1
 %define         nnstreamer_subplugin_path lib/nnstreamer
@@ -8,11 +30,20 @@
 %define         use_biqgemm 0
 %define         support_ccapi 1
 %define         support_nnstreamer_backbone 1
+%if %{with tflite}
 %define         support_tflite_backbone 1
 %define         support_tflite_interpreter 1
+%else
+%define         support_tflite_backbone 0
+%define         support_tflite_interpreter 0
+%endif
 %define         nntrainerapplicationdir %{_libdir}/nntrainer/bin
 %define         gen_input $(pwd)/test/input_gen/genInput.py
+%if %{with opencv}
 %define         support_data_augmentation_opencv 1
+%else
+%define         support_data_augmentation_opencv 0
+%endif
 %define         configure_subplugin_install_path -Dnnstreamer-subplugin-install-path=%{nnstreamer_subplugin_path}
 %bcond_with tizen
 
@@ -377,6 +408,8 @@ Summary: CLBlast as an OpenCL backend for BLAS operations in NNTrainer
 # Using cblas for Matrix calculation
 %if 0%{?use_cblas}
 %define enable_cblas -Denable-blas=true
+%else
+%define enable_cblas -Denable-blas=false
 %endif
 
 

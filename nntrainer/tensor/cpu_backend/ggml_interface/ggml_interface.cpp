@@ -14,6 +14,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
+#include <cstdlib>
 #include <ggml_interface.h>
 #include <mutex>
 #include <nntr_ggml_impl.h>
@@ -502,6 +504,7 @@ void __ggml_q8_0_q8_0_indirect_GEMM_i8a(const unsigned int M,
   const unsigned int M4c = (M + 3) / 4;
   const uint16_t d16 = nntr_compute_fp32_to_fp16(act_scale);
 
+
   // 1) Gather int8 rows 4 at a time and byte-pack to q8_0x4 (constant d).
   std::vector<char> QA((size_t)M4c * qa_4_rows_size);
   char *QA_ptr = QA.data();
@@ -959,6 +962,7 @@ void __ggml_q8ch_indirect_GEMM(const unsigned int M, const unsigned int N,
   const unsigned int M4 = M / 4;
   const unsigned int M4c = (M + 3) / 4;
   const uint16_t d16 = 0; // d ignored by the per-channel kernel
+
 
   const size_t B_step = (size_t)nb * sizeof(block_q8_0);
   const unsigned int row_chunk_size = 16, col_chunk_size = 16;
