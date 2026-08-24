@@ -163,6 +163,121 @@ inline int32_t dotI8(const int8_t *a, const int8_t *b, unsigned int len) {
 #endif
 }
 
+
+/**
+ * @brief Accumulate up to 4 activation rows against one Q8_0 weight row.
+ *
+ * `out[r]` receives the full int32 dot product of activation row r with the
+ * weight row, over all `nb` blocks.
+ *
+ * Two things matter here and neither is expressible by calling dotI8 per
+ * block. First, the accumulators stay live across the whole reduction: a
+ * per-block call has to fold its vector down to a scalar every 32 values, and
+ * for K=768 that is 24 horizontal reductions per output element instead of
+ * one. Second, the weight block is loaded once and used by every row in the
+ * tile, so a 4-row tile cuts weight traffic by four -- with M=72 the old loop
+ * re-read each weight row 72 times.
+ *
+ * The Q8_0 block is 34 bytes (fp16 scale then 32 quants), so `wq` is only
+ * 2-byte aligned. Loading it as int8 keeps the access byte-wise; an int16 or
+ * int64 typed load would let the compiler emit an alignment-qualified vld1
+ * that faults here.
+ */
+inline void dotI8Tile(const int8_t *A, size_t lda, unsigned int rows,
+                      const char *wrow, unsigned int nb, int32_t *out) {
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+  int32x4_t acc0 = vdupq_n_s32(0), acc1 = vdupq_n_s32(0);
+  int32x4_t acc2 = vdupq_n_s32(0), acc3 = vdupq_n_s32(0);
+
+  for (unsigned int b = 0; b < nb; ++b) {
+    const int8_t *wq =
+      reinterpret_cast<const int8_t *>(wrow + (size_t)b * BLOCK_BYTES + 2);
+    const int8x16_t w0 = vld1q_s8(wq);
+    const int8x16_t w1 = vld1q_s8(wq + 16);
+    const size_t off = (size_t)b * QK;
+
+#if defined(__ARM_FEATURE_DOTPROD)
+#define NNTR_I8_ROW(acc, r)                                                    \
+  do {                                                                         \
+    const int8_t *aq = A + (size_t)(r) * lda + off;                            \
+    acc = vdotq_s32(acc, vld1q_s8(aq), w0);                                     \
+    acc = vdotq_s32(acc, vld1q_s8(aq + 16), w1);                                \
+  } while (0)
+#else
+#define NNTR_I8_ROW(acc, r)                                                    \
+  do {                                                                         \
+    const int8_t *aq = A + (size_t)(r) * lda + off;                            \
+    const int8x16_t x0 = vld1q_s8(aq);                                          \
+    const int8x16_t x1 = vld1q_s8(aq + 16);                                     \
+    acc = vpadalq_s16(acc, vmull_s8(vget_low_s8(x0), vget_low_s8(w0)));         \
+    acc = vpadalq_s16(acc, vmull_s8(vget_high_s8(x0), vget_high_s8(w0)));       \
+    acc = vpadalq_s16(acc, vmull_s8(vget_low_s8(x1), vget_low_s8(w1)));         \
+    acc = vpadalq_s16(acc, vmull_s8(vget_high_s8(x1), vget_high_s8(w1)));       \
+  } while (0)
+#endif
+
+    NNTR_I8_ROW(acc0, 0);
+    if (rows > 1)
+      NNTR_I8_ROW(acc1, 1);
+    if (rows > 2)
+      NNTR_I8_ROW(acc2, 2);
+    if (rows > 3)
+      NNTR_I8_ROW(acc3, 3);
+#undef NNTR_I8_ROW
+  }
+
+  out[0] = vaddvq_s32(acc0);
+  if (rows > 1)
+    out[1] = vaddvq_s32(acc1);
+  if (rows > 2)
+    out[2] = vaddvq_s32(acc2);
+  if (rows > 3)
+    out[3] = vaddvq_s32(acc3);
+#else
+  for (unsigned int r = 0; r < rows; ++r) {
+    int32_t acc = 0;
+    for (unsigned int b = 0; b < nb; ++b) {
+      const int8_t *wq =
+        reinterpret_cast<const int8_t *>(wrow + (size_t)b * BLOCK_BYTES + 2);
+      const int8_t *aq = A + (size_t)r * lda + (size_t)b * QK;
+      for (unsigned int t = 0; t < QK; ++t)
+        acc += (int32_t)aq[t] * (int32_t)wq[t];
+    }
+    out[r] = acc;
+  }
+#endif
+}
+
+/**
+ * @brief The shared body of the two channel-wise kernels.
+ */
+inline void gemmPerChannelBody(unsigned int M, unsigned int N, unsigned int K,
+                               const int8_t *Aq, float a_scale, const void *B,
+                               const std::vector<float> &wscale, float *C) {
+  const unsigned int nb = K / QK;
+  const char *wbase = static_cast<const char *>(B);
+  auto &tm = ThreadManager::Global();
+  tm.parallel_for(0, N, [&](size_t n) {
+    const char *wrow = wbase + (size_t)n * nb * BLOCK_BYTES;
+    const float s = a_scale * wscale[n];
+    int32_t acc[4];
+    unsigned int m = 0;
+    for (; m + 4 <= M; m += 4) {
+      dotI8Tile(Aq + (size_t)m * K, K, 4, wrow, nb, acc);
+      C[(size_t)m * N + n] = (float)acc[0] * s;
+      C[(size_t)(m + 1) * N + n] = (float)acc[1] * s;
+      C[(size_t)(m + 2) * N + n] = (float)acc[2] * s;
+      C[(size_t)(m + 3) * N + n] = (float)acc[3] * s;
+    }
+    if (m < M) {
+      const unsigned int rem = M - m;
+      dotI8Tile(Aq + (size_t)m * K, K, rem, wrow, nb, acc);
+      for (unsigned int r = 0; r < rem; ++r)
+        C[(size_t)(m + r) * N + n] = (float)acc[r] * s;
+    }
+  });
+}
+
 /**
  * @brief Quantize a whole activation block with one shared scale.
  *
@@ -210,23 +325,7 @@ inline bool gemmPerChannelA8(unsigned int M, unsigned int N, unsigned int K,
   const float a_scale = quantizeActivation(A, (size_t)M * K, scratch);
   const int8_t *Aq = scratch.data();
 
-  const unsigned int nb = K / QK;
-  const char *wbase = static_cast<const char *>(B);
-  auto &tm = ThreadManager::Global();
-  tm.parallel_for(0, N, [&](size_t n) {
-    const char *wrow = wbase + (size_t)n * nb * BLOCK_BYTES;
-    const float s = a_scale * w.scale[n];
-    for (unsigned int m = 0; m < M; ++m) {
-      const int8_t *a = Aq + (size_t)m * K;
-      int32_t acc = 0;
-      for (unsigned int b = 0; b < nb; ++b) {
-        const int8_t *wq =
-          reinterpret_cast<const int8_t *>(wrow + (size_t)b * BLOCK_BYTES + 2);
-        acc += dotI8(a + (size_t)b * QK, wq, QK);
-      }
-      C[(size_t)m * N + n] = (float)acc * s;
-    }
-  });
+  gemmPerChannelBody(M, N, K, Aq, a_scale, B, w.scale, C);
   return true;
 }
 
@@ -249,23 +348,7 @@ inline bool gemmPerChannelA8_q8in(unsigned int M, unsigned int N, unsigned int K
   if (!w.usable)
     return false;
 
-  const unsigned int nb = K / QK;
-  const char *wbase = static_cast<const char *>(B);
-  auto &tm = ThreadManager::Global();
-  tm.parallel_for(0, N, [&](size_t n) {
-    const char *wrow = wbase + (size_t)n * nb * BLOCK_BYTES;
-    const float s = a_scale * w.scale[n];
-    for (unsigned int m = 0; m < M; ++m) {
-      const int8_t *a = Aq + (size_t)m * K;
-      int32_t acc = 0;
-      for (unsigned int b = 0; b < nb; ++b) {
-        const int8_t *wq =
-          reinterpret_cast<const int8_t *>(wrow + (size_t)b * BLOCK_BYTES + 2);
-        acc += dotI8(a + (size_t)b * QK, wq, QK);
-      }
-      C[(size_t)m * N + n] = (float)acc * s;
-    }
-  });
+  gemmPerChannelBody(M, N, K, Aq, a_scale, B, w.scale, C);
   return true;
 }
 
