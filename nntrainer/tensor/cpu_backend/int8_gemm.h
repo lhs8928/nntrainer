@@ -165,7 +165,30 @@ inline int32_t dotI8(const int8_t *a, const int8_t *b, unsigned int len) {
 
 
 /**
- * @brief Accumulate up to 4 activation rows against one Q8_0 weight row.
+ * @brief Rows per micro-tile.
+ *
+ * Measured on the CED shapes (M=72, N=64) under qemu-arm, guest instructions
+ * for one GEMM, against the pre-tiling kernel:
+ *
+ *              armv8-a+crc          armv8.2-a+dotprod
+ *   4 rows     1.36x / 1.47x        2.00x / 2.19x
+ *   8 rows     1.44x / 1.53x        1.54x / 1.83x
+ *              (K=192 / K=768)
+ *
+ * The two paths want different tiles. Without dotprod, vmull/vpadal keeps few
+ * values live and eight accumulators pay off. With dotprod the kernel also
+ * holds two activation vectors per row, and eight accumulators spill on
+ * AArch32's 16 Q registers -- there it is 20% *slower* than four.
+ */
+#if defined(__ARM_FEATURE_DOTPROD)
+#define NNTR_I8_TILE_ROWS 4
+#else
+#define NNTR_I8_TILE_ROWS 8
+#endif
+
+/**
+ * @brief Accumulate up to NNTR_I8_TILE_ROWS activation rows against one
+ * Q8_0 weight row.
  *
  * `out[r]` receives the full int32 dot product of activation row r with the
  * weight row, over all `nb` blocks.
@@ -188,6 +211,10 @@ inline void dotI8Tile(const int8_t *A, size_t lda, unsigned int rows,
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
   int32x4_t acc0 = vdupq_n_s32(0), acc1 = vdupq_n_s32(0);
   int32x4_t acc2 = vdupq_n_s32(0), acc3 = vdupq_n_s32(0);
+#if NNTR_I8_TILE_ROWS > 4
+  int32x4_t acc4 = vdupq_n_s32(0), acc5 = vdupq_n_s32(0);
+  int32x4_t acc6 = vdupq_n_s32(0), acc7 = vdupq_n_s32(0);
+#endif
 
   for (unsigned int b = 0; b < nb; ++b) {
     const int8_t *wq =
@@ -223,6 +250,16 @@ inline void dotI8Tile(const int8_t *A, size_t lda, unsigned int rows,
       NNTR_I8_ROW(acc2, 2);
     if (rows > 3)
       NNTR_I8_ROW(acc3, 3);
+#if NNTR_I8_TILE_ROWS > 4
+    if (rows > 4)
+      NNTR_I8_ROW(acc4, 4);
+    if (rows > 5)
+      NNTR_I8_ROW(acc5, 5);
+    if (rows > 6)
+      NNTR_I8_ROW(acc6, 6);
+    if (rows > 7)
+      NNTR_I8_ROW(acc7, 7);
+#endif
 #undef NNTR_I8_ROW
   }
 
@@ -233,6 +270,16 @@ inline void dotI8Tile(const int8_t *A, size_t lda, unsigned int rows,
     out[2] = vaddvq_s32(acc2);
   if (rows > 3)
     out[3] = vaddvq_s32(acc3);
+#if NNTR_I8_TILE_ROWS > 4
+  if (rows > 4)
+    out[4] = vaddvq_s32(acc4);
+  if (rows > 5)
+    out[5] = vaddvq_s32(acc5);
+  if (rows > 6)
+    out[6] = vaddvq_s32(acc6);
+  if (rows > 7)
+    out[7] = vaddvq_s32(acc7);
+#endif
 #else
   for (unsigned int r = 0; r < rows; ++r) {
     int32_t acc = 0;
@@ -260,14 +307,12 @@ inline void gemmPerChannelBody(unsigned int M, unsigned int N, unsigned int K,
   tm.parallel_for(0, N, [&](size_t n) {
     const char *wrow = wbase + (size_t)n * nb * BLOCK_BYTES;
     const float s = a_scale * wscale[n];
-    int32_t acc[4];
+    int32_t acc[NNTR_I8_TILE_ROWS];
     unsigned int m = 0;
-    for (; m + 4 <= M; m += 4) {
-      dotI8Tile(Aq + (size_t)m * K, K, 4, wrow, nb, acc);
-      C[(size_t)m * N + n] = (float)acc[0] * s;
-      C[(size_t)(m + 1) * N + n] = (float)acc[1] * s;
-      C[(size_t)(m + 2) * N + n] = (float)acc[2] * s;
-      C[(size_t)(m + 3) * N + n] = (float)acc[3] * s;
+    for (; m + NNTR_I8_TILE_ROWS <= M; m += NNTR_I8_TILE_ROWS) {
+      dotI8Tile(Aq + (size_t)m * K, K, NNTR_I8_TILE_ROWS, wrow, nb, acc);
+      for (unsigned int r = 0; r < NNTR_I8_TILE_ROWS; ++r)
+        C[(size_t)(m + r) * N + n] = (float)acc[r] * s;
     }
     if (m < M) {
       const unsigned int rem = M - m;
