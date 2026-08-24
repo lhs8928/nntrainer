@@ -50,10 +50,6 @@ if host_machine.system() != 'windows'
   endif
 endif
 
-if get_option('enable-transformer')
-  if get_option('platform') != 'tizen'
-    subdir('quick_ai')
-  endif
-endif
 
 subdir('Optimizers/jni')
+subdir('CausalLM/models/YOLOv7/jni')
