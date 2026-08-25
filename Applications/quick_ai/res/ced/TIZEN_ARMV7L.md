@@ -177,6 +177,24 @@ Accuracy is unchanged throughout. Against the reference TFLite runtime, all
 four clips, 67 windows: detections 100% identical, top-1 65-66/67, max
 per-class delta 0.024-0.031 against a 0.05 budget.
 
+YOLOv7-tiny shares the int8 kernel and was re-run on this branch to confirm it
+did not regress. Against the expected output recorded with the model package:
+
+    field   expected   here
+    x1         226.3   226.864
+    y1           2.0     1.896
+    x2         317.9   318.129
+    y2         108.6   108.205
+    conf       0.057    0.0564
+    cls            2         2
+
+The remaining difference is summation order: the recorded baseline came from a
+`+dotprod` build whose VSDOT kernel accumulates in a different order than the
+vmull/vpadal one, and small float differences amplify through the network. The
+tiled kernel itself is element-for-element identical to what it replaced (0
+mismatches out of 4608 outputs, K=192 and K=768, on x86 and on armv7l under
+both `-march` settings).
+
 ## Decisions and why
 
 ### Dot product
@@ -188,8 +206,10 @@ there is nothing to dispatch to.
 
 ### OpenBLAS
 
-Off. Measured with `OMP_NUM_THREADS=1` to keep OpenMP's spin-wait out of the
-comparison, it affects exactly one layer:
+**CED does not need it. YOLOv7 does. They cannot currently share one rpm.**
+
+For CED, measured with `OMP_NUM_THREADS=1` to keep OpenMP's spin-wait out of
+the comparison, BLAS affects exactly one layer:
 
     layer                BLAS on   BLAS off
     fully_connected       332.66     331.04
@@ -197,14 +217,50 @@ comparison, it affects exactly one layer:
     layer_normalization    56.90      56.92
     conv2d                 18.18      24.37
 
-6.2 ms out of ~630, because every FC in this model is Q8_0 and goes through
-the int8 kernel; only the FP32 patch-embedding conv reaches sgemm. That 1% is
-not worth ~2 MB resident. Builds that also run the YOLOv7 applications need it
-back.
+6.2 ms out of ~630. Every FC in this model is Q8_0 and goes through the int8
+kernel; only the FP32 patch-embedding conv reaches sgemm. That 1% is not worth
+~2 MB resident, so the CED build turns it off.
 
-Note that `__fallback_sgemm` is a naive triple loop accumulating in `double`
-with the transpose test inside the innermost loop. If more FP32 GEMM ever
-lands on this path, fix that rather than re-adding BLAS.
+#### Why YOLOv7 still needs it
+
+Four convolutions in YOLOv7-tiny never become int8 and stay on FP32 sgemm:
+
+- **the stem**, which has 3 input channels. conv2d has a dedicated direct FP32
+  path for `in_ch == 3` precisely because a 27-element im2col row is not worth
+  the col-buffer machinery, but the fallback for anything it does not catch is
+  sgemm.
+- **the three detection heads**, which have `out_ch = 27` (3 anchors x (4 box
+  + 1 obj + 4 class)). The per-channel W8A8 conv requires `out_ch % 32 == 0`
+  because the Q8_0 block is 32 values wide, so 27 is structurally ineligible --
+  no amount of tuning makes those quantize.
+
+With BLAS off those four hit `__fallback_sgemm`, which is a naive triple loop
+accumulating in `double` with the `TransA`/`TransB` test *inside* the innermost
+loop. That is what took an earlier armv7l YOLOv7 build to 9 s per inference.
+
+#### To drop OpenBLAS for YOLOv7, fix this
+
+`__fallback_sgemm` in `nntrainer/tensor/cpu_backend/fallback/fallback_internal.cpp`:
+
+    for m, for n:
+      double c = 0.0;                        // double accumulate
+      for k:
+        a = TransA ? A[k*lda+m] : A[m*lda+k];  // branch in the inner loop
+        b = TransB ? B[n*ldb+k] : B[k*ldb+n];
+        c += a * b;
+
+Three things are wrong with it as a fallback rather than a reference: the
+`double` accumulator (VFP double on A32 is far slower than float and blocks
+NEON), the transpose test in the innermost loop, and no blocking or
+vectorization at all. Hoisting the four transpose cases into separate loops
+and giving the `!TransA && !TransB` one a NEON kernel with an accumulator held
+across `k` -- the same shape as `dotI8Tile` in `int8_gemm.h` -- would make BLAS
+unnecessary for both models and save the ~2 MB.
+
+Until then, build the rpm to match the model:
+
+    CED     --define "_without_blas 1"      # 1% slower, ~2 MB smaller
+    YOLOv7  (leave BLAS on)
 
 ### Do not trust qemu for anything involving threads
 
