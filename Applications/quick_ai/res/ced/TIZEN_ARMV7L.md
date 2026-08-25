@@ -17,7 +17,7 @@ AArch32 on this part, so VSDOT is unavailable even though the core implements
 it in AArch64. An `-march=armv8.2-a+dotprod` build dies with SIGILL. See
 [Dot product](#dot-product).
 
-Build:
+## Building
 
     gbs build -A armv7l \
       --define "arm_tune -march=armv8-a+crc -mtune=cortex-a76 -mfpu=neon-fp-armv8 -mfp16-format=ieee" \
@@ -25,13 +25,88 @@ Build:
       --define "_without_opencv 1" \
       --define "_without_tflite 1"
 
-`arm_tune` is appended to CFLAGS/CXXFLAGS last in `%build`, so it beats both
-the Tizen reference optflags (which target Cortex-A8) and the `-march` that
-meson.build hardcodes for aarch64.
+Drop `_without_blas` for YOLOv7 -- see [OpenBLAS](#openblas). `arm_tune` is
+appended to CFLAGS/CXXFLAGS last in `%build`, so it beats both the Tizen
+reference optflags (which target Cortex-A8) and the `-march` that meson.build
+hardcodes for aarch64.
 
-Sanity check on the result:
+`--incremental` does not work with this spec: it skips `%prep`, and the SMACK
+manifest is placed by `cp %{SOURCE1001} .` there, so rpmbuild fails with
+"Security manifest file read failed". Full builds only, about 5 minutes.
+
+Sanity check the result before shipping it:
 
     objdump -d /usr/lib/libnntrainer.so | grep -c vsdot     # must be 0
+
+A non-zero count means a `+dotprod` build slipped through and it will SIGILL on
+the device.
+
+Output lands in `~/GBS-ROOT/local/repos/tizen/armv7l/RPMS/`. Three of the
+fifteen rpms are needed at runtime:
+
+    nntrainer-core-0.6.0-0.armv7l.rpm          libnntrainer.so
+    nntrainer-applications-0.6.0-0.armv7l.rpm  nntr_quick_ai, nntr_quantize,
+                                               libquick_ai.so, custom layers
+    nntrainer-0.6.0-0.armv7l.rpm               meta
+
+## Running on the device
+
+    sdb push <package> /tmp/ced
+    sdb shell
+    mount -o remount,rw /
+    cd /tmp/ced/rpm && rpm -Uvh --force --nodeps *.rpm
+
+`--nodeps` because the rpms declare Tizen packaging dependencies (`iniparser`,
+`capi-ml-*`, `dlog`) that a plain image satisfies under different provider
+names. If rpm still refuses, unpack instead:
+
+    for f in *.rpm; do rpm2cpio "$f" | cpio -idmu -D /; done
+
+The executables carry an rpath to their own directory, so no `LD_LIBRARY_PATH`
+is needed. An rpm built before that change needs
+`LD_LIBRARY_PATH=/usr/lib/nntrainer/bin/applications`.
+
+### CED
+
+    NNTR_NUM_THREADS=2 \
+    /usr/lib/nntrainer/bin/applications/nntr_quick_ai /tmp/ced/model \
+        /tmp/ced/data/16k_good_night.wav
+
+`AD_JSON=1` switches to the reference runtime's machine-readable stream. Two
+threads, not four -- see [Numbers](#numbers).
+
+### YOLOv7-tiny
+
+    export YOLO_NHWC=1 YOLO_TENSOR_TYPE=w8a32 NNTR_W8A8=1 NNTR_W8A8_PERCH=1 \
+           NNTR_W8A8_FP32W=1 NNTR_W8A8_PERCH_LINEAR_SYM=1 NNTR_MEMORY_PLANNER=v3
+    export NNTR_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 OMP_NUM_THREADS=4
+    ./bin/l1_infer ./weights ./test_inputs/input_320.bin
+
+`NNTR_W8A8_PERCH_LINEAR_SYM=1` is required: the default asymmetric encoding
+`x = (q+128)*s - kActOff` has its floor at SiLU's minimum (-0.27846) and is
+wrong for LeakyReLU(0.1).
+
+### Measuring
+
+    NNTR_PROFILE_LAYERS=1 <cmd>     # wall time per layer type, sorted
+    NNTR_POOL_REPORT=1    <cmd>     # weight and activation pool sizes
+
+Peak RSS/PSS needs sampling -- the run is short enough that reading
+`smaps_rollup` once will miss it:
+
+    <cmd> & P=$!
+    PK=0
+    while [ -d /proc/$P ]; do
+      R=$(awk '/^Rss:/{print $2}' /proc/$P/smaps_rollup 2>/dev/null)
+      [ -n "$R" ] && [ "$R" -gt "$PK" ] && { PK=$R; cat /proc/$P/smaps_rollup > /tmp/peak; }
+    done
+    grep -E '^(Rss|Pss|Private_Dirty|Private_Clean|Anonymous):' /tmp/peak
+
+Read those as: `Pss` is what to compare against another runtime,
+`Private_Clean` is file-backed library text that the kernel can drop under
+pressure, `Anonymous` is the real non-reclaimable cost. `[POOL] weights` should
+equal the size of the model file -- if it does not, something dequantized at
+load.
 
 ## What was broken
 
