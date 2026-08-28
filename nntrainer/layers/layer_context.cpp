@@ -564,7 +564,14 @@ bool RunLayerContext::validate(bool skip_input, bool skip_label) {
 #ifdef DEBUG
   std::function<bool(const Var_Grad *, bool)> matcher;
 
-  if (tensor_map.empty() || !tensor_map[inputs[0]->getName()]) {
+  /** layers without an input connection (e.g. WeightLayer) have an empty
+   * inputs vector; for them only tensor_map.empty() triggers the rebuild */
+  auto has_valid_entry = [this](const std::string &name) {
+    auto iter = tensor_map.find(name);
+    return iter != tensor_map.end() && iter->second != nullptr;
+  };
+  if (tensor_map.empty() ||
+      (!inputs.empty() && !has_valid_entry(inputs[0]->getName()))) {
     auto filler = [this](const auto &vec) {
       for (auto const &val : vec) {
         if (val->getVariableRef().getTensorType().data_type ==
