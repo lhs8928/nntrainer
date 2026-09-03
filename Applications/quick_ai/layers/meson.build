@@ -27,9 +27,9 @@ causallm_rtmcc_head_src_abs = [meson.current_source_dir() / 'rtmcc_head.cpp']
 causallm_xi_pooling_src_abs = [meson.current_source_dir() / 'xi_pooling.cpp']
 
 causallm_rms_norm = shared_library(
-    'rms_norm_layer', 
-    causallm_rms_norm_src_abs, 
-    include_directories: causallm_layer_inc, 
+    'rms_norm_layer',
+    causallm_rms_norm_src_abs,
+    include_directories: causallm_layer_inc,
     dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
     install: true,
     install_dir: application_install_dir
@@ -39,83 +39,96 @@ causallm_rms_norm_dep = declare_dependency(
     include_directories: causallm_layer_inc
 )
 
-causallm_swiglu = shared_library(
-    'swiglu_layer',
-    causallm_swiglu_src_abs,
-    include_directories: causallm_layer_inc,
-    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
-    install: true,
-    install_dir: application_install_dir
-)
-causallm_swiglu_dep = declare_dependency(
-    link_with: causallm_swiglu,
-    include_directories: causallm_layer_inc
-)
+quick_ai_use_tokenizer_layers = get_option('quick_ai-tokenizer')
 
-causallm_causal_conv1d = shared_library(
-    'causal_conv1d_layer',
-    causallm_causal_conv1d_src_abs,
-    include_directories: causallm_layer_inc,
-    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
-    install: true,
-    install_dir: application_install_dir
-)
-causallm_causal_conv1d_dep = declare_dependency(
-    link_with: causallm_causal_conv1d,
-    include_directories: causallm_layer_inc
-)
+# LLM-only layers (conditional)
+if quick_ai_use_tokenizer_layers
+  causallm_swiglu = shared_library(
+      'swiglu_layer',
+      causallm_swiglu_src_abs,
+      include_directories: causallm_layer_inc,
+      dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+      install: quick_ai_use_tokenizer_layers,
+      install_dir: application_install_dir
+  )
+  causallm_swiglu_dep = declare_dependency(
+      link_with: causallm_swiglu,
+      include_directories: causallm_layer_inc
+  )
 
-causallm_rtmcc_gau = shared_library(
-    'rtmcc_gau_layer',
-    causallm_rtmcc_gau_src_abs,
-    include_directories: causallm_layer_inc,
-    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
-    install: true,
-    install_dir: application_install_dir
-)
-causallm_rtmcc_gau_dep = declare_dependency(
-    link_with: causallm_rtmcc_gau,
-    include_directories: causallm_layer_inc
-)
+  causallm_causal_conv1d = shared_library(
+      'causal_conv1d_layer',
+      causallm_causal_conv1d_src_abs,
+      include_directories: causallm_layer_inc,
+      dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+      install: quick_ai_use_tokenizer_layers,
+      install_dir: application_install_dir
+  )
+  causallm_causal_conv1d_dep = declare_dependency(
+      link_with: causallm_causal_conv1d,
+      include_directories: causallm_layer_inc
+  )
 
-causallm_rtmcc_head = shared_library(
-    'rtmcc_head_layer',
-    causallm_rtmcc_head_src_abs,
-    include_directories: causallm_layer_inc,
-    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
-    install: true,
-    install_dir: application_install_dir
-)
-causallm_rtmcc_head_dep = declare_dependency(
-    link_with: causallm_rtmcc_head,
-    include_directories: causallm_layer_inc
-)
+  causallm_rtmcc_gau = shared_library(
+      'rtmcc_gau_layer',
+      causallm_rtmcc_gau_src_abs,
+      include_directories: causallm_layer_inc,
+      dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+      install: quick_ai_use_tokenizer_layers,
+      install_dir: application_install_dir
+  )
+  causallm_rtmcc_gau_dep = declare_dependency(
+      link_with: causallm_rtmcc_gau,
+      include_directories: causallm_layer_inc
+  )
 
-causallm_tie_word_embedding = shared_library(
-    'tie_word_embedding_layer',
-    causallm_tie_word_embedding_src_abs,
-    include_directories: causallm_layer_inc,
-    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
-    install: true,
-    install_dir: application_install_dir
-)
-causallm_tie_word_embedding_dep = declare_dependency(
-    link_with: causallm_tie_word_embedding,
-    include_directories: causallm_layer_inc
-)
+  causallm_rtmcc_head = shared_library(
+      'rtmcc_head_layer',
+      causallm_rtmcc_head_src_abs,
+      include_directories: causallm_layer_inc,
+      dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+      install: quick_ai_use_tokenizer_layers,
+      install_dir: application_install_dir
+  )
+  causallm_rtmcc_head_dep = declare_dependency(
+      link_with: causallm_rtmcc_head,
+      include_directories: causallm_layer_inc
+  )
 
-causallm_lm_head = shared_library(
-    'lm_head',
-    causallm_lmhead_src_abs,
-    include_directories: causallm_layer_inc,
-    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
-    install: true,
-    install_dir: application_install_dir
-)
-causallm_lm_head_dep = declare_dependency(
-    link_with: causallm_lm_head,
-    include_directories: causallm_layer_inc
-)
+  causallm_tie_word_embedding = shared_library(
+      'tie_word_embedding_layer',
+      causallm_tie_word_embedding_src_abs,
+      include_directories: causallm_layer_inc,
+      dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+      install: quick_ai_use_tokenizer_layers,
+      install_dir: application_install_dir
+  )
+  causallm_tie_word_embedding_dep = declare_dependency(
+      link_with: causallm_tie_word_embedding,
+      include_directories: causallm_layer_inc
+  )
+
+  causallm_lm_head = shared_library(
+      'lm_head',
+      causallm_lmhead_src_abs,
+      include_directories: causallm_layer_inc,
+      dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+      install: quick_ai_use_tokenizer_layers,
+      install_dir: application_install_dir
+  )
+  causallm_lm_head_dep = declare_dependency(
+      link_with: causallm_lm_head,
+      include_directories: causallm_layer_inc
+  )
+else
+  # Dummy dependencies for CED-only builds
+  causallm_swiglu_dep = declare_dependency()
+  causallm_causal_conv1d_dep = declare_dependency()
+  causallm_rtmcc_gau_dep = declare_dependency()
+  causallm_rtmcc_head_dep = declare_dependency()
+  causallm_tie_word_embedding_dep = declare_dependency()
+  causallm_lm_head_dep = declare_dependency()
+endif
 
 causallm_mha_core = shared_library(
     'mha_core_layer',
@@ -143,73 +156,81 @@ causallm_embedding_layer_dep = declare_dependency(
     include_directories: causallm_layer_inc
 )
 
-causallm_embedding_pooling_layer = shared_library(
-    'embedding_pooling_layer',
-    causallm_embedding_pooling_src_abs,
-    include_directories: causallm_layer_inc,
-    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
-    install: true,
-    install_dir: application_install_dir
-)
-causallm_embedding_pooling_layer_dep = declare_dependency(
-    link_with: causallm_embedding_pooling_layer,
-    include_directories: causallm_layer_inc
-)
+if quick_ai_use_tokenizer_layers
+  causallm_embedding_pooling_layer = shared_library(
+      'embedding_pooling_layer',
+      causallm_embedding_pooling_src_abs,
+      include_directories: causallm_layer_inc,
+      dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+      install: quick_ai_use_tokenizer_layers,
+      install_dir: application_install_dir
+  )
+  causallm_embedding_pooling_layer_dep = declare_dependency(
+      link_with: causallm_embedding_pooling_layer,
+      include_directories: causallm_layer_inc
+  )
 
-causallm_embedding_normalize_layer = shared_library(
-    'embedding_normalize_layer',
-    causallm_embedding_normalize_src_abs,
-    include_directories: causallm_layer_inc,
-    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
-    install: true,
-    install_dir: application_install_dir
-)
+  causallm_embedding_normalize_layer = shared_library(
+      'embedding_normalize_layer',
+      causallm_embedding_normalize_src_abs,
+      include_directories: causallm_layer_inc,
+      dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+      install: quick_ai_use_tokenizer_layers,
+      install_dir: application_install_dir
+  )
 
-causallm_embedding_normalize_layer_dep = declare_dependency(
-    link_with: causallm_embedding_normalize_layer,
-    include_directories: causallm_layer_inc
-)
+  causallm_embedding_normalize_layer_dep = declare_dependency(
+      link_with: causallm_embedding_normalize_layer,
+      include_directories: causallm_layer_inc
+  )
 
-causallm_reshaped_rms_norm = shared_library(
-    'reshaped_rms_norm_layer', 
-    causallm_reshaped_rms_norm_src_abs, 
-    include_directories: causallm_layer_inc, 
-    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
-    install: true,
-    install_dir: application_install_dir
-)
-causallm_reshaped_rms_norm_dep = declare_dependency(
-    link_with: causallm_reshaped_rms_norm,
-    include_directories: causallm_layer_inc
-)
+  causallm_reshaped_rms_norm = shared_library(
+      'reshaped_rms_norm_layer',
+      causallm_reshaped_rms_norm_src_abs,
+      include_directories: causallm_layer_inc,
+      dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+      install: quick_ai_use_tokenizer_layers,
+      install_dir: application_install_dir
+  )
+  causallm_reshaped_rms_norm_dep = declare_dependency(
+      link_with: causallm_reshaped_rms_norm,
+      include_directories: causallm_layer_inc
+  )
 
-causallm_qkv_layer = shared_library(
-    'qkv_layer',
-    causallm_qkv_layer_src_abs,
-    include_directories: causallm_layer_inc,
-    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
-    install: true,
-    install_dir: application_install_dir
-)
+  causallm_qkv_layer = shared_library(
+      'qkv_layer',
+      causallm_qkv_layer_src_abs,
+      include_directories: causallm_layer_inc,
+      dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+      install: quick_ai_use_tokenizer_layers,
+      install_dir: application_install_dir
+  )
 
-causallm_qkv_layer_dep = declare_dependency(
-    link_with: causallm_qkv_layer,
-    include_directories: causallm_layer_inc
-)
+  causallm_qkv_layer_dep = declare_dependency(
+      link_with: causallm_qkv_layer,
+      include_directories: causallm_layer_inc
+  )
 
-causallm_deberta_attention_layer = shared_library(
-    'deberta_attention_layer',
-    causallm_deberta_attention_src_abs,
-    include_directories: causallm_layer_inc,
-    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
-    install: true,
-    install_dir: application_install_dir
-)
+  causallm_deberta_attention_layer = shared_library(
+      'deberta_attention_layer',
+      causallm_deberta_attention_src_abs,
+      include_directories: causallm_layer_inc,
+      dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+      install: quick_ai_use_tokenizer_layers,
+      install_dir: application_install_dir
+  )
 
-causallm_deberta_attention_layer_dep = declare_dependency(
-    link_with: causallm_deberta_attention_layer,
-    include_directories: causallm_layer_inc
-)
+  causallm_deberta_attention_layer_dep = declare_dependency(
+      link_with: causallm_deberta_attention_layer,
+      include_directories: causallm_layer_inc
+  )
+else
+  causallm_embedding_pooling_layer_dep = declare_dependency()
+  causallm_embedding_normalize_layer_dep = declare_dependency()
+  causallm_reshaped_rms_norm_dep = declare_dependency()
+  causallm_qkv_layer_dep = declare_dependency()
+  causallm_deberta_attention_layer_dep = declare_dependency()
+endif
 
 causallm_shared_fully_connected_layer = shared_library(
     'shared_fully_connected_layer',
@@ -225,73 +246,81 @@ causallm_shared_fully_connected_layer_dep = declare_dependency(
     include_directories: causallm_layer_inc
 )
 
-causallm_rms_reverse_norm = shared_library(
-    'rms_reverse_norm_layer',
-    causallm_rms_reverse_norm_src_abs,
-    include_directories: causallm_layer_inc,
-    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
-    install: true,
-    install_dir: application_install_dir
-)
+if quick_ai_use_tokenizer_layers
+  causallm_rms_reverse_norm = shared_library(
+      'rms_reverse_norm_layer',
+      causallm_rms_reverse_norm_src_abs,
+      include_directories: causallm_layer_inc,
+      dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+      install: quick_ai_use_tokenizer_layers,
+      install_dir: application_install_dir
+  )
 
-causallm_rms_reverse_norm_dep = declare_dependency(
-    link_with: causallm_rms_reverse_norm,
-    include_directories: causallm_layer_inc
-)
+  causallm_rms_reverse_norm_dep = declare_dependency(
+      link_with: causallm_rms_reverse_norm,
+      include_directories: causallm_layer_inc
+  )
 
-causallm_per_layer_slice = shared_library(
-    'per_layer_slice_layer',
-    causallm_per_layer_slice_src_abs,
-    include_directories: causallm_layer_inc,
-    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
-    install: true,
-    install_dir: application_install_dir
-)
+  causallm_per_layer_slice = shared_library(
+      'per_layer_slice_layer',
+      causallm_per_layer_slice_src_abs,
+      include_directories: causallm_layer_inc,
+      dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+      install: quick_ai_use_tokenizer_layers,
+      install_dir: application_install_dir
+  )
 
-causallm_per_layer_slice_dep = declare_dependency(
-    link_with: causallm_per_layer_slice,
-    include_directories: causallm_layer_inc
-)
+  causallm_per_layer_slice_dep = declare_dependency(
+      link_with: causallm_per_layer_slice,
+      include_directories: causallm_layer_inc
+  )
 
-causallm_scalar_multiply = shared_library(
-    'scalar_multiply_layer',
-    causallm_scalar_multiply_src_abs,
-    include_directories: causallm_layer_inc,
-    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
-    install: true,
-    install_dir: application_install_dir
-)
-causallm_scalar_multiply_dep = declare_dependency(
-    link_with: causallm_scalar_multiply,
-    include_directories: causallm_layer_inc
-)
+  causallm_scalar_multiply = shared_library(
+      'scalar_multiply_layer',
+      causallm_scalar_multiply_src_abs,
+      include_directories: causallm_layer_inc,
+      dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+      install: quick_ai_use_tokenizer_layers,
+      install_dir: application_install_dir
+  )
+  causallm_scalar_multiply_dep = declare_dependency(
+      link_with: causallm_scalar_multiply,
+      include_directories: causallm_layer_inc
+  )
 
-causallm_logit_softcapping = shared_library(
-    'logit_softcapping_layer',
-    causallm_logit_softcapping_src_abs,
-    include_directories: causallm_layer_inc,
-    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
-    install: true,
-    install_dir: application_install_dir
-)
-causallm_logit_softcapping_dep = declare_dependency(
-    link_with: causallm_logit_softcapping,
-    include_directories: causallm_layer_inc
-)
+  causallm_logit_softcapping = shared_library(
+      'logit_softcapping_layer',
+      causallm_logit_softcapping_src_abs,
+      include_directories: causallm_layer_inc,
+      dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+      install: quick_ai_use_tokenizer_layers,
+      install_dir: application_install_dir
+  )
+  causallm_logit_softcapping_dep = declare_dependency(
+      link_with: causallm_logit_softcapping,
+      include_directories: causallm_layer_inc
+  )
 
-causallm_custom_multiply_layer = shared_library(
-    'custom_multiply',
-    causallm_custom_multiply_layer_src_abs,
-    include_directories: causallm_layer_inc,
-    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
-    install: true,
-    install_dir: application_install_dir
-)
+  causallm_custom_multiply_layer = shared_library(
+      'custom_multiply',
+      causallm_custom_multiply_layer_src_abs,
+      include_directories: causallm_layer_inc,
+      dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+      install: quick_ai_use_tokenizer_layers,
+      install_dir: application_install_dir
+  )
 
-causallm_custom_multiply_dep = declare_dependency(
-    link_with: causallm_custom_multiply_layer,
-    include_directories: causallm_layer_inc
-)
+  causallm_custom_multiply_dep = declare_dependency(
+      link_with: causallm_custom_multiply_layer,
+      include_directories: causallm_layer_inc
+  )
+else
+  causallm_rms_reverse_norm_dep = declare_dependency()
+  causallm_per_layer_slice_dep = declare_dependency()
+  causallm_scalar_multiply_dep = declare_dependency()
+  causallm_logit_softcapping_dep = declare_dependency()
+  causallm_custom_multiply_dep = declare_dependency()
+endif
 
 causallm_xi_pooling = shared_library(
     'xi_pooling_layer',
