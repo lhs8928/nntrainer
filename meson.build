@@ -440,37 +440,10 @@ if get_option('enable-blas')
     blas_dep = dependency('openblas', required : false)
 
     if not blas_dep.found()
-      message('Cannot find OpenBLAS dependency in system')
-      openblas_dir_relative = subprojects_dir_relative / 'OpenBLAS'
-      openblas_dir_absolute = meson.current_source_dir() / openblas_dir_relative
-      openblas_build_dir_relative = openblas_dir_relative / 'build'
-      openblas_build_dir_absolute = meson.current_source_dir() / openblas_build_dir_relative
-
-      if fs.exists (openblas_build_dir_absolute)
-        message('Skip compiling OpenBLAS (using previous build)')
-      else
-        message('Setup OpenBLAS')
-        openblas_setup_command = ['cmake', '-B', openblas_build_dir_absolute, '-DNUM_THREADS=' + get_option('openblas-num-threads').to_string(), '-DBUILD_TESTING=False', '-DBUILD_BENCHMARKS=False', '-DBUILD_WITHOUT_LAPACK=True', '-DNOFORTRAN=True', '-DCMAKE_BUILD_TYPE='+cmake_build_type]
-        openblas_setup_command += '-DBUILD_SHARED_LIBS=True'
-
-        if cxx_compiler_id == 'clang'
-          openblas_setup_command += '-G Ninja'
-          openblas_setup_command += '-DCMAKE_C_COMPILER=clang'
-          openblas_setup_command += '-DCMAKE_CXX_COMPILER=clang++'
-        endif
-
-        openblas_setup_command += openblas_dir_absolute
-
-        run_command(openblas_setup_command, check: true)
-
-        message('Compile OpenBLAS')
-        openblas_compile_command = ['cmake' , '--build', openblas_build_dir_absolute, '--config', cmake_build_type, '-j']
-        run_command(openblas_compile_command, check: true)
-      endif
-
-      openblas_lib = openblas_build_dir_absolute / 'lib' / 'libopenblas.so'
-      openblas_include = include_directories(openblas_dir_relative, openblas_build_dir_relative)
-      blas_dep = declare_dependency(include_directories: openblas_include, link_args:[openblas_lib])
+      message('OpenBLAS not found - will use system libopenblas at runtime')
+      # Don't try to build OpenBLAS in gbs environment (no internet, cross-compile issues)
+      # Assume libopenblas_openmp.so.0 is available on target system
+      blas_dep = declare_dependency()
     else
       message('OpenBLAS dependency found in system')
     endif
