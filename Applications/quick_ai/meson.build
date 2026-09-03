@@ -1,12 +1,19 @@
 quick_ai_src = [
-    meson.current_source_dir() / 'chat_template.cpp',
-    meson.current_source_dir() / 'llm_util.cpp',
     meson.current_source_dir() / 'api' / 'callback_streamer.cpp',
-    meson.current_source_dir() / 'api' / 'causal_lm_api.cpp',
-    meson.current_source_dir() / 'api' / 'model_config.cpp',
     meson.current_source_dir() / 'api' / 'streamer.cpp',
     meson.current_source_dir() / 'kv_cache_manager.cpp',
 ]
+
+# LLM/Chat-specific sources (only for tokenizer builds)
+quick_ai_use_tokenizer_temp = get_option('quick_ai-tokenizer')
+if quick_ai_use_tokenizer_temp
+  quick_ai_src += [
+    meson.current_source_dir() / 'chat_template.cpp',
+    meson.current_source_dir() / 'llm_util.cpp',
+    meson.current_source_dir() / 'api' / 'model_config.cpp',
+    meson.current_source_dir() / 'api' / 'causal_lm_api.cpp',
+  ]
+endif
 
 executable_src = [
     meson.current_source_dir() / 'main.cpp',
@@ -14,28 +21,43 @@ executable_src = [
 
 quick_ai_inc_abs = [meson.current_source_dir()]
 quick_ai_inc = [include_directories('.')]
-quick_ai_inc_minja_inc = include_directories('third_party/minja/include')
-quick_ai_inc_nlohmann_inc = include_directories('third_party')
+
+# minja and nlohmann are only needed for CausalLM models with tokenizer
+# When building without tokenizer (e.g., CED), exclude them to reduce binary size
+quick_ai_use_tokenizer = get_option('quick_ai-tokenizer')
+if quick_ai_use_tokenizer
+  quick_ai_inc_minja_inc = include_directories('third_party/minja/include')
+  quick_ai_inc_nlohmann_inc = include_directories('third_party')
+  quick_ai_external_incs = [quick_ai_inc_minja_inc, quick_ai_inc_nlohmann_inc]
+else
+  quick_ai_external_incs = []
+endif
 
 # Build layer dependency
 quick_ai_layer_dependencies = []
 subdir('layers')
 
-# Add common layers to dependencies
+# Add layers needed by CED (always)
 quick_ai_layer_dependencies += [
     causallm_rms_norm_dep,
+    causallm_mha_core_dep,
+    causallm_embedding_layer_dep,
+    causallm_shared_fully_connected_layer_dep,
+    causallm_xi_pooling_dep,
+]
+
+# Add LLM-only layers when tokenizer is enabled
+quick_ai_use_tokenizer_for_deps = get_option('quick_ai-tokenizer')
+if quick_ai_use_tokenizer_for_deps
+  quick_ai_layer_dependencies += [
     causallm_tie_word_embedding_dep,
     causallm_lm_head_dep,
     causallm_swiglu_dep,
-    causallm_mha_core_dep,
-    causallm_embedding_layer_dep,
-    causallm_lm_head_dep,
     causallm_reshaped_rms_norm_dep,
     causallm_qkv_layer_dep,
     causallm_embedding_pooling_layer_dep,
     causallm_embedding_normalize_layer_dep,
     causallm_deberta_attention_layer_dep,
-    causallm_shared_fully_connected_layer_dep,
     causallm_per_layer_slice_dep,
     causallm_scalar_multiply_dep,
     causallm_logit_softcapping_dep,
@@ -43,8 +65,8 @@ quick_ai_layer_dependencies += [
     causallm_rtmcc_head_dep,
     causallm_causal_conv1d_dep,
     causallm_custom_multiply_dep,
-    causallm_xi_pooling_dep,
-]
+  ]
+endif
 
 
 subdir('models')
@@ -143,11 +165,7 @@ if get_option('platform') == 'windows'
             quick_ai_layer_dependencies,
             tokenizer_dependencies
         ],
-        include_directories: [
-            quick_ai_inc,
-            quick_ai_inc_minja_inc,
-            quick_ai_inc_nlohmann_inc
-        ],
+        include_directories: [quick_ai_inc] + quick_ai_external_incs,
         install: true,
         cpp_args: cpp_args
     )
@@ -160,11 +178,7 @@ else
             quick_ai_layer_dependencies,
             tokenizer_dependencies
         ],
-        include_directories: [
-            quick_ai_inc,
-            quick_ai_inc_minja_inc,
-            quick_ai_inc_nlohmann_inc
-        ],
+        include_directories: [quick_ai_inc] + quick_ai_external_incs,
         install: true,
         install_dir: application_install_dir,
         link_args: tokenizer_link_args,
@@ -180,7 +194,7 @@ quick_ai_dep = declare_dependency(
 
 e = executable('nntr_quick_ai',
     executable_src,
-    include_directories: [quick_ai_inc, quick_ai_inc_minja_inc, quick_ai_inc_nlohmann_inc],
+    include_directories: [quick_ai_inc] + quick_ai_external_incs,
     dependencies: [nntrainer_dep, nntrainer_ccapi_dep, quick_ai_layer_dependencies, quick_ai_dep],
     install: get_option('install-app'),
     install_dir: application_install_dir,
@@ -191,17 +205,20 @@ e = executable('nntr_quick_ai',
 )
 
 
-quantize_src = [
+# nntr_quantize is only for CausalLM models (requires deberta, gemma, etc.)
+# Skip building it for CED-only builds
+if quick_ai_use_tokenizer_temp
+  quantize_src = [
     meson.current_source_dir() / 'quantize.cpp',
     meson.current_source_dir() / 'models/FastViTKeyword/jni/fastvit_attention_layer.cpp',
-]
+  ]
 
-e_quantize = executable('nntr_quantize',
+  e_quantize = executable('nntr_quantize',
     quantize_src,
     include_directories: [quick_ai_inc, quick_ai_layer_inc,
         include_directories('models/YOLOv7Pose'),
         include_directories('models/FastViTKeyword'),
-        include_directories('models/FastViTKeyword/jni')],
+        include_directories('models/FastViTKeyword/jni')] + quick_ai_external_incs,
     dependencies: [nntrainer_dep, nntrainer_ccapi_dep, quick_ai_layer_dependencies, quick_ai_dep],
     install: get_option('install-app'),
     install_dir: application_install_dir,
@@ -209,7 +226,8 @@ e_quantize = executable('nntr_quantize',
     # search path, so without this the installed binary dies with
     # "cannot open shared object file: libquick_ai.so".
     install_rpath: application_install_dir
-)
+  )
+endif
 
 
 
@@ -224,17 +242,20 @@ e_safetensors_info = executable('nntr_safetensors_info',
 )
 
 
-test_api_src = [
-    meson.current_source_dir() / 'api' / 'test_api.cpp',
-]
+# test_api tests CausalLM API - only build when tokenizer is enabled
+if quick_ai_use_tokenizer_temp
+  test_api_src = [
+      meson.current_source_dir() / 'api' / 'test_api.cpp',
+  ]
 
-test_api = executable('test_api',
-    test_api_src,
-    include_directories: quick_ai_inc,
-    dependencies: [nntrainer_dep, nntrainer_ccapi_dep, quick_ai_layer_dependencies, quick_ai_dep],
-    build_by_default: true,
-    install: false,
-)
+  test_api = executable('test_api',
+      test_api_src,
+      include_directories: [quick_ai_inc] + quick_ai_external_incs,
+      dependencies: [nntrainer_dep, nntrainer_ccapi_dep, quick_ai_layer_dependencies, quick_ai_dep],
+      build_by_default: true,
+      install: false,
+  )
+endif
 
 # KVCacheManager unit tests
 if get_option('enable-test')
@@ -311,28 +332,31 @@ if get_option('enable-test')
     suite: 'unittests'
   )
 
-  unittest_cancel_api = executable(
-    'unittest_cancel_api',
-    [
-      meson.current_source_dir() / 'api' / 'unittest_cancel_api.cpp',
-    ],
-    dependencies: [
-      nntrainer_dep,
-      nntrainer_ccapi_dep,
-      gtest_main_dep,
-      quick_ai_layer_dependencies,
-      quick_ai_dep
-    ],
-    include_directories: quick_ai_inc,
-    build_by_default: true,
-    install: false,
-  )
+  # unittest_cancel_api tests CausalLM API - only build when tokenizer is enabled
+  if quick_ai_use_tokenizer_temp
+    unittest_cancel_api = executable(
+      'unittest_cancel_api',
+      [
+        meson.current_source_dir() / 'api' / 'unittest_cancel_api.cpp',
+      ],
+      dependencies: [
+        nntrainer_dep,
+        nntrainer_ccapi_dep,
+        gtest_main_dep,
+        quick_ai_layer_dependencies,
+        quick_ai_dep
+      ],
+      include_directories: quick_ai_inc,
+      build_by_default: true,
+      install: false,
+    )
 
-  test('unittest_cancel_api', unittest_cancel_api,
-    args: '--gtest_output=xml:@0@/@1@.xml'.format(meson.build_root(), 'unittest_cancel_api'),
-    timeout: 60,
-    suite: 'unittests'
-  )
+    test('unittest_cancel_api', unittest_cancel_api,
+      args: '--gtest_output=xml:@0@/@1@.xml'.format(meson.build_root(), 'unittest_cancel_api'),
+      timeout: 60,
+      suite: 'unittests'
+    )
+  endif
 
   # Ubuntu native builds use platform=none.
   model_unittest_platforms = ['none', 'windows', 'android']
@@ -380,11 +404,16 @@ if get_option('enable-test')
       install: false,
     )
 
+    test_env = {}
+    if quick_ai_use_tokenizer_temp
+      test_env += {'NNTR_QUANTIZE_BIN': e_quantize.full_path()}
+    endif
+
     test('unittest_quick_ai_models', unittest_quick_ai_models,
       args: '--gtest_output=xml:@0@/@1@.xml'.format(meson.build_root(), 'unittest_quick_ai_models'),
       timeout: 60,
       suite: 'unittests',
-      env: {'NNTR_QUANTIZE_BIN': e_quantize.full_path()}
+      env: test_env
     )
   endif
 endif

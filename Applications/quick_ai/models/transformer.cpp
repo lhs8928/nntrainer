@@ -481,13 +481,11 @@ void Transformer::registerCustomLayers() {
     const auto app_context = static_cast<nntrainer::AppContext *>(
       ct_engine.getRegisteredContext("cpu"));
 
-    app_context->registerFactory(nntrainer::createLayer<quick_ai::SwiGLULayer>);
+    // Common layers (always registered)
     app_context->registerFactory(
       nntrainer::createLayer<quick_ai::RMSNormLayer>);
     app_context->registerFactory(
       nntrainer::createLayer<quick_ai::MHACoreLayer>);
-    app_context->registerFactory(
-      nntrainer::createLayer<quick_ai::TieWordEmbedding>);
     app_context->registerFactory(
       nntrainer::createLayer<quick_ai::EmbeddingLayer>);
   });

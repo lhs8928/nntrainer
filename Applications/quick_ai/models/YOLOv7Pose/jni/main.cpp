@@ -113,20 +113,8 @@ int main(int argc, char **argv) {
     auto &app_ctx = nntrainer::AppContext::Global();
     (void)app_ctx;
 
-    // Register custom layers used by the pose head.
-    {
-      auto &ct_engine = nntrainer::Engine::Global();
-      auto ctx = static_cast<nntrainer::AppContext *>(
-        ct_engine.getRegisteredContext("cpu"));
-      auto tryReg = [&](auto fn) {
-        try {
-          ctx->registerFactory(fn);
-        } catch (std::invalid_argument &e) {
-          std::cerr << "register: " << e.what() << std::endl;
-        }
-      };
-      tryReg(nntrainer::createLayer<quick_ai::RTMCCHeadLayer>);
-    }
+    // No custom layer registration needed for YOLOv7Pose
+    // (RTMCCHeadLayer is LLM-only, not needed for pose detection)
 
     ModelHandle model =
       ml::train::createModel(ml::train::ModelType::NEURAL_NET);

@@ -31,33 +31,7 @@
 #include <app_context.h>
 #include <factory.h>
 
-#include "causal_lm.h"
-#include "chat_template.h"
-#include "deberta_v2.h"
-#include "embedding_gemma.h"
-#include "gemma3_causallm.h"
-#include "gemma4_causallm.h"
-#if !defined(_WIN32)
-#include "gptoss_cached_slim_causallm.h"
-#endif
-#include "gptoss_causallm.h"
-#if !defined(_WIN32) && !defined(__ANDROID__)
-#include "multilingual_tinybert_16mb.h"
-#endif
-#include "qwen2_causallm.h"
-#include "qwen2_embedding.h"
-#include "xlm_roberta.h"
-#if !defined(_WIN32)
-#include "qwen3_cached_slim_moe_causallm.h"
-#endif
-#include "lfm2_causallm.h"
-#include "qwen3_causallm.h"
-#include "qwen3_embedding.h"
-#include "qwen3_moe_causallm.h"
-#include "qwen3_slim_moe_causallm.h"
 #include "ced/ced_transformer.h"
-#include "timm_vit/timm_vit_transformer.h"
-#include <models/gemma3/function.h>
 #if !defined(_WIN32)
 #include <sys/resource.h>
 #endif
@@ -190,9 +164,6 @@ std::string resolve_architecture(std::string model_type,
     } else if (architecture == "XLMRobertaForMaskedLM" ||
                architecture == "XLMRobertaModel") {
       return "XLMRobertaForMaskedLM";
-    } else if (architecture == "TimmViT" ||
-               architecture == "vit_base_patch16_siglip_224") {
-      return "TimmViT";
     } else if (architecture == "deberta-v2" ||
                architecture == "DebertaV2Model" ||
                architecture == "DebertaV2ForMaskedLM") {
@@ -201,11 +172,6 @@ std::string resolve_architecture(std::string model_type,
       throw std::invalid_argument(
         "Unsupported architecture for embedding model: " + architecture);
     }
-  }
-
-  if (architecture == "TimmViT" ||
-      architecture == "vit_base_patch16_siglip_224") {
-    return "TimmViT";
   }
 
   if (architecture == "Gemma4ForConditionalGeneration") {
@@ -222,113 +188,12 @@ int main(int argc, char *argv[]) {
 
   auto start_time = std::chrono::high_resolution_clock::now();
 
-  /** Register all runnable quick_ai models to factory */
-  quick_ai::Factory::Instance().registerModel(
-    "LlamaForCausalLM", [](json cfg, json generation_cfg, json nntr_cfg) {
-      return std::make_unique<quick_ai::CausalLM>(cfg, generation_cfg,
-                                                  nntr_cfg);
-    });
-  quick_ai::Factory::Instance().registerModel(
-    "Qwen2ForCausalLM", [](json cfg, json generation_cfg, json nntr_cfg) {
-      return std::make_unique<quick_ai::Qwen2CausalLM>(cfg, generation_cfg,
-                                                       nntr_cfg);
-    });
-  quick_ai::Factory::Instance().registerModel(
-    "Qwen2Embedding", [](json cfg, json generation_cfg, json nntr_cfg) {
-      return std::make_unique<quick_ai::Qwen2Embedding>(cfg, generation_cfg,
-                                                        nntr_cfg);
-    });
-  quick_ai::Factory::Instance().registerModel(
-    "Qwen3ForCausalLM", [](json cfg, json generation_cfg, json nntr_cfg) {
-      return std::make_unique<quick_ai::Qwen3CausalLM>(cfg, generation_cfg,
-                                                       nntr_cfg);
-    });
-  quick_ai::Factory::Instance().registerModel(
-    "Qwen3MoeForCausalLM", [](json cfg, json generation_cfg, json nntr_cfg) {
-      return std::make_unique<quick_ai::Qwen3MoECausalLM>(cfg, generation_cfg,
-                                                          nntr_cfg);
-    });
-  quick_ai::Factory::Instance().registerModel(
-    "Qwen3SlimMoeForCausalLM",
-    [](json cfg, json generation_cfg, json nntr_cfg) {
-      return std::make_unique<quick_ai::Qwen3SlimMoECausalLM>(
-        cfg, generation_cfg, nntr_cfg);
-    });
-#if !defined(_WIN32)
-  quick_ai::Factory::Instance().registerModel(
-    "Qwen3CachedSlimMoeForCausalLM",
-    [](json cfg, json generation_cfg, json nntr_cfg) {
-      return std::make_unique<quick_ai::Qwen3CachedSlimMoECausalLM>(
-        cfg, generation_cfg, nntr_cfg);
-    });
-#endif
-  quick_ai::Factory::Instance().registerModel(
-    "Qwen3Embedding", [](json cfg, json generation_cfg, json nntr_cfg) {
-      return std::make_unique<quick_ai::Qwen3Embedding>(cfg, generation_cfg,
-                                                        nntr_cfg);
-    });
-  quick_ai::Factory::Instance().registerModel(
-    "GptOssForCausalLM", [](json cfg, json generation_cfg, json nntr_cfg) {
-      return std::make_unique<quick_ai::GptOssForCausalLM>(cfg, generation_cfg,
-                                                           nntr_cfg);
-    });
-#if !defined(_WIN32)
-  quick_ai::Factory::Instance().registerModel(
-    "GptOssCachedSlimCausalLM",
-    [](json cfg, json generation_cfg, json nntr_cfg) {
-      return std::make_unique<quick_ai::GptOssCachedSlimCausalLM>(
-        cfg, generation_cfg, nntr_cfg);
-    });
-#endif
-  quick_ai::Factory::Instance().registerModel(
-    "Gemma3ForCausalLM", [](json cfg, json generation_cfg, json nntr_cfg) {
-      return std::make_unique<quick_ai::Gemma3CausalLM>(cfg, generation_cfg,
-                                                        nntr_cfg);
-    });
-  quick_ai::Factory::Instance().registerModel(
-    "Gemma4ForCausalLM", [](json cfg, json generation_cfg, json nntr_cfg) {
-      return std::make_unique<quick_ai::Gemma4CausalLM>(cfg, generation_cfg,
-                                                        nntr_cfg);
-    });
-  quick_ai::Factory::Instance().registerModel(
-    "EmbeddingGemma", [](json cfg, json generation_cfg, json nntr_cfg) {
-      return std::make_unique<quick_ai::EmbeddingGemma>(cfg, generation_cfg,
-                                                        nntr_cfg);
-    });
-  quick_ai::Factory::Instance().registerModel(
-    "DebertaV2", [](json cfg, json generation_cfg, json nntr_cfg) {
-      return std::make_unique<quick_ai::DebertaV2>(cfg, generation_cfg,
-                                                   nntr_cfg);
-    });
-#if !defined(_WIN32) && !defined(__ANDROID__)
-  quick_ai::Factory::Instance().registerModel(
-    "MultilingualTinyBert", [](json cfg, json generation_cfg, json nntr_cfg) {
-      return std::make_unique<quick_ai::MultilingualTinyBert>(
-        cfg, generation_cfg, nntr_cfg);
-    });
-#endif
-#if !defined(_WIN32)
-  quick_ai::Factory::Instance().registerModel(
-    "XLMRobertaForMaskedLM", [](json cfg, json generation_cfg, json nntr_cfg) {
-      return std::make_unique<quick_ai::XLMRobertaForMaskedLM>(
-        cfg, generation_cfg, nntr_cfg);
-    });
-#endif
-  quick_ai::Factory::Instance().registerModel(
-    "TimmViT", [](json cfg, json generation_cfg, json nntr_cfg) {
-      return std::make_unique<quick_ai::TimmViTTransformer>(cfg, generation_cfg,
-                                                            nntr_cfg);
-    });
+  /** Register CED model */
   quick_ai::Factory::Instance().registerModel(
     "CedForAudioClassification",
     [](json cfg, json generation_cfg, json nntr_cfg) {
       return std::make_unique<quick_ai::CedTransformer>(cfg, generation_cfg,
                                                         nntr_cfg);
-    });
-  quick_ai::Factory::Instance().registerModel(
-    "Lfm2ForCausalLM", [](json cfg, json generation_cfg, json nntr_cfg) {
-      return std::make_unique<quick_ai::Lfm2CausalLM>(cfg, generation_cfg,
-                                                      nntr_cfg);
     });
 
   // Validate arguments
@@ -401,32 +266,11 @@ int main(int argc, char *argv[]) {
       architecture = resolve_architecture(model_type, architecture);
     }
 
-    // Load chat template from tokenizer_config.json or jinja (if available)
-    std::optional<quick_ai::ChatTemplate> chat_template;
-    if (quick_ai::ChatTemplate::Exists(model_path)) {
-      chat_template.emplace(quick_ai::ChatTemplate::Load(model_path));
-    }
-
     // Determine input text
     if (argc >= 3) {
       input_text = argv[2];
     } else {
-      if (nntr_cfg.contains("chat_input")) {
-        if (chat_template.has_value()) {
-          input_text = chat_template->apply(nntr_cfg["chat_input"]);
-          system_head_prompt.clear();
-          system_tail_prompt.clear();
-        } else {
-          std::cerr << "[Warning] 'chat_input' is set but support for model "
-                       "architecture '"
-                    << architecture
-                    << "' is not implemented. Falling back to 'sample_input'."
-                    << std::endl;
-          input_text = nntr_cfg["sample_input"].get<std::string>();
-        }
-      } else {
-        input_text = nntr_cfg["sample_input"].get<std::string>();
-      }
+      input_text = nntr_cfg["sample_input"].get<std::string>();
     }
 
     auto model = quick_ai::Factory::Instance().create(architecture, cfg,
