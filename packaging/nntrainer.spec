@@ -98,7 +98,7 @@
 ##   armv7l : -march=armv7-a -mtune=cortex-a8 -mfpu=neon -mfloat-abi=softfp -mthumb
 ##   aarch64: -march=armv8-a+fp+simd+crc+crypto -mtune=cortex-a57.cortex-a53
 ## A build pinned to a known newer device can raise that baseline. The value is
-## appended to CFLAGS/CXXFLAGS last in %build, so it beats both the reference
+## appended to CFLAGS/CXXFLAGS last in %%build, so it beats both the reference
 ## optflags and the -march that meson.build hardcodes for aarch64 (meson places
 ## environment flags after add_project_arguments()).
 ##   gbs build -A armv7l --define "arm_tune -march=armv8.2-a+dotprod -mtune=cortex-a76 -mfpu=neon-fp-armv8 -mfp16-format=ieee"
@@ -159,11 +159,9 @@ Source2004:	label.dat
 Source2005:	unittest_layers.tar.gz
 
 BuildRequires:	meson >= 0.55.0
-BuildRequires:	openblas-devel
 BuildRequires:	iniparser-devel >= 4.1
 BuildRequires:	gtest-devel
 BuildRequires:	python3
-BuildRequires:	python3-numpy
 BuildRequires:	flatbuffers-devel
 BuildRequires:  cmake
 %if %{with gpu}
@@ -221,10 +219,7 @@ BuildRequires:	nnstreamer-devel
 
 %if 0%{?unit_test}
 %if 0%{tizen_version_major}%{tizen_version_minor} > 60
-BuildRequires:	nnstreamer-test-devel
 %endif
-BuildRequires:	gst-plugins-good-extra
-BuildRequires:	python
 %endif # unit_test
 %endif # nnstreamer_filter
 
@@ -243,7 +238,7 @@ NNtrainer Meta package for tizen
 %package core
 Summary:	Software framework for training neural networks
 Requires:	iniparser >= 4.1
-Requires:	libopenblas_pthreads0
+Requires:	libopenblas_openmp0
 
 %description core
 NNtrainer is Software Framework for Training Neural Network Models on Devices.
@@ -251,7 +246,6 @@ NNtrainer is Software Framework for Training Neural Network Models on Devices.
 %package devel
 Summary:	Development package for custom nntrainer developers
 Requires:	nntrainer = %{version}-%{release}
-Requires:	openblas-devel
 
 %description devel
 Development package for custom nntrainer developers.
@@ -272,7 +266,6 @@ Requires:	capi-machine-learning-training = %{version}-%{release}
 Requires:	%{capi_machine_learning_inference}
 Requires:	nnstreamer-tensorflow2-lite
 %if 0%{tizen_version_major}%{tizen_version_minor} > 60
-BuildRequires:	nnstreamer-test-devel
 %endif
 BuildRequires:	nnstreamer-tensorflow2-lite
 BuildRequires:	tensorflow2-lite-devel
