@@ -76,8 +76,9 @@ Applications/**/tokenizers-cpp-build/*
 *.so
 *.o
 *.a
-# allow tokenizer lib only
+# allow tokenizer libs only
 !Applications/quick_ai/lib/libtokenizers_c.a
+!Applications/quick_ai/lib/libtokenizers_aarch64_c.a
 
 *.o.d
 *.nnlayergolden
