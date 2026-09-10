@@ -43,7 +43,7 @@ if host_machine.system() != 'windows'
   endif
   subdir('YOLOv2/jni')
   subdir('YOLOv3/jni')
-  subdir('ReinforcementLearning/DeepQ/jni')
+  # subdir('ReinforcementLearning/DeepQ/jni')
   subdir('Custom')
   if get_option('enable-tflite-interpreter')
   subdir('TFlite_export')
