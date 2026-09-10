@@ -557,6 +557,7 @@ else
       googletest_options.add_cmake_defines({'CMAKE_POSITION_INDEPENDENT_CODE': true})
     endif
     googletest_options.add_cmake_defines({'BUILD_SHARED_LIBS': false})
+    googletest_options.add_cmake_defines({'CMAKE_CXX_FLAGS': '-Wno-error=deprecated-declarations'})
     googletest_subproject = cmake.subproject('googletest', options: googletest_options, required: true)
     gmock_dep = googletest_subproject.dependency('gmock')
     gtest_dep = googletest_subproject.dependency('gtest')
@@ -569,9 +570,6 @@ endif
 
 if get_option('enable-test') # and get_option('platform') != 'android'
   extra_defines += '-DENABLE_TEST=1'
-  if gtest_dep.version().version_compare('<1.10.0')
-     extra_defines += '-DGTEST_BACKPORT=1'
-  endif
   test_timeout = get_option('test-timeout')
 endif
 
