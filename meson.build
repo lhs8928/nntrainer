@@ -161,9 +161,13 @@ else
   extra_defines += '-DKERNEL_CACHE=0'
 endif
 
-if get_option('platform') != 'android' and host_machine.cpu_family() == 'aarch64'
-  extra_defines += '-D__ARM_FEATURE_DOTPROD=1'
-  extra_defines += '-D__ARM_FEATURE_MATMUL_INT8=1'
+if host_machine.cpu_family() == 'aarch64'
+  arm_arch_opt = get_option('arm-arch')
+  # Only enable DOTPROD/MATMUL for armv8.2-a and later
+  if arm_arch_opt == 'armv8.2-a' or arm_arch_opt == 'armv9.2-a'
+    extra_defines += '-D__ARM_FEATURE_DOTPROD=1'
+    extra_defines += '-D__ARM_FEATURE_MATMUL_INT8=1'
+  endif
 endif
 
 if get_option('enable-fp16')
