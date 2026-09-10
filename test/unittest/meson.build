@@ -106,9 +106,14 @@ if get_option('enable-profile')
   endif
 endif
 
-if host_machine.cpu_family() == 'aarch64'
-  test_target += [['unittest_nntrainer_kleidiai', []]]
+arch = host_machine.cpu_family()
+# KAI is only available for aarch64 armv8.2-a/armv9.2-a
+if arch == 'aarch64'
   test_target += [['unittest_nntrainer_ggml_arm', []]]
+  arm_arch_opt = get_option('arm-arch')
+  if arm_arch_opt == 'armv8.2-a' or arm_arch_opt == 'armv9.2-a'
+    test_target += [['unittest_nntrainer_kleidiai', []]]
+  endif
 endif
 
 foreach target: test_target

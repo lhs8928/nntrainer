@@ -10,10 +10,14 @@ arm_compute_backend_sources = [
 ]
 
 arch = host_machine.cpu_family()
-if arch != 'arm'
-  subdir('kai_interface')
-  nntrainer_inc += include_directories('kai_interface')
-  nntrainer_inc_abs += meson.current_source_dir() / 'kai_interface'
+# KAI is only available for aarch64 armv8.2-a and armv9.2-a
+if arch == 'aarch64'
+  arm_arch_opt = get_option('arm-arch')
+  if arm_arch_opt == 'armv8.2-a' or arm_arch_opt == 'armv9.2-a'
+    subdir('kai_interface')
+    nntrainer_inc += include_directories('kai_interface')
+    nntrainer_inc_abs += meson.current_source_dir() / 'kai_interface'
+  endif
 endif
 
 subdir('matrix_transpose_neon')

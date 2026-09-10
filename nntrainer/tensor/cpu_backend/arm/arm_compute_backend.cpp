@@ -19,7 +19,7 @@
 #include <fallback_internal.h>
 #include <fp16.h>
 #include <ggml_interface.h>
-#ifndef ARMV7
+#if !defined(ARMV7) && (defined(ARM_ARCH_ARMV8_2A) || defined(ARM_ARCH_ARMV9_2A))
 #include <kleidiai_interface.h>
 #endif
 #include <neon_impl.h>
@@ -841,7 +841,7 @@ void quant_qs4cx_f32(size_t n, size_t k, void *rhs_native_mtx_f32,
 
 size_t get_rhs_packed_size_qsi4cxp_qs4cxs1s0(size_t n, size_t k,
                                              size_t idx_variant, bool is_nxk) {
-#ifndef ARMV7
+#if !defined(ARMV7) && (defined(ARM_ARCH_ARMV8_2A) || defined(ARM_ARCH_ARMV9_2A))
   return __kai_get_rhs_packed_size_qsi4cxp_qs4cxs1s0(n, k, idx_variant, is_nxk);
 #else
   return __fallback_get_rhs_packed_size_qsi4cxp_qs4cxs1s0(n, k, idx_variant,
@@ -853,7 +853,7 @@ void rhs_pack_qsi4cxp_qs4cxs1s0(size_t n, size_t k, void *rhs_packed_mtx_qs4cx,
                                 void *rhs_native_mtx_qs4cx,
                                 void *rhs_scales_f32, size_t idx_variant,
                                 bool is_nxk) {
-#ifndef ARMV7
+#if !defined(ARMV7) && (defined(ARM_ARCH_ARMV8_2A) || defined(ARM_ARCH_ARMV9_2A))
   __kai_rhs_pack_qsi4cxp_qs4cxs1s0(n, k, rhs_packed_mtx_qs4cx,
                                    rhs_native_mtx_qs4cx, rhs_scales_f32,
                                    idx_variant, is_nxk);
@@ -868,7 +868,7 @@ void gemm_qai8dxp_qsi4cxp_rhs_unpacked(
   size_t m, size_t n, size_t k, void *lhs_native_mtx_f32,
   void *rhs_native_mtx_qs4cx, void *rhs_scales_f32, float *dst_act_mtx_f32,
   size_t idx_variant, bool is_nxk, float lower_bound, float upper_bound) {
-#ifndef ARMV7
+#if !defined(ARMV7) && (defined(ARM_ARCH_ARMV8_2A) || defined(ARM_ARCH_ARMV9_2A))
   __kai_gemm_qai8dxp_qsi4cxp_rhs_unpacked(
     m, n, k, lhs_native_mtx_f32, rhs_native_mtx_qs4cx, rhs_scales_f32,
     dst_act_mtx_f32, idx_variant, is_nxk, lower_bound, upper_bound);
@@ -900,7 +900,7 @@ void gemm_qai8dxp_qsi4cxp(size_t m, size_t n, size_t k,
                           void *lhs_native_mtx_f32, void *rhs_packed_mtx_qs4cx,
                           float *dst_act_mtx_f32, size_t idx_variant,
                           float lower_bound, float upper_bound) {
-#ifndef ARMV7
+#if !defined(ARMV7) && (defined(ARM_ARCH_ARMV8_2A) || defined(ARM_ARCH_ARMV9_2A))
   __kai_gemm_qai8dxp_qsi4cxp(m, n, k, lhs_native_mtx_f32, rhs_packed_mtx_qs4cx,
                              dst_act_mtx_f32, idx_variant, lower_bound,
                              upper_bound);
