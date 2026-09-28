@@ -32,6 +32,8 @@
 #include <factory.h>
 
 #include "ced/ced_transformer.h"
+#include "qwen3_asr_causallm.h"
+#include "audio_preprocessor.h"
 #if !defined(_WIN32)
 #include <sys/resource.h>
 #endif
@@ -47,6 +49,16 @@ std::atomic<size_t> peak_rss_kb{0};
 std::atomic<bool> tracking_enabled{true};
 
 namespace {
+
+inline unsigned int get_feat_extract_output_lengths(unsigned int input_lengths) {
+  unsigned int input_lengths_leave = input_lengths % 100;
+  unsigned int tail_tokens = 0;
+  if (input_lengths_leave > 0) {
+    unsigned int feat_lengths = (input_lengths_leave - 1) / 2 + 1;
+    tail_tokens = ((feat_lengths - 1) / 2 + 1 - 1) / 2 + 1;
+  }
+  return tail_tokens + (input_lengths / 100) * 13;
+}
 
 void resolveNntrConfigPath(json &nntr_cfg, const std::string &key,
                            const std::string &model_path) {
@@ -185,15 +197,34 @@ std::string resolve_architecture(std::string model_type,
  * @brief Entry point for loading, initializing, and running a CausalLM model.
  */
 int main(int argc, char *argv[]) {
+  // Parse and consume --audio option if present
+  std::string audio_path = "";
+  for (int i = 1; i < argc; ++i) {
+    if (std::strcmp(argv[i], "--audio") == 0 && i + 1 < argc) {
+      audio_path = argv[i + 1];
+      for (int j = i; j < argc - 2; ++j) {
+        argv[j] = argv[j + 2];
+      }
+      argc -= 2;
+      break;
+    }
+  }
 
   auto start_time = std::chrono::high_resolution_clock::now();
 
   /** Register CED model */
   quick_ai::Factory::Instance().registerModel(
     "CedForAudioClassification",
-    [](json cfg, json generation_cfg, json nntr_cfg) {
+    [](json &cfg, json &generation_cfg, json &nntr_cfg) {
       return std::make_unique<quick_ai::CedTransformer>(cfg, generation_cfg,
                                                         nntr_cfg);
+    });
+
+  quick_ai::Factory::Instance().registerModel(
+    "Qwen3ASRForConditionalGeneration",
+    [](json &cfg, json &generation_cfg, json &nntr_cfg) {
+      return std::make_unique<quick_ai::Qwen3ASRCausalLM>(cfg, generation_cfg,
+                                                          nntr_cfg);
     });
 
   // Validate arguments
@@ -215,12 +246,45 @@ int main(int argc, char *argv[]) {
   try {
     // Load configuration files
     json cfg = quick_ai::LoadJsonFile(model_path + "/config.json");
+    json text_cfg = json::object();
+    if (cfg.contains("text_config") && cfg["text_config"].is_object()) {
+      text_cfg = cfg["text_config"];
+    } else if (cfg.contains("thinker_config") && cfg["thinker_config"].is_object() &&
+               cfg["thinker_config"].contains("text_config") && cfg["thinker_config"]["text_config"].is_object()) {
+      text_cfg = cfg["thinker_config"]["text_config"];
+    }
+
+    if (!text_cfg.empty()) {
+      for (auto& [key, val] : text_cfg.items()) {
+        if (key != "architectures" && key != "model_type" && !val.is_null()) {
+          cfg[key] = val;
+        }
+      }
+    }
+
     json generation_cfg = json::object();
     std::string generation_config_path = model_path + "/generation_config.json";
     if (std::filesystem::exists(generation_config_path)) {
       generation_cfg = quick_ai::LoadJsonFile(generation_config_path);
     }
     json nntr_cfg = quick_ai::LoadJsonFile(model_path + "/nntr_config.json");
+
+    if (!audio_path.empty()) {
+      quick_ai::AudioPreprocessor preprocessor;
+      auto pcm = preprocessor.loadWav(audio_path);
+      unsigned int audio_frames = pcm.size() / 160;
+      constexpr unsigned int MAX_AUDIO_FRAMES = 1200 * 100; // 20 minutes (1200s * 100fps)
+      if (audio_frames > MAX_AUDIO_FRAMES) {
+        audio_frames = MAX_AUDIO_FRAMES;
+      }
+      nntr_cfg["audio_seq_len"] = audio_frames;
+      unsigned int audio_seq_len = get_feat_extract_output_lengths(audio_frames);
+      unsigned int base_seq_len = nntr_cfg.value("init_seq_len", 15);
+      unsigned int num_to_generate = nntr_cfg.value("num_to_generate", 5);
+      nntr_cfg["init_seq_len"] = base_seq_len + audio_seq_len;
+      nntr_cfg["max_seq_len"] = base_seq_len + audio_seq_len + num_to_generate;
+      nntr_cfg["sliding_window"] = base_seq_len + audio_seq_len + num_to_generate;
+    }
     // Resolve relative paths in nntr_config.json against the model directory.
     // Iterate by value (const std::string) rather than by reference: the
     // initializer list holds const char * literals that are converted to
@@ -282,6 +346,32 @@ int main(int argc, char *argv[]) {
       std::cerr << std::endl;
       return EXIT_FAILURE;
     }
+    if (architecture == "Qwen3ASRForConditionalGeneration" && !audio_path.empty()) {
+      auto *asr_model = dynamic_cast<quick_ai::Qwen3ASRCausalLM*>(model.get());
+      if (asr_model) {
+        asr_model->setAudioPath(audio_path);
+        
+        quick_ai::AudioPreprocessor preprocessor;
+        auto pcm = preprocessor.loadWav(audio_path);
+        unsigned int audio_frames = pcm.size() / 160;
+        constexpr unsigned int MAX_AUDIO_FRAMES = 1200 * 100; // 20 minutes (1200s * 100fps)
+        if (audio_frames > MAX_AUDIO_FRAMES) {
+          audio_frames = MAX_AUDIO_FRAMES;
+        }
+        unsigned int audio_seq_len = get_feat_extract_output_lengths(audio_frames);
+        
+        std::string pad_tokens = "";
+        for (unsigned int idx = 0; idx < audio_seq_len; ++idx) {
+          pad_tokens += "<|audio_pad|>";
+        }
+        input_text = "<|im_start|>system\n<|im_end|>\n<|im_start|>user\n<|audio_start|>" + 
+                     pad_tokens + "<|audio_end|>" + input_text + "<|im_end|>\n<|im_start|>assistant\n";
+        
+        system_head_prompt.clear();
+        system_tail_prompt.clear();
+      }
+    }
+
     model->initialize();
     model->load_weight(weight_file);
     model->repack_weight();
