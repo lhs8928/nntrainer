@@ -41,16 +41,22 @@ static unsigned int get_feat_extract_output_lengths(unsigned int input_lengths) 
 }
 
 std::pair<Tensor, Tensor> Qwen3ASRTransformer::constructModel() {
-  std::cout << "[Qwen3-ASR] Constructing Qwen3ASRSubsampler sub-model graph..." << std::endl;
-  subsampler.constructModel();
+  std::cout << "[Qwen3-ASR] Constructing Qwen3ASRSubsampler sub-model graph ("
+            << "conv_dtype: " << conv_layer_dtype 
+            << ", subsampler_tensor_type: " << subsampler_model_tensor_type << ")..." << std::endl;
+  subsampler.constructModel(conv_layer_dtype, subsampler_model_tensor_type);
 
   // input0: text token IDs [batch, 1, 1, seq_len] always in FP32
   Tensor input0 = Tensor(nntrainer::TensorDim(1, 1, 1, static_cast<unsigned int>(INIT_SEQ_LEN), nntrainer::TensorDim::Format::NCHW, nntrainer::TensorDim::DataType::FP32), "input0");
 
   unsigned int downsampled_len = get_feat_extract_output_lengths(audio_seq_len);
 
-  // input1: downsampled audio embeddings [batch, 1, downsampled_len, 1024] in FP16 (produced by Qwen3ASRSubsampler sub-model!)
-  Tensor input1 = Tensor(nntrainer::TensorDim(1, 1, downsampled_len, 1024, nntrainer::TensorDim::Format::NCHW, nntrainer::TensorDim::DataType::FP16), "input1");
+  // input1: downsampled audio embeddings [batch, 1, downsampled_len, 1024] in act_dtype
+  nntrainer::TensorDim::DataType input1_dtype = (act_dtype == "FP32")
+    ? nntrainer::TensorDim::DataType::FP32
+    : nntrainer::TensorDim::DataType::FP16;
+
+  Tensor input1 = Tensor(nntrainer::TensorDim(1, 1, downsampled_len, 1024, nntrainer::TensorDim::Format::NCHW, input1_dtype), "input1");
 
   // text embedding
   const std::string embedding_type =
@@ -103,7 +109,7 @@ Tensor Qwen3ASRTransformer::createAudioEncoder(Tensor audio_input) {
     {withKey("name", "audio_tower_ln_post"),
      withKey("axis", "3"),
      withKey("epsilon", "1e-5"),
-     withKey("weight_dtype", "FP16")}));
+     withKey("weight_dtype", audio_tower_weight_dtype)}));
   h = ln_post(h);
 
   // 10. Projections
@@ -112,7 +118,7 @@ Tensor Qwen3ASRTransformer::createAudioEncoder(Tensor audio_input) {
     {withKey("name", "audio_tower_proj1"),
      withKey("unit", "1024"),
      withKey("disable_bias", "false"),
-     withKey("weight_dtype", "FP16")}));
+     withKey("weight_dtype", audio_tower_weight_dtype)}));
   h = proj1(h);
 
   LayerHandle proj_gelu(createLayer("activation", {withKey("name", "audio_tower_proj_gelu"), withKey("activation", "gelu")}));
@@ -123,7 +129,7 @@ Tensor Qwen3ASRTransformer::createAudioEncoder(Tensor audio_input) {
     {withKey("name", "audio_tower_proj2"),
      withKey("unit", std::to_string(DIM)),
      withKey("disable_bias", "false"),
-     withKey("weight_dtype", "FP16")}));
+     withKey("weight_dtype", audio_tower_weight_dtype)}));
   h = proj2(h);
 
   return h;
@@ -137,7 +143,7 @@ Tensor Qwen3ASRTransformer::createAudioAttentionBlock(const int layer_id, Tensor
     {withKey("name", prefix + "attention_norm"),
      withKey("axis", "3"),
      withKey("epsilon", "1e-5"),
-     withKey("weight_dtype", "FP16")}));
+     withKey("weight_dtype", audio_tower_weight_dtype)}));
   Tensor normed = norm(input);
 
   LayerHandle q_proj(createLayer(
@@ -145,30 +151,32 @@ Tensor Qwen3ASRTransformer::createAudioAttentionBlock(const int layer_id, Tensor
     {withKey("name", prefix + "qkv_q"),
      withKey("unit", "1024"),
      withKey("disable_bias", "false"),
-     withKey("weight_dtype", "FP16")}));
+     withKey("weight_dtype", audio_tower_weight_dtype)}));
   LayerHandle k_proj(createLayer(
     "fully_connected",
     {withKey("name", prefix + "qkv_k"),
      withKey("unit", "1024"),
      withKey("disable_bias", "false"),
-     withKey("weight_dtype", "FP16")}));
+     withKey("weight_dtype", audio_tower_weight_dtype)}));
   LayerHandle v_proj(createLayer(
     "fully_connected",
     {withKey("name", prefix + "qkv_v"),
      withKey("unit", "1024"),
      withKey("disable_bias", "false"),
-     withKey("weight_dtype", "FP16")}));
+     withKey("weight_dtype", audio_tower_weight_dtype)}));
 
   Tensor query = q_proj(normed);
   Tensor key = k_proj(normed);
   Tensor value = v_proj(normed);
 
-  LayerHandle q_cast_fp32(createLayer("cast", {withKey("name", prefix + "q_cast_fp32"), withKey("tensor_dtype", "FP32")}));
-  LayerHandle k_cast_fp32(createLayer("cast", {withKey("name", prefix + "k_cast_fp32"), withKey("tensor_dtype", "FP32")}));
-  LayerHandle v_cast_fp32(createLayer("cast", {withKey("name", prefix + "v_cast_fp32"), withKey("tensor_dtype", "FP32")}));
-  query = q_cast_fp32(query);
-  key = k_cast_fp32(key);
-  value = v_cast_fp32(value);
+  if (act_dtype != "FP32") {
+    LayerHandle q_cast_fp32(createLayer("cast", {withKey("name", prefix + "q_cast_fp32"), withKey("tensor_dtype", "FP32")}));
+    LayerHandle k_cast_fp32(createLayer("cast", {withKey("name", prefix + "k_cast_fp32"), withKey("tensor_dtype", "FP32")}));
+    LayerHandle v_cast_fp32(createLayer("cast", {withKey("name", prefix + "v_cast_fp32"), withKey("tensor_dtype", "FP32")}));
+    query = q_cast_fp32(query);
+    key = k_cast_fp32(key);
+    value = v_cast_fp32(value);
+  }
 
   LayerHandle attention(createLayer(
     "mha_core",
@@ -180,18 +188,20 @@ Tensor Qwen3ASRTransformer::createAudioAttentionBlock(const int layer_id, Tensor
      withKey("is_causal", "false")}));
   Tensor context = attention({query, key, value});
 
-  LayerHandle context_cast_fp16(createLayer(
-    "cast",
-    {withKey("name", prefix + "context_cast_fp16"),
-     withKey("tensor_dtype", "FP16")}));
-  context = context_cast_fp16(context);
+  if (act_dtype != "FP32") {
+    LayerHandle context_cast(createLayer(
+      "cast",
+      {withKey("name", prefix + "context_cast_" + act_dtype),
+       withKey("tensor_dtype", act_dtype)}));
+    context = context_cast(context);
+  }
 
   LayerHandle out_proj(createLayer(
     "fully_connected",
     {withKey("name", prefix + "attention_out"),
      withKey("unit", "1024"),
      withKey("disable_bias", "false"),
-     withKey("weight_dtype", "FP16")}));
+     withKey("weight_dtype", audio_tower_weight_dtype)}));
   Tensor att_out = out_proj(context);
 
   LayerHandle attention_res(createLayer("addition", {withKey("name", prefix + "attention_residual")}));
@@ -202,7 +212,7 @@ Tensor Qwen3ASRTransformer::createAudioAttentionBlock(const int layer_id, Tensor
     {withKey("name", prefix + "ffn_norm"),
      withKey("axis", "3"),
      withKey("epsilon", "1e-5"),
-     withKey("weight_dtype", "FP16")}));
+     withKey("weight_dtype", audio_tower_weight_dtype)}));
   Tensor ffn_normed = ffn_norm(residual);
 
   LayerHandle ffn_up(createLayer(
@@ -210,30 +220,34 @@ Tensor Qwen3ASRTransformer::createAudioAttentionBlock(const int layer_id, Tensor
     {withKey("name", prefix + "ffn_up"),
      withKey("unit", "4096"),
      withKey("disable_bias", "false"),
-     withKey("weight_dtype", "FP16")}));
+     withKey("weight_dtype", audio_tower_weight_dtype)}));
   Tensor h = ffn_up(ffn_normed);
 
-  LayerHandle ffn_gelu_cast_fp32(createLayer(
-    "cast",
-    {withKey("name", prefix + "ffn_gelu_cast_fp32"),
-     withKey("tensor_dtype", "FP32")}));
-  h = ffn_gelu_cast_fp32(h);
+  if (act_dtype != "FP32") {
+    LayerHandle ffn_gelu_cast_fp32(createLayer(
+      "cast",
+      {withKey("name", prefix + "ffn_gelu_cast_fp32"),
+       withKey("tensor_dtype", "FP32")}));
+    h = ffn_gelu_cast_fp32(h);
+  }
 
   LayerHandle ffn_gelu(createLayer("activation", {withKey("name", prefix + "ffn_gelu"), withKey("activation", "gelu")}));
   h = ffn_gelu(h);
 
-  LayerHandle ffn_gelu_cast_fp16(createLayer(
-    "cast",
-    {withKey("name", prefix + "ffn_gelu_cast_fp16"),
-     withKey("tensor_dtype", "FP16")}));
-  h = ffn_gelu_cast_fp16(h);
+  if (act_dtype != "FP32") {
+    LayerHandle ffn_gelu_cast_act(createLayer(
+      "cast",
+      {withKey("name", prefix + "ffn_gelu_cast_" + act_dtype),
+       withKey("tensor_dtype", act_dtype)}));
+    h = ffn_gelu_cast_act(h);
+  }
 
   LayerHandle ffn_down(createLayer(
     "fully_connected",
     {withKey("name", prefix + "ffn_down"),
      withKey("unit", "1024"),
      withKey("disable_bias", "false"),
-     withKey("weight_dtype", "FP16")}));
+     withKey("weight_dtype", audio_tower_weight_dtype)}));
   Tensor mlp_out = ffn_down(h);
 
   LayerHandle ffn_res(createLayer("addition", {withKey("name", prefix + "ffn_residual")}));
@@ -266,8 +280,8 @@ void Qwen3ASRCausalLM::initialize() {
   std::cout << "[Qwen3-ASR] Initializing Main CausalLM model..." << std::endl;
   Transformer::initialize();
 
-  std::cout << "[Qwen3-ASR] Initializing Qwen3ASRSubsampler sub-model..." << std::endl;
-  subsampler.initialize(MODEL_TENSOR_TYPE);
+  std::cout << "[Qwen3-ASR] Initializing Qwen3ASRSubsampler sub-model (" << subsampler_model_tensor_type << ")..." << std::endl;
+  subsampler.initialize(subsampler_model_tensor_type);
 }
 
 void Qwen3ASRCausalLM::load_weight(const std::string &path) {
@@ -394,7 +408,16 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
   unsigned int num_chunks = (audio_seq_len + 99) / 100;
   if (num_chunks == 0) num_chunks = 1;
 
-  std::vector<_Float16> fused_audio_embeds(static_cast<size_t>(downsampled_len) * 1024, static_cast<_Float16>(0.0f));
+  std::vector<_Float16> fused_audio_embeds_fp16;
+  std::vector<float> fused_audio_embeds_fp32;
+  void *audio_input_ptr = nullptr;
+
+  if (act_dtype == "FP32") {
+    fused_audio_embeds_fp32.resize(static_cast<size_t>(downsampled_len) * 1024, 0.0f);
+  } else {
+    fused_audio_embeds_fp16.resize(static_cast<size_t>(downsampled_len) * 1024, static_cast<_Float16>(0.0f));
+  }
+
   nntrainer::Tensor chunk_tensor(nntrainer::TensorDim(1, 1, 128, 100, nntrainer::TensorDim::Format::NCHW, nntrainer::TensorDim::DataType::FP32));
   float *chunk_ptr = chunk_tensor.getData<float>();
 
@@ -415,13 +438,18 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
     auto chunk_out = subsampler.inference(chunk_ptr);
     const float *cout_ptr = chunk_out[0];
 
-    // Copy valid tokens into fused_audio_embeds (converting float -> _Float16)
+    // Copy valid tokens into fused_audio_embeds
     unsigned int valid_tokens = (c + 1 < num_chunks) ? 13 : (downsampled_len - out_token_idx);
     for (unsigned int t = 0; t < valid_tokens; ++t) {
-      _Float16 *dst = fused_audio_embeds.data() + out_token_idx * 1024;
       const float *src = cout_ptr + t * 1024;
-      for (int k = 0; k < 1024; ++k) {
-        dst[k] = static_cast<_Float16>(src[k]);
+      if (act_dtype == "FP32") {
+        float *dst = fused_audio_embeds_fp32.data() + out_token_idx * 1024;
+        std::copy_n(src, 1024, dst);
+      } else {
+        _Float16 *dst = fused_audio_embeds_fp16.data() + out_token_idx * 1024;
+        for (int k = 0; k < 1024; ++k) {
+          dst[k] = static_cast<_Float16>(src[k]);
+        }
       }
       out_token_idx++;
     }
@@ -431,7 +459,9 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
             << " chunks -> " << out_token_idx << " audio tokens [1, 1, "
             << downsampled_len << ", 1024]" << std::endl;
 
-  void *audio_input_ptr = fused_audio_embeds.data();
+  audio_input_ptr = (act_dtype == "FP32")
+    ? static_cast<void *>(fused_audio_embeds_fp32.data())
+    : static_cast<void *>(fused_audio_embeds_fp16.data());
 
   // 2. Tokenize prompt
   std::string prompt_ = system_prompt + prompt + tail_prompt;

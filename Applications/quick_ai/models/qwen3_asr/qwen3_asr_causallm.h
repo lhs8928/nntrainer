@@ -29,6 +29,14 @@ public:
     if (nntr_cfg.contains("audio_seq_len")) {
       audio_seq_len = nntr_cfg["audio_seq_len"].get<unsigned int>();
     }
+
+    // Dynamic data type configuration with fallbacks
+    audio_tower_weight_dtype = nntr_cfg.value("audio_tower_weight_dtype", "FP16");
+    conv_layer_dtype = nntr_cfg.value("conv_layer_dtype", "FP32");
+    subsampler_model_tensor_type = nntr_cfg.value("subsampler_model_tensor_type", "FP32-FP32");
+
+    size_t dash = MODEL_TENSOR_TYPE.find('-');
+    act_dtype = (dash != std::string::npos) ? MODEL_TENSOR_TYPE.substr(dash + 1) : "FP16";
   }
 
   virtual ~Qwen3ASRTransformer() = default;
@@ -40,6 +48,10 @@ protected:
   Tensor createAudioAttentionBlock(const int layer_id, Tensor input, unsigned int max_timestep);
 
   unsigned int audio_seq_len;
+  std::string audio_tower_weight_dtype;
+  std::string conv_layer_dtype;
+  std::string subsampler_model_tensor_type;
+  std::string act_dtype;
 
 public:
   Qwen3ASRSubsampler* getSubsampler() { return &subsampler; }
