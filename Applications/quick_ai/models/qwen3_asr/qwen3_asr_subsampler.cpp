@@ -18,18 +18,29 @@
 
 namespace quick_ai {
 
-void Qwen3ASRSubsampler::constructModel() {
+void Qwen3ASRSubsampler::constructModel(const std::string &conv_dtype,
+                                        const std::string &subsampler_tensor_type) {
   if (model_constructed) return;
 
   model = ml::train::createModel(ml::train::ModelType::NEURAL_NET);
   model->setProperty({
     nntrainer::withKey("batch_size", "1"),
     nntrainer::withKey("epochs", "1"),
-    nntrainer::withKey("model_tensor_type", "FP32-FP32")
+    nntrainer::withKey("model_tensor_type", subsampler_tensor_type)
   });
 
-  // Input: [1, 1, 128, 100] in FP32
-  input_tensor = ml::train::Tensor({1, 1, 128, 100}, "subsampler_input");
+  // Extract weight and act dtype from subsampler_tensor_type
+  size_t dash = subsampler_tensor_type.find('-');
+  std::string subsampler_weight_dtype = (dash != std::string::npos) ? subsampler_tensor_type.substr(0, dash) : subsampler_tensor_type;
+  std::string subsampler_act_dtype = (dash != std::string::npos) ? subsampler_tensor_type.substr(dash + 1) : subsampler_tensor_type;
+
+  // Input: [1, 1, 128, 100]
+  ml::train::TensorDim::DataType in_dtype = (subsampler_act_dtype == "FP16")
+    ? ml::train::TensorDim::DataType::FP16
+    : ml::train::TensorDim::DataType::FP32;
+  input_tensor = ml::train::Tensor(
+    nntrainer::TensorDim(1, 1, 128, 100, nntrainer::TensorDim::Format::NCHW, in_dtype),
+    "subsampler_input");
 
   // 1. conv2d1: stride 2, padding 1, filters 480, kernel size 3
   ml::train::LayerHandle conv1(ml::train::createLayer("conv2d", {
@@ -39,7 +50,7 @@ void Qwen3ASRSubsampler::constructModel() {
     nntrainer::withKey("stride", "2,2"),
     nntrainer::withKey("padding", "1,1"),
     nntrainer::withKey("disable_bias", "false"),
-    nntrainer::withKey("weight_dtype", "FP32")
+    nntrainer::withKey("weight_dtype", conv_dtype)
   }));
   ml::train::Tensor h = conv1(input_tensor);
 
@@ -57,7 +68,7 @@ void Qwen3ASRSubsampler::constructModel() {
     nntrainer::withKey("stride", "2,2"),
     nntrainer::withKey("padding", "1,1"),
     nntrainer::withKey("disable_bias", "false"),
-    nntrainer::withKey("weight_dtype", "FP32")
+    nntrainer::withKey("weight_dtype", conv_dtype)
   }));
   h = conv2(h);
 
@@ -75,7 +86,7 @@ void Qwen3ASRSubsampler::constructModel() {
     nntrainer::withKey("stride", "2,2"),
     nntrainer::withKey("padding", "1,1"),
     nntrainer::withKey("disable_bias", "false"),
-    nntrainer::withKey("weight_dtype", "FP32")
+    nntrainer::withKey("weight_dtype", conv_dtype)
   }));
   h = conv3(h);
 
@@ -99,22 +110,22 @@ void Qwen3ASRSubsampler::constructModel() {
   }));
   h = reshape(h);
 
-  // 6. conv_out: nn.Linear(7680, 1024, bias=False) in FP32
+  // 6. conv_out: nn.Linear(7680, 1024, bias=False)
   ml::train::LayerHandle conv_out(ml::train::createLayer("fully_connected", {
     nntrainer::withKey("name", "audio_tower_conv_out"),
     nntrainer::withKey("unit", "1024"),
     nntrainer::withKey("disable_bias", "true"),
-    nntrainer::withKey("weight_dtype", "FP32")
+    nntrainer::withKey("weight_dtype", subsampler_weight_dtype)
   }));
   h = conv_out(h);
 
-  // 7. Positional Embedding: 13 rows [1, 1, 13, 1024] in FP32
+  // 7. Positional Embedding: 13 rows [1, 1, 13, 1024]
   ml::train::LayerHandle pos_embed(ml::train::createLayer("weight", {
     nntrainer::withKey("name", "audio_tower_pos_embed"),
     nntrainer::withKey("dim", "1:1:13:1024"),
     nntrainer::withKey("weight_name", "weights"),
-    nntrainer::withKey("weight_dtype", "FP32"),
-    nntrainer::withKey("tensor_dtype", "FP32")
+    nntrainer::withKey("weight_dtype", subsampler_weight_dtype),
+    nntrainer::withKey("tensor_dtype", subsampler_act_dtype)
   }));
   ml::train::Tensor pos = pos_embed(h);
 

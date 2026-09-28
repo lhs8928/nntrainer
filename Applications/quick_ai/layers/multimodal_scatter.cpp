@@ -112,14 +112,24 @@ void MultimodalScatterLayer::forwarding(nntrainer::RunLayerContext &context,
   // Scan fused_embed for NaNs and print first 5 elements
   if (batch > 0) {
     size_t nan_cnt = 0;
-    _Float16* fused_ptr = (_Float16*)fused_embed.getData();
     size_t total_len = fused_embed.getDim().getDataLen();
-    for (size_t k = 0; k < total_len; ++k) {
-      if (std::isnan((float)fused_ptr[k])) nan_cnt++;
+    if (is_fp16) {
+      _Float16* fused_ptr = (_Float16*)fused_embed.getData();
+      for (size_t k = 0; k < total_len; ++k) {
+        if (std::isnan((float)fused_ptr[k])) nan_cnt++;
+      }
+      std::cout << "[MultimodalScatter Debug] fused_embed[0..4]: " 
+                << (float)fused_ptr[0] << ", " << (float)fused_ptr[1] << ", " 
+                << (float)fused_ptr[2] << ", " << (float)fused_ptr[3] << ", " << (float)fused_ptr[4] << std::endl;
+    } else {
+      float* fused_ptr = (float*)fused_embed.getData();
+      for (size_t k = 0; k < total_len; ++k) {
+        if (std::isnan(fused_ptr[k])) nan_cnt++;
+      }
+      std::cout << "[MultimodalScatter Debug] fused_embed[0..4]: " 
+                << fused_ptr[0] << ", " << fused_ptr[1] << ", " 
+                << fused_ptr[2] << ", " << fused_ptr[3] << ", " << fused_ptr[4] << std::endl;
     }
-    std::cout << "[MultimodalScatter Debug] fused_embed[0..4]: " 
-              << (float)fused_ptr[0] << ", " << (float)fused_ptr[1] << ", " 
-              << (float)fused_ptr[2] << ", " << (float)fused_ptr[3] << ", " << (float)fused_ptr[4] << std::endl;
     if (nan_cnt > 0) {
       std::cout << "[MultimodalScatter] WARNING: fused_embed contains " << nan_cnt << " NaNs!" << std::endl;
     }
