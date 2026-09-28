@@ -120,8 +120,8 @@ LOCAL_SRC_FILES := \
     ../layers/shared_fully_connected_layer.cpp \
     ../audio_preprocessor.cpp \
     ../layers/multimodal_scatter.cpp \
-    ../layers/audio_tower_subsampler.cpp \
     ../models/qwen3_asr/qwen3_asr_causallm.cpp \
+    ../models/qwen3_asr/qwen3_asr_subsampler.cpp \
     ../api/streamer.cpp \
 
 LOCAL_SHARED_LIBRARIES := nntrainer ccapi-nntrainer
@@ -264,8 +264,8 @@ LOCAL_SRC_FILES := ../quantize.cpp \
     ../layers/custom_multiply.cpp \
     ../audio_preprocessor.cpp \
     ../layers/multimodal_scatter.cpp \
-    ../layers/audio_tower_subsampler.cpp \
     ../models/qwen3_asr/qwen3_asr_causallm.cpp \
+    ../models/qwen3_asr/qwen3_asr_subsampler.cpp \
     ../api/streamer.cpp
 
 LOCAL_SHARED_LIBRARIES := nntrainer ccapi-nntrainer
@@ -289,6 +289,7 @@ LOCAL_C_INCLUDES += $(NNTRAINER_INCLUDES) \
     $(LOCAL_PATH)/../models/xlm_roberta \
     $(LOCAL_PATH)/../models/timm_vit \
     $(LOCAL_PATH)/../models/ced \
+    $(LOCAL_PATH)/../models/qwen3_asr \
     $(LOCAL_PATH)/../models/lfm2
 
 include $(BUILD_EXECUTABLE)

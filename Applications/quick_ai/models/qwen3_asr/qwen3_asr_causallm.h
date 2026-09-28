@@ -12,6 +12,7 @@
 #define __QWEN3_ASR_CAUSAL_LM_H__
 
 #include <causal_lm.h>
+#include "qwen3_asr_subsampler.h"
 
 namespace quick_ai {
 
@@ -57,6 +58,9 @@ public:
 
   std::pair<Tensor, Tensor> constructModel() override;
 
+  void initialize() override;
+  void load_weight(const std::string &path) override;
+
   void registerCustomLayers() override;
 
   void run(const WSTR prompt, bool do_sample = false,
@@ -66,9 +70,11 @@ public:
   void setAudioPath(const std::string &path) { audio_path = path; }
 
   ml::train::Model* getModel() { return model.get(); }
+  Qwen3ASRSubsampler* getSubsampler() { return &subsampler; }
 
 private:
   std::string audio_path;
+  Qwen3ASRSubsampler subsampler;
 };
 
 } // namespace quick_ai

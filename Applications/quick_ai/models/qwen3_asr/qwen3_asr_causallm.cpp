@@ -15,7 +15,6 @@
 
 #include <app_context.h>
 #include <engine.h>
-#include <audio_tower_subsampler.h>
 #include <multimodal_scatter.h>
 #include <reshaped_rms_norm.h>
 #include <tie_word_embedding.h>
@@ -45,11 +44,10 @@ std::pair<Tensor, Tensor> Qwen3ASRTransformer::constructModel() {
   // input0: text token IDs [batch, 1, 1, seq_len] always in FP32
   Tensor input0 = Tensor(nntrainer::TensorDim(1, 1, 1, static_cast<unsigned int>(INIT_SEQ_LEN), nntrainer::TensorDim::Format::NCHW, nntrainer::TensorDim::DataType::FP32), "input0");
 
-  // input1: audio Mel-spectrogram features [batch, 1, audio_seq_len, 128] compiled unconditionally in DataType::FP32
-  // to allow the Audio Tower's convolutional layers to execute safely on FP32 sgemm kernels!
-  nntrainer::TensorDim::DataType audio_input_dtype = nntrainer::TensorDim::DataType::FP32;
+  unsigned int downsampled_len = get_feat_extract_output_lengths(audio_seq_len);
 
-  Tensor input1 = Tensor(nntrainer::TensorDim(1, 1, 128, audio_seq_len, nntrainer::TensorDim::Format::NCHW, audio_input_dtype), "input1");
+  // input1: downsampled audio embeddings [batch, 1, downsampled_len, 1024] in FP16 (produced by Qwen3ASRSubsampler sub-model!)
+  Tensor input1 = Tensor(nntrainer::TensorDim(1, 1, downsampled_len, 1024, nntrainer::TensorDim::Format::NCHW, nntrainer::TensorDim::DataType::FP16), "input1");
 
   // text embedding
   const std::string embedding_type =
@@ -61,7 +59,7 @@ std::pair<Tensor, Tensor> Qwen3ASRTransformer::constructModel() {
                                   EMBEDDING_SCALE, EMBEDDING_FILE_NAME)));
   Tensor text_embed = embedding(input0);
 
-  // audio encoder
+  // audio encoder (24 Transformer Encoder blocks + Proj)
   Tensor audio_embed = createAudioEncoder(input1);
 
   // multimodal scatter (fusion)
@@ -88,15 +86,8 @@ std::pair<Tensor, Tensor> Qwen3ASRTransformer::constructModel() {
 }
 
 Tensor Qwen3ASRTransformer::createAudioEncoder(Tensor audio_input) {
-  unsigned int audio_seq_len = audio_input.shape().width();
-  unsigned int downsampled_len = get_feat_extract_output_lengths(audio_seq_len);
-
-  // Chunked subsampling layer (100-frame chunks matching PyTorch)
-  LayerHandle subsampler(createLayer(
-    "audio_tower_subsampler",
-    {withKey("name", "audio_tower_subsampler"),
-     withKey("downsampled_len", std::to_string(downsampled_len))}));
-  Tensor h = subsampler(audio_input);
+  unsigned int downsampled_len = audio_input.shape().height();
+  Tensor h = audio_input;
 
   // 8. 24x Transformer Encoder Blocks
   for (int i = 0; i < 24; ++i) {
@@ -268,6 +259,22 @@ std::pair<Tensor, Tensor> Qwen3ASRCausalLM::constructModel() {
   return {x, y};
 }
 
+void Qwen3ASRCausalLM::initialize() {
+  std::cout << "[Qwen3-ASR] Initializing Qwen3ASRSubsampler sub-model..." << std::endl;
+  subsampler.initialize(MODEL_TENSOR_TYPE);
+
+  std::cout << "[Qwen3-ASR] Initializing Main CausalLM model..." << std::endl;
+  Transformer::initialize();
+}
+
+void Qwen3ASRCausalLM::load_weight(const std::string &path) {
+  std::cout << "[Qwen3-ASR] Loading weights for Subsampler sub-model from: " << path << std::endl;
+  subsampler.load_weight(path);
+
+  std::cout << "[Qwen3-ASR] Loading weights for Main CausalLM model from: " << path << std::endl;
+  Transformer::load_weight(path);
+}
+
 void Qwen3ASRCausalLM::registerCustomLayers() {
   CausalLM::registerCustomLayers();
 
@@ -278,8 +285,6 @@ void Qwen3ASRCausalLM::registerCustomLayers() {
       ct_engine.getRegisteredContext("cpu"));
 
     try {
-      app_context->registerFactory(
-        nntrainer::createLayer<quick_ai::AudioTowerSubsamplerLayer>);
       app_context->registerFactory(
         nntrainer::createLayer<quick_ai::MultimodalScatterLayer>);
       app_context->registerFactory(
@@ -381,8 +386,49 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
     std::cout << std::endl;
   }
 
-  // Always pass FP32 (float) mel spectrogram features because input1 is compiled as DataType::FP32 unconditionally
-  void *audio_input_ptr = mel_features_transposed.data();
+  // Run Subsampler sub-model chunk-by-chunk to produce fused_audio_embeds [1, 1, downsampled_len, 1024]
+  unsigned int downsampled_len = get_feat_extract_output_lengths(audio_seq_len);
+  unsigned int num_chunks = (audio_seq_len + 99) / 100;
+  if (num_chunks == 0) num_chunks = 1;
+
+  std::vector<_Float16> fused_audio_embeds(static_cast<size_t>(downsampled_len) * 1024, static_cast<_Float16>(0.0f));
+  nntrainer::Tensor chunk_tensor(nntrainer::TensorDim(1, 1, 128, 100, nntrainer::TensorDim::Format::NCHW, nntrainer::TensorDim::DataType::FP32));
+  float *chunk_ptr = chunk_tensor.getData<float>();
+
+  size_t out_token_idx = 0;
+  for (unsigned int c = 0; c < num_chunks; ++c) {
+    unsigned int start_frame = c * 100;
+    unsigned int chunk_frames = std::min<unsigned int>(100, audio_seq_len - start_frame);
+
+    // Extract chunk [128, 100] (0-padded on right)
+    std::fill_n(chunk_ptr, 128 * 100, 0.0f);
+    for (unsigned int m = 0; m < 128; ++m) {
+      for (unsigned int f = 0; f < chunk_frames; ++f) {
+        chunk_ptr[m * 100 + f] = mel_features_transposed[m * audio_seq_len + start_frame + f];
+      }
+    }
+
+    // Forward through Subsampler sub-model (runs in FP32)
+    auto chunk_out = subsampler.inference(chunk_ptr);
+    const float *cout_ptr = chunk_out[0];
+
+    // Copy valid tokens into fused_audio_embeds (converting float -> _Float16)
+    unsigned int valid_tokens = (c + 1 < num_chunks) ? 13 : (downsampled_len - out_token_idx);
+    for (unsigned int t = 0; t < valid_tokens; ++t) {
+      _Float16 *dst = fused_audio_embeds.data() + out_token_idx * 1024;
+      const float *src = cout_ptr + t * 1024;
+      for (int k = 0; k < 1024; ++k) {
+        dst[k] = static_cast<_Float16>(src[k]);
+      }
+      out_token_idx++;
+    }
+  }
+
+  std::cout << "[Qwen3-ASR] Subsampler sub-model completed: " << num_chunks
+            << " chunks -> " << out_token_idx << " audio tokens [1, 1, "
+            << downsampled_len << ", 1024]" << std::endl;
+
+  void *audio_input_ptr = fused_audio_embeds.data();
 
   // 2. Tokenize prompt
   std::string prompt_ = system_prompt + prompt + tail_prompt;

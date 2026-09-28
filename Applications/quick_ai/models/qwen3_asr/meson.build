@@ -1,5 +1,6 @@
 qwen3_asr_src = [
     meson.current_source_dir() / 'qwen3_asr_causallm.cpp',
+    meson.current_source_dir() / 'qwen3_asr_subsampler.cpp',
 ]
 
 qwen3_asr_inc = include_directories('.')
