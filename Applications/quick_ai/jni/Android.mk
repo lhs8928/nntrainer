@@ -32,6 +32,7 @@ CAUSALLM_COMMON_INCLUDES := \
     $(LOCAL_PATH)/../models/lfm2 \
     $(LOCAL_PATH)/../models/deberta_v2 \
     $(LOCAL_PATH)/../models/gemma4 \
+    $(LOCAL_PATH)/../models/qwen3_asr \
     $(LOCAL_PATH)/../models/xlm_roberta \
     $(LOCAL_PATH)/../third_party/minja/include \
     $(LOCAL_PATH)/../third_party \
@@ -117,6 +118,10 @@ LOCAL_SRC_FILES := \
     ../models/xlm_roberta/xlm_roberta.cpp \
     ../layers/deberta_attention_layer.cpp \
     ../layers/shared_fully_connected_layer.cpp \
+    ../audio_preprocessor.cpp \
+    ../layers/multimodal_scatter.cpp \
+    ../layers/audio_tower_subsampler.cpp \
+    ../models/qwen3_asr/qwen3_asr_causallm.cpp \
     ../api/streamer.cpp \
 
 LOCAL_SHARED_LIBRARIES := nntrainer ccapi-nntrainer
@@ -257,6 +262,10 @@ LOCAL_SRC_FILES := ../quantize.cpp \
     ../layers/shared_fully_connected_layer.cpp \
     ../layers/causal_conv1d_layer.cpp \
     ../layers/custom_multiply.cpp \
+    ../audio_preprocessor.cpp \
+    ../layers/multimodal_scatter.cpp \
+    ../layers/audio_tower_subsampler.cpp \
+    ../models/qwen3_asr/qwen3_asr_causallm.cpp \
     ../api/streamer.cpp
 
 LOCAL_SHARED_LIBRARIES := nntrainer ccapi-nntrainer
