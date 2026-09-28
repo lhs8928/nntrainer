@@ -208,8 +208,13 @@ void CausalLM::setKVCachePosition(unsigned int pos) {
   kv_cache.setPosition(pos);
   std::function<void(ml::train::Layer &, nntrainer::RunLayerContext &, void *)>
     fn = [pos](ml::train::Layer &l, nntrainer::RunLayerContext &, void *) {
-      if (l.getType() == quick_ai::MHACoreLayer::type)
+      if (l.getType() == quick_ai::MHACoreLayer::type) {
+        if (l.getName().rfind("audio_tower_", 0) == 0) {
+          // Skip Audio Tower attention layers to keep their cache_index at 0!
+          return;
+        }
         l.setProperty({"cache_index=" + std::to_string(pos)});
+      }
     };
   model->forEachLayer(fn, nullptr);
 }
@@ -248,6 +253,8 @@ void CausalLM::registerOutputs(
   std::unique_ptr<tokenizers::Tokenizer> &tokenizer,
   std::vector<unsigned int> ids, unsigned int pos,
   const std::vector<bool> &eos_list, bool log_output) {
+
+  std::cout << "[Run] Predicted token ID: " << ids[0] << " (" << tokenizer->Decode({static_cast<int>(ids[0])}) << ")" << std::endl;
 
   static const std::vector<char> puncts{',', '!', ':', ';', '?'};
   for (size_t b = 0; b < ids.size(); ++b) {
@@ -441,8 +448,20 @@ void CausalLM::run(const WSTR prompt, bool do_sample, const WSTR system_prompt,
   unsigned int num_allow_str = MAX_SEQ_LEN - NUM_TO_GENERATE;
   unsigned int text_len = _len;
 
-  if (_len > num_allow_str)
+  if (_len > num_allow_str) {
     text_len = num_allow_str;
+    // Truncation drops tokens from the tail of the prompt, which is where
+    // instructions in "summarize this document"-style prompts live: a
+    // silently truncated prompt can make the model continue the body
+    // instead of following a dropped trailing instruction. Always warn
+    // with the exact counts.
+    std::cerr << "[CausalLM] WARNING: prompt (" << _len
+              << " tokens) exceeds the max allowed prefill length ("
+              << num_allow_str
+              << " = max_seq_len - num_to_generate); "
+                 "truncating "
+              << (_len - num_allow_str) << " tail tokens." << std::endl;
+  }
 
   // feed only available length
   // if _input is allowed, it feeds all of the _input

@@ -71,6 +71,13 @@ public:
                                          bool training) override;
 
   /**
+   * @copydoc Layer::updateTensorsByInputDimensions(RunLayerContext &context, std::vector<TensorDim> input_dimensions)
+   */
+  WIN_EXPORT void updateTensorsByInputDimensions(
+    nntrainer::RunLayerContext &context,
+    std::vector<nntrainer::TensorDim> input_dimensions) override;
+
+  /**
    * @copydoc Layer::calcDerivative(RunLayerContext &context)
    */
   WIN_EXPORT void calcDerivative(nntrainer::RunLayerContext &context) override;
@@ -103,10 +110,6 @@ public:
       << "[rms_norm] Unknown Layer Properties count " +
            std::to_string(values.size());
   };
-
-  WIN_EXPORT void updateTensorsByInputDimensions(
-    nntrainer::RunLayerContext &context,
-    std::vector<nntrainer::TensorDim> input_dimensions) override;
 
   inline static const std::string type = "rms_norm";
 

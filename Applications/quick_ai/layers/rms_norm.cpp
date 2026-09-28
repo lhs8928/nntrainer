@@ -21,9 +21,18 @@ namespace quick_ai {
 
 static constexpr size_t SINGLE_INOUT_IDX = 0;
 
+// Global cache tensor to prevent output_norm activations from being recycled/overwritten by TensorPool
+nntrainer::Tensor output_norm_cache;
+unsigned int cache_max_height = 66; // Dynamic max timestep height for the cache
+
 void RMSNormLayer::finalize(nntrainer::InitLayerContext &context) {
   std::vector<nntrainer::TensorDim> dim = context.getInputDimensions();
   context.setOutputDimensions(dim);
+
+  if (context.getName().find("output_norm") != std::string::npos) {
+    cache_max_height = 1024;
+    std::cout << "[RMSNormLayer::finalize Debug] matched output_norm! cache_max_height set to: " << cache_max_height << std::endl;
+  }
 
   if (!std::get<nntrainer::props::SkipPrefill>(rms_props).empty())
     skip_prefill = std::get<nntrainer::props::SkipPrefill>(rms_props).get();
@@ -35,21 +44,14 @@ void RMSNormLayer::finalize(nntrainer::InitLayerContext &context) {
   nntrainer::TensorDim gamma_dim(
     1, 1, 1, dim[0].width(),
     nntrainer::TensorDim::TensorType(context.getFormat(),
-                                     nntrainer::TensorDim::DataType::FP32));
+                                     context.getWeightDataType()));
   wt_idx[RMSParams::gamma] = context.requestWeight(
     gamma_dim, nntrainer::props::InitializerInfo::Enum::NONE,
     nntrainer::WeightRegularizer::NONE, 1.0f, 0.0f, "gamma", true);
 }
 
 void RMSNormLayer::forwarding(nntrainer::RunLayerContext &context,
-                              bool training) {
-  // Full (non-incremental) forward: normalize every row. Delegates to the
-  // incremental path over the whole height so model->inference() (which calls
-  // forwarding, not incremental_forwarding) produces a computed output instead
-  // of leaving it uninitialized.
-  nntrainer::Tensor &in = context.getInput(SINGLE_INOUT_IDX);
-  incremental_forwarding(context, 0, in.getDim().height(), training);
-}
+                              bool training) {}
 
 void RMSNormLayer::incremental_forwarding(nntrainer::RunLayerContext &context,
                                           unsigned int from, unsigned int to,
@@ -122,6 +124,21 @@ void RMSNormLayer::incremental_forwarding(nntrainer::RunLayerContext &context,
     } else {
       out_step.multiply_i(gamma);
     }
+
+    if (context.getName() == "output_norm") {
+      if (from == 0) {
+        // Allocate with full cache_max_height once during prefill!
+        ml::train::TensorDim cache_dim = out.getDim();
+        cache_dim.height(cache_max_height);
+        output_norm_cache = nntrainer::Tensor(cache_dim, true);
+        output_norm_cache.setZero();
+      }
+      ml::train::TensorDim slice_dim = out_step.getDim();
+      nntrainer::Tensor slice = output_norm_cache.getSharedDataTensor(
+        slice_dim, from * out_dim.width());
+      slice.copyData(out_step);
+    }
+
 #ifdef DEBUG
     std::cout << context.getName() << " \n input:" << in_step
               << "output:" << out_step << "gamma:" << gamma << std::endl;
@@ -132,8 +149,14 @@ void RMSNormLayer::incremental_forwarding(nntrainer::RunLayerContext &context,
 void RMSNormLayer::updateTensorsByInputDimensions(
   nntrainer::RunLayerContext &context,
   std::vector<nntrainer::TensorDim> input_dimensions) {
+  std::cout << "[updateTensorsByInputDimensions Debug] Layer: " << context.getName() 
+            << " | Input height: " << input_dimensions[0].height() << std::endl;
   context.updateInput(SINGLE_INOUT_IDX, input_dimensions[0]);
   context.updateOutput(SINGLE_INOUT_IDX, input_dimensions[0]);
+  if (context.getName().find("output_norm") != std::string::npos) {
+    cache_max_height = 1024;
+    std::cout << "[updateTensorsByInputDimensions Debug] matched output_norm! cache_max_height set to: " << cache_max_height << std::endl;
+  }
 }
 
 void RMSNormLayer::calcDerivative(nntrainer::RunLayerContext &context) {

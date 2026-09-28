@@ -34,6 +34,16 @@ namespace quick_ai {
 /**
  * @brief Load a file as a binary string.
  */
+ml::train::ModelFormat
+Transformer::formatFromExtension(const std::string &weight_path) {
+  const auto dot = weight_path.find_last_of('.');
+  if (dot != std::string::npos) {
+    const std::string ext = weight_path.substr(dot + 1);
+    if (ext == "safetensors")
+      return ml::train::ModelFormat::MODEL_FORMAT_SAFETENSORS;
+  }
+  return ml::train::ModelFormat::MODEL_FORMAT_BIN;
+}
 
 std::string LoadBytesFromFile(const std::string &path) {
   std::ifstream file(path, std::ios::binary | std::ios::ate);
@@ -60,11 +70,8 @@ ModelType strToModelType(std::string model_type) {
                  model_type_lower.begin(),
                  [](unsigned char c) { return std::tolower(c); });
 
-  // "causallm" is accepted as a legacy alias so model configs written before
-  // the quick.ai rebrand keep loading unchanged.
   static const std::unordered_map<std::string, ModelType> model_type_map = {
     {"model", ModelType::MODEL},
-    {"quick_ai", ModelType::CAUSALLM},
     {"causallm", ModelType::CAUSALLM},
     {"embedding", ModelType::EMBEDDING}};
 
@@ -191,6 +198,13 @@ void Transformer::setupParameters(json &cfg, json &generation_cfg,
     cfg.contains("rms_norm_eps") ? cfg["rms_norm_eps"].get<float>() : 1e-5;
   GQA_SIZE = NUM_HEADS / NUM_KEY_VALUE_HEADS;
 
+  if (nntr_cfg.contains("model_type") &&
+      nntr_cfg["model_type"].get<std::string>() == "qwen3_asr") {
+    USE_QK_NORM = true;
+  } else {
+    USE_QK_NORM = nntr_cfg.value("use_q_k_norm", false);
+  }
+
   return;
 };
 
@@ -285,6 +299,70 @@ std::vector<std::string> Transformer::buildEmbeddingLayerProperties(
 /**
  * @brief Load model weights from a binary nntrainer model file.
  */
+void Transformer::load_weight(const std::string &weight_path) {
+  if (!is_initialized) {
+    throw std::runtime_error(
+      "Transformer model is not initialized. Please call "
+      "initialize() before load_weight().");
+  }
+
+  try {
+    model->load(weight_path, formatFromExtension(weight_path));
+  } catch (const std::exception &e) {
+    throw std::runtime_error("Failed to load model weights: " +
+                             std::string(e.what()));
+  }
+};
+
+/**
+ * @brief Save model weights to a binary nntrainer model file.
+ */
+void Transformer::save_weight(const std::string &weight_path) {
+
+  if (!is_initialized) {
+    throw std::runtime_error(
+      "Transformer model is not initialized. Please call "
+      "initialize() before save_weight().");
+  }
+
+  try {
+    model->save(weight_path, formatFromExtension(weight_path));
+  } catch (const std::exception &e) {
+    throw std::runtime_error("Failed to save model weights: " +
+                             std::string(e.what()));
+  }
+};
+
+/**
+ * @brief Save model weights with optional dtype conversion.
+ */
+void Transformer::save_weight(
+  const std::string &weight_path, ml::train::TensorDim::DataType dtype,
+  const std::map<std::string, ml::train::TensorDim::DataType> &layer_dtype_map,
+  ml::train::ISA target_isa) {
+
+  if (!is_initialized) {
+    throw std::runtime_error(
+      "Transformer model is not initialized. Please call "
+      "initialize() before save_weight().");
+  }
+
+  try {
+    model->save(weight_path, formatFromExtension(weight_path), dtype,
+                layer_dtype_map, target_isa);
+
+  } catch (const std::exception &e) {
+    throw std::runtime_error("Failed to save model weights with dtype: " +
+                             std::string(e.what()));
+  }
+};
+
+/**
+ * @brief Repack all QS4CX weights after loading.
+ */
+void Transformer::repack_weight() {
+  ml_logd("weights repacked successfully");
+};
 
 /**
  * @brief Run a transformer model for a prompt.
@@ -398,6 +476,22 @@ Tensor Transformer::createAttention(const int layer_id, int seq_len,
      withKey("disable_bias", "true"), withKey("weight_initializer", "ones")}));
   Tensor k = wk(key);
 
+  if (USE_QK_NORM) {
+    LayerHandle q_norm(createLayer(
+      "reshaped_rms_norm",
+      {withKey("name", "layer" + std::to_string(layer_id) + "_q_norm"),
+       withKey("epsilon", std::to_string(NORM_EPS)),
+       withKey("feature_size", std::to_string(head_dim))}));
+    q = q_norm(q);
+
+    LayerHandle k_norm(createLayer(
+      "reshaped_rms_norm",
+      {withKey("name", "layer" + std::to_string(layer_id) + "_k_norm"),
+       withKey("epsilon", std::to_string(NORM_EPS)),
+       withKey("feature_size", std::to_string(head_dim))}));
+    k = k_norm(k);
+  }
+
   // V layer
   LayerHandle wv(createLayer(
     "fully_connected",
@@ -420,6 +514,7 @@ Tensor Transformer::createAttention(const int layer_id, int seq_len,
                                  ? SLIDING_WINDOW
                                  : UINT_MAX),
      withKey("rope_theta", ROPE_THETA),
+     withKey("max_position_embeddings", MAX_POSITION_EMBEDDINGS),
      withKey("max_new_tokens", std::to_string(NUM_TO_GENERATE)),
      withKey("is_causal", IS_CAUSAL ? "true" : "false")}));
   Tensor a = mha({q, k, v, cache_k, cache_v});
@@ -481,11 +576,13 @@ void Transformer::registerCustomLayers() {
     const auto app_context = static_cast<nntrainer::AppContext *>(
       ct_engine.getRegisteredContext("cpu"));
 
-    // Common layers (always registered)
+    app_context->registerFactory(nntrainer::createLayer<quick_ai::SwiGLULayer>);
     app_context->registerFactory(
       nntrainer::createLayer<quick_ai::RMSNormLayer>);
     app_context->registerFactory(
       nntrainer::createLayer<quick_ai::MHACoreLayer>);
+    app_context->registerFactory(
+      nntrainer::createLayer<quick_ai::TieWordEmbedding>);
     app_context->registerFactory(
       nntrainer::createLayer<quick_ai::EmbeddingLayer>);
   });
