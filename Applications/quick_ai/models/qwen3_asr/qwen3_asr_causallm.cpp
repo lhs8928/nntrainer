@@ -19,7 +19,7 @@
 #include <reshaped_rms_norm.h>
 #include <tie_word_embedding.h>
 #include <swiglu.h>
-#include <audio_preprocessor.h>
+#include "audio_preprocessor.h"
 #include <api/streamer.h>
 #include <performance_metrics.h>
 #include <iostream>
