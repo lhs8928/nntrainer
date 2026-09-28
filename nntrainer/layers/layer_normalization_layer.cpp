@@ -157,6 +157,7 @@ void LayerNormalizationLayer::forwarding(RunLayerContext &context,
   variance.pow(-0.5, inv_std_dev);
 
   deviation.multiply(inv_std_dev, output);
+
   output.multiply_i(gamma);
   output.add_i(beta);
 }

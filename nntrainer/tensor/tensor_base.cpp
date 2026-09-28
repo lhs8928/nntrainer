@@ -66,6 +66,8 @@ void TensorBase::save(std::ostream &file) {
   putData();
 }
 
+extern std::unordered_map<size_t, size_t> safetensors_weight_sizes;
+
 void TensorBase::read(std::ifstream &file, size_t start_offset,
                       bool read_from_offset) {
   if (start_offset == std::numeric_limits<size_t>::max()) {
@@ -77,8 +79,19 @@ void TensorBase::read(std::ifstream &file, size_t start_offset,
     << "read size: " << bytes()
     << " is too big. It cannot be represented by std::streamsize";
 
-  checkedRead(file, (char *)getData(), sz, "[Tensor::read] operation failed",
-              start_offset, read_from_offset);
+  auto it = safetensors_weight_sizes.find(start_offset);
+  if (it != safetensors_weight_sizes.end() && it->second == sz / 2) {
+    std::vector<_Float16> fp16_buf(sz / 2 / sizeof(_Float16));
+    checkedRead(file, (char *)fp16_buf.data(), sz / 2, "[Tensor::read] FP16 read failed",
+                start_offset, read_from_offset);
+    float *fp32_ptr = (float *)getData();
+    for (size_t i = 0; i < fp16_buf.size(); ++i) {
+      fp32_ptr[i] = static_cast<float>(fp16_buf[i]);
+    }
+  } else {
+    checkedRead(file, (char *)getData(), sz, "[Tensor::read] operation failed",
+                start_offset, read_from_offset);
+  }
   putData();
 }
 
@@ -93,8 +106,19 @@ void TensorBase::read(ReadSource src, size_t start_offset,
     << "read size: " << bytes()
     << " is too big. It cannot be represented by std::streamsize";
 
-  checkedRead(src, (char *)getData(), sz, "[Tensor::read] operation failed",
-              start_offset, read_from_offset);
+  auto it = safetensors_weight_sizes.find(start_offset);
+  if (it != safetensors_weight_sizes.end() && it->second == sz / 2) {
+    std::vector<_Float16> fp16_buf(sz / 2 / sizeof(_Float16));
+    checkedRead(src, (char *)fp16_buf.data(), sz / 2, "[Tensor::read] FP16 read failed",
+                start_offset, read_from_offset);
+    float *fp32_ptr = (float *)getData();
+    for (size_t i = 0; i < fp16_buf.size(); ++i) {
+      fp32_ptr[i] = static_cast<float>(fp16_buf[i]);
+    }
+  } else {
+    checkedRead(src, (char *)getData(), sz, "[Tensor::read] operation failed",
+                start_offset, read_from_offset);
+  }
   putData();
 }
 

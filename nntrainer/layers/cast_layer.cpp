@@ -31,8 +31,12 @@ void CastLayer::finalize(InitLayerContext &context) {
 }
 
 void CastLayer::forwarding_operation(const Tensor &input, Tensor &output) {
-  // Casting type is performed in copyData function
-  output.copyData(input);
+  if (output.getDataType() != input.getDataType()) {
+    Tensor input_cast = input.clone(output.getDataType());
+    output.copyData(input_cast);
+  } else {
+    output.copyData(input);
+  }
 }
 
 void CastLayer::calcDerivative(RunLayerContext &context) {
