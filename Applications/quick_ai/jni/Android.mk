@@ -118,7 +118,7 @@ LOCAL_SRC_FILES := \
     ../models/xlm_roberta/xlm_roberta.cpp \
     ../layers/deberta_attention_layer.cpp \
     ../layers/shared_fully_connected_layer.cpp \
-    ../audio_preprocessor.cpp \
+    ../models/qwen3_asr/audio_preprocessor.cpp \
     ../layers/multimodal_scatter.cpp \
     ../models/qwen3_asr/qwen3_asr_causallm.cpp \
     ../models/qwen3_asr/qwen3_asr_subsampler.cpp \
@@ -262,7 +262,7 @@ LOCAL_SRC_FILES := ../quantize.cpp \
     ../layers/shared_fully_connected_layer.cpp \
     ../layers/causal_conv1d_layer.cpp \
     ../layers/custom_multiply.cpp \
-    ../audio_preprocessor.cpp \
+    ../models/qwen3_asr/audio_preprocessor.cpp \
     ../layers/multimodal_scatter.cpp \
     ../models/qwen3_asr/qwen3_asr_causallm.cpp \
     ../models/qwen3_asr/qwen3_asr_subsampler.cpp \
