@@ -3,7 +3,9 @@
  * Copyright (C) 2026 Samsung Electronics Co., Ltd. All Rights Reserved.
  *
  * @file   qwen3_asr_subsampler.cpp
+ * @date   14 September 2026
  * @brief  Qwen3-ASR Audio Subsampler independent sub-model implementation
+ * @author Hyeonseok Lee <hs89.lee@samsung.com>
  */
 
 #include "qwen3_asr_subsampler.h"
@@ -16,7 +18,9 @@
 
 namespace quick_ai {
 
-void Qwen3ASRSubsampler::initialize(const std::string &model_tensor_type) {
+void Qwen3ASRSubsampler::constructModel() {
+  if (model_constructed) return;
+
   model = ml::train::createModel(ml::train::ModelType::NEURAL_NET);
   model->setProperty({
     nntrainer::withKey("batch_size", "1"),
@@ -25,7 +29,7 @@ void Qwen3ASRSubsampler::initialize(const std::string &model_tensor_type) {
   });
 
   // Input: [1, 1, 128, 100] in FP32
-  ml::train::Tensor x({1, 1, 128, 100}, "subsampler_input");
+  input_tensor = ml::train::Tensor({1, 1, 128, 100}, "subsampler_input");
 
   // 1. conv2d1: stride 2, padding 1, filters 480, kernel size 3
   ml::train::LayerHandle conv1(ml::train::createLayer("conv2d", {
@@ -37,7 +41,7 @@ void Qwen3ASRSubsampler::initialize(const std::string &model_tensor_type) {
     nntrainer::withKey("disable_bias", "false"),
     nntrainer::withKey("weight_dtype", "FP32")
   }));
-  ml::train::Tensor h = conv1(x);
+  ml::train::Tensor h = conv1(input_tensor);
 
   ml::train::LayerHandle gelu1(ml::train::createLayer("activation", {
     nntrainer::withKey("name", "audio_tower_gelu1"),
@@ -117,9 +121,17 @@ void Qwen3ASRSubsampler::initialize(const std::string &model_tensor_type) {
   ml::train::LayerHandle pos_add(ml::train::createLayer("addition", {
     nntrainer::withKey("name", "audio_tower_pos_add")
   }));
-  h = pos_add({h, pos});
+  
+  output_tensor = pos_add({h, pos});
+  model_constructed = true;
+}
 
-  if (model->compile(x, h, ml::train::ExecutionMode::INFERENCE)) {
+void Qwen3ASRSubsampler::initialize(const std::string &model_tensor_type) {
+  if (!model_constructed) {
+    constructModel();
+  }
+
+  if (model->compile(input_tensor, output_tensor, ml::train::ExecutionMode::INFERENCE)) {
     throw std::runtime_error("Qwen3ASRSubsampler compilation failed!");
   }
   model->initialize();

@@ -41,6 +41,9 @@ static unsigned int get_feat_extract_output_lengths(unsigned int input_lengths) 
 }
 
 std::pair<Tensor, Tensor> Qwen3ASRTransformer::constructModel() {
+  std::cout << "[Qwen3-ASR] Constructing Qwen3ASRSubsampler sub-model graph..." << std::endl;
+  subsampler.constructModel();
+
   // input0: text token IDs [batch, 1, 1, seq_len] always in FP32
   Tensor input0 = Tensor(nntrainer::TensorDim(1, 1, 1, static_cast<unsigned int>(INIT_SEQ_LEN), nntrainer::TensorDim::Format::NCHW, nntrainer::TensorDim::DataType::FP32), "input0");
 
@@ -260,11 +263,11 @@ std::pair<Tensor, Tensor> Qwen3ASRCausalLM::constructModel() {
 }
 
 void Qwen3ASRCausalLM::initialize() {
-  std::cout << "[Qwen3-ASR] Initializing Qwen3ASRSubsampler sub-model..." << std::endl;
-  subsampler.initialize(MODEL_TENSOR_TYPE);
-
   std::cout << "[Qwen3-ASR] Initializing Main CausalLM model..." << std::endl;
   Transformer::initialize();
+
+  std::cout << "[Qwen3-ASR] Initializing Qwen3ASRSubsampler sub-model..." << std::endl;
+  subsampler.initialize(MODEL_TENSOR_TYPE);
 }
 
 void Qwen3ASRCausalLM::load_weight(const std::string &path) {
