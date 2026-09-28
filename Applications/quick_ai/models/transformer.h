@@ -35,9 +35,32 @@
 #define WCHAR_P std::string &
 #endif
 
+#include <layer.h>
+#include <map>
+#include <model.h>
+#include <random>
+#include <stdexcept>
+#include <tensor_api.h>
+#include <utility>
+#include <vector>
+
+#include <limits.h>
+
+#include "json.hpp"
 #include "model_base.h"
+#include "performance_metrics.h"
+#include <fstream>
+#include <tokenizers_c.h>
+#include <tokenizers_cpp.h>
 
 namespace quick_ai {
+
+/*** ALIAS ****/
+using LayerHandle = ml::train::LayerHandle;
+using Tensor = ml::train::Tensor;
+using ModelHandle = std::unique_ptr<ml::train::Model>;
+
+using json = nlohmann::json;
 
 /**
  * @brief Model Type Enum
@@ -117,23 +140,34 @@ public:
   virtual void initialize();
 
   /**
-   * @brief Names of layers whose weights the offline quantizer should convert.
-   *
-   * The standard CausalLM quantizer (nntr_quantize) builds a per-layer
-   * {name -> target DataType} map and hands it to model->save_weight(). For
-   * LLM backbones the FC/embedding names follow a "layerN_<role>" convention
-   * the quantizer enumerates from config; vision models whose conv layers are
-   * named dynamically by the graph builder instead surface them here. The
-   * default empty vector means "no model-driven layers; use the config-driven
-   * name map only", preserving existing LLM behavior.
-   *
-   * @return Layer names (as set in createLayer) eligible for weight
-   *         quantization. Must be exactly the layers the model's Conv2DLayer::
-   *         save / FC save will be asked to convert.
+   * @brief Load the model weights from a file
    */
-  virtual std::vector<std::string> getQuantizableLayerNames() const {
-    return {};
-  }
+  virtual void load_weight(const std::string &weight_path);
+
+  /**
+   * @brief Repack all QS4CX weights after loading
+   * @note Must be called after load_weight() for QS4CX quantized tensors
+   * @note Prepares weights for efficient computation by eagerly packing them
+   */
+  virtual void repack_weight();
+
+  /**
+   * @brief Save the weight to a file
+   */
+  virtual void save_weight(const std::string &weight_path);
+  /**
+   * @brief Save the weight to a file with type conversion
+   * @param weight_path Path to save the weight file
+   * @param dtype Global target data type for all layers (NONE = keep original)
+   * @param layer_dtype_map Per-layer data type overrides (layer_name -> dtype)
+   * @param target_isa Target ISA for quantization (default: DEFAULT)
+   */
+  virtual void
+  save_weight(const std::string &weight_path,
+              ml::train::TensorDim::DataType dtype,
+              const std::map<std::string, ml::train::TensorDim::DataType>
+                &layer_dtype_map = {},
+              ml::train::ISA target_isa = ml::train::ISA::DEFAULT);
 
   /**
    * @brief run the Transformer model
@@ -223,6 +257,11 @@ public:
   tokenizers::Tokenizer *getTokenizer() { return tokenizer.get(); }
 
   /**
+   * @brief Get the underlying nntrainer Model
+   */
+  ml::train::Model* getModel() { return model.get(); }
+
+  /**
    * @brief Attach a non-owning logits processor
    * @param processor Processor pointer, or nullptr to detach
    */
@@ -308,6 +347,20 @@ protected:
    */
   virtual void registerCustomLayers();
 
+  /**
+   * @brief Get model format from weight file extension.
+   * @param weight_path Path to the weight file.
+   * @return Model format for the given file extension.
+   */
+  virtual ml::train::ModelFormat
+  formatFromExtension(const std::string &weight_path);
+
+  /**
+   * @brief register Outputs
+   */
+  bool is_initialized = false; /**< Flag to check if the model is initialized */
+  ModelHandle model;
+
   /** tokenizer */
   std::unique_ptr<tokenizers::Tokenizer> tokenizer;
 
@@ -342,6 +395,7 @@ protected:
   unsigned int FSU_LOOKAHEAD;
   float ATTN_LOGIT_SOFTCAPPING = 0.0f; /**< attention logit softcapping */
   bool IS_CAUSAL = true;
+  bool USE_QK_NORM = false;
 
   // Performance metrics
   TransformerPerformanceMetrics performance_metrics;

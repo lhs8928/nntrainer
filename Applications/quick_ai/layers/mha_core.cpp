@@ -246,10 +246,10 @@ void MHACoreLayer::finalize(nntrainer::InitLayerContext &context) {
 #endif
 
     tensor_idx[AttentionParams::cache_key] = context.requestTensor(
-      cache_key_dim, "cache_key", nntrainer::Initializer::NONE, false,
+      cache_key_dim, "cache_key", nntrainer::Initializer::ZEROS, false,
       nntrainer::TensorLifespan::MAX_LIFESPAN);
     tensor_idx[AttentionParams::cache_value] = context.requestTensor(
-      cache_value_dim, "cache_value", nntrainer::Initializer::NONE, false,
+      cache_value_dim, "cache_value", nntrainer::Initializer::ZEROS, false,
       nntrainer::TensorLifespan::MAX_LIFESPAN);
   }
 
@@ -288,6 +288,8 @@ void MHACoreLayer::finalize(nntrainer::InitLayerContext &context) {
 void MHACoreLayer::forwarding(nntrainer::RunLayerContext &context,
                               bool training) {
   if (!use_external_cache) {
+    unsigned int query_height = context.getInput(INOUT_INDEX::QUERY).getDim().height();
+    incremental_forwarding(context, 0, query_height, training);
     return;
   }
 
@@ -393,6 +395,27 @@ void MHACoreLayer::forwarding(nntrainer::RunLayerContext &context,
         cache_key, cache_value, cache_key_dim, cache_key_step_dim,
         cache_value_dim, cache_value_step_dim);
     }
+
+    if (from == 24) {
+      std::cout << "[Layer Debug] " << context.getName() << " | from: " << from 
+                << " | query_step[0..4]: ";
+      if (query_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
+        _FP16 *q_ptr = query_step.getData<_FP16>();
+        for (int i = 0; i < 5; ++i) std::cout << (float)q_ptr[i] << ", ";
+      } else {
+        float *q_ptr = query_step.getData<float>();
+        for (int i = 0; i < 5; ++i) std::cout << q_ptr[i] << ", ";
+      }
+      std::cout << " | output_step[0..4]: ";
+      if (output_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
+        _FP16 *o_ptr = output_step.getData<_FP16>();
+        for (int i = 0; i < 5; ++i) std::cout << (float)o_ptr[i] << ", ";
+      } else {
+        float *o_ptr = output_step.getData<float>();
+        for (int i = 0; i < 5; ++i) std::cout << o_ptr[i] << ", ";
+      }
+      std::cout << std::endl;
+    }
   }
 
   cache_index += step_size;
@@ -417,14 +440,19 @@ void MHACoreLayer::incremental_forwarding(nntrainer::RunLayerContext &context,
     return;
   }
 
-  /// @todo replace step_size into input height
+  unsigned int query_height = context.getInput(INOUT_INDEX::QUERY).getDim().height();
   unsigned int step_size = _to - _from;
+  unsigned int from = _from;
+  unsigned int to = _to;
+
+  if (step_size > query_height) {
+    step_size = query_height;
+    from = 0;
+    to = query_height;
+  }
 
   unsigned int max_timestep =
     std::get<nntrainer::props::MaxTimestep>(mha_core_props).get();
-
-  unsigned int from = _from;
-  unsigned int to = _to;
 
   if (to > max_timestep) {
     // initial forwarding
@@ -1161,9 +1189,15 @@ void MHACoreLayer::apply_rotary_emb_tensor_v2(nntrainer::Tensor &in,
                            b * out.channel() * out.height() * out.width() +
                            c * out.height() * out.width() + h * out.width();
 
-          nntrainer::compute_rotary_emb_value(in.width(), dim, half_, in_ptr,
-                                              out_ptr, cos_->data(),
-                                              sin_->data());
+          if (convert_only) {
+            if (out_ptr != in_ptr) {
+              std::memcpy(out_ptr, in_ptr, sizeof(_FP16) * in.width());
+            }
+          } else {
+            nntrainer::compute_rotary_emb_value(in.width(), dim, half_, in_ptr,
+                                                out_ptr, cos_->data(),
+                                                sin_->data());
+          }
         }
       }
     }
@@ -1174,7 +1208,7 @@ void MHACoreLayer::apply_rotary_emb_tensor_v2(nntrainer::Tensor &in,
 }
 
 void MHACoreLayer::softmax_triangle(nntrainer::Tensor &qk_out, size_t row,
-                                    size_t num_head, unsigned int from) {
+                                     size_t num_head, unsigned int from) {
   if (qk_out.getDataType() == ml::train::TensorDim::DataType::FP32) {
     float *qk_out_ = qk_out.getData<float>();
 
@@ -1196,7 +1230,29 @@ void MHACoreLayer::softmax_triangle(nntrainer::Tensor &qk_out, size_t row,
       } else {
         end_row = from + row; // end_row = to
       }
-      nntrainer::softmax_row_inplace(qk_out_, start_row, end_row, num_head);
+      
+      // Call stride-aware 1D softmax for decoding to match [Sequence, Heads_Q] layout
+      size_t width = end_row - start_row;
+      for (size_t h = 0; h < num_head; ++h) {
+        float *head_ptr = qk_out_ + h;
+        float max_val = head_ptr[0];
+        for (size_t i = 1; i < width; ++i) {
+          float val = head_ptr[i * num_head];
+          if (val > max_val) {
+            max_val = val;
+          }
+        }
+        float sum_val = 0.0f;
+        for (size_t i = 0; i < width; ++i) {
+          float exp_val = std::exp(head_ptr[i * num_head] - max_val);
+          head_ptr[i * num_head] = exp_val;
+          sum_val += exp_val;
+        }
+        float inv_sum = 1.0f / sum_val;
+        for (size_t i = 0; i < width; ++i) {
+          head_ptr[i * num_head] = head_ptr[i * num_head] * inv_sum;
+        }
+      }
     } else {
       // Iterate over ALL rows (not just min(row, window)) so that every query
       // row in a long prefill gets softmaxed over the correct windowed range.
@@ -1242,7 +1298,29 @@ void MHACoreLayer::softmax_triangle(nntrainer::Tensor &qk_out, size_t row,
       } else {
         end_row = from + row; // end_row = to
       }
-      nntrainer::softmax_row_inplace(qk_out_, start_row, end_row, num_head);
+      
+      // Call stride-aware 1D softmax for decoding to match [Sequence, Heads_Q] layout
+      size_t width = end_row - start_row;
+      for (size_t h = 0; h < num_head; ++h) {
+        _FP16 *head_ptr = qk_out_ + h;
+        float max_val = (float)head_ptr[0];
+        for (size_t i = 1; i < width; ++i) {
+          float val = (float)head_ptr[i * num_head];
+          if (val > max_val) {
+            max_val = val;
+          }
+        }
+        float sum_val = 0.0f;
+        for (size_t i = 0; i < width; ++i) {
+          float exp_val = std::exp((float)head_ptr[i * num_head] - max_val);
+          head_ptr[i * num_head] = (_FP16)exp_val;
+          sum_val += exp_val;
+        }
+        float inv_sum = 1.0f / sum_val;
+        for (size_t i = 0; i < width; ++i) {
+          head_ptr[i * num_head] = (_FP16)((float)head_ptr[i * num_head] * inv_sum);
+        }
+      }
     } else {
       // Iterate over ALL rows (not just min(row, window)) so that every query
       // row in a long prefill gets softmaxed over the correct windowed range.
@@ -1297,8 +1375,28 @@ void MHACoreLayer::softmax_triangle(nntrainer::Tensor &qk_out, size_t row,
         unsigned int to = from + row;
         end_row = to;
       }
-      nntrainer::softmax_row_inplace(qk_out_, start_row, end_row, num_head,
-                                     sink_step.getData());
+      
+      // Call contiguous decoding-specific 1D softmax to prevent the layout transposition bug
+      size_t width = end_row - start_row;
+      for (size_t h = 0; h < num_head; ++h) {
+        float *head_ptr = qk_out_ + h * width;
+        float max_val = head_ptr[0];
+        for (size_t i = 1; i < width; ++i) {
+          if (head_ptr[i] > max_val) {
+            max_val = head_ptr[i];
+          }
+        }
+        float sum_val = 0.0f;
+        for (size_t i = 0; i < width; ++i) {
+          float exp_val = std::exp(head_ptr[i] - max_val);
+          head_ptr[i] = exp_val;
+          sum_val += exp_val;
+        }
+        float inv_sum = 1.0f / sum_val;
+        for (size_t i = 0; i < width; ++i) {
+          head_ptr[i] = head_ptr[i] * inv_sum;
+        }
+      }
     } else {
       // Iterate over ALL rows (not just min(row, window)) for correct windowed
       // prefill when sequence_len > local_window_size.
@@ -1346,8 +1444,28 @@ void MHACoreLayer::softmax_triangle(nntrainer::Tensor &qk_out, size_t row,
       } else {
         end_row = from + row; // end_row = to
       }
-      nntrainer::softmax_row_inplace(qk_out_, start_row, end_row, num_head,
-                                     sink_step_);
+      
+      // Call contiguous decoding-specific 1D softmax to prevent the layout transposition bug
+      size_t width = end_row - start_row;
+      for (size_t h = 0; h < num_head; ++h) {
+        _FP16 *head_ptr = qk_out_ + h * width;
+        float max_val = (float)head_ptr[0];
+        for (size_t i = 1; i < width; ++i) {
+          if ((float)head_ptr[i] > max_val) {
+            max_val = (float)head_ptr[i];
+          }
+        }
+        float sum_val = 0.0f;
+        for (size_t i = 0; i < width; ++i) {
+          float exp_val = std::exp((float)head_ptr[i] - max_val);
+          head_ptr[i] = (_FP16)exp_val;
+          sum_val += exp_val;
+        }
+        float inv_sum = 1.0f / sum_val;
+        for (size_t i = 0; i < width; ++i) {
+          head_ptr[i] = (_FP16)((float)head_ptr[i] * inv_sum);
+        }
+      }
     } else {
       // Iterate over ALL rows (not just min(row, window)) for correct windowed
       // prefill when sequence_len > local_window_size.
@@ -1517,7 +1635,9 @@ void MHACoreLayer::updateTensorsByInputDimensions(
     std::get<props::MaxNewTokens>(mha_core_props).get();
   max_position_embeddings =
     std::get<props::MaxPositionEmbeddings>(mha_core_props).get();
-  max_timestep = height + max_new_tokens;
+  if (height + max_new_tokens > max_timestep) {
+    max_timestep = height + max_new_tokens;
+  }
 
   ml::train::TensorDim kv_dim = input_dimensions[0];
   kv_dim.width(kv_dim.width() / (num_heads_Q / num_heads_KV));
@@ -1555,9 +1675,15 @@ void MHACoreLayer::setProperty(const std::vector<std::string> &values) {
   for (const auto &value : values) {
     std::string key;
     std::string parsed_value;
-    if (nntrainer::getKeyValue(value, key, parsed_value) == ML_ERROR_NONE &&
-        key == "cache_index") {
-      setCacheIndex(static_cast<unsigned int>(std::stoul(parsed_value)));
+    if (nntrainer::getKeyValue(value, key, parsed_value) == ML_ERROR_NONE) {
+      if (key == "cache_index") {
+        setCacheIndex(static_cast<unsigned int>(std::stoul(parsed_value)));
+      } else if (key == "rope_type" || key == "mrope_section" || key == "mrope_interleaved") {
+        // Ignored or mapped because Qwen3-ASR's 1D audio sequence positions are identical 
+        // across all spatial dimensions, making mROPE mathematically identical to standard 1D RoPE.
+      } else {
+        props.push_back(value);
+      }
     } else {
       props.push_back(value);
     }

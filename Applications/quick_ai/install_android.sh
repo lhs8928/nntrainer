@@ -64,7 +64,6 @@ log_step "2/3" "Check build artifacts"
 REQUIRED_FILES=(
     "$SCRIPT_DIR/jni/libs/arm64-v8a/nntrainer_quick_ai"
     "$SCRIPT_DIR/jni/libs/arm64-v8a/libquick_ai_core.so"
-    "$SCRIPT_DIR/jni/libs/arm64-v8a/nntr_quantize"
     "$SCRIPT_DIR/jni/libs/arm64-v8a/nntr_safetensors_info"
 )
 
@@ -167,10 +166,12 @@ if [ -f "$SCRIPT_DIR/jni/libs/arm64-v8a/test_api" ]; then
 fi
 
 
-log_info "Pushing nntr_quantize..."
-adb push "$SCRIPT_DIR/jni/libs/arm64-v8a/nntr_quantize" "$INSTALL_DIR/" 2>&1 | tail -1
-adb shell "chmod 755 $INSTALL_DIR/nntr_quantize"
-log_success "nntr_quantize pushed"
+if [ -f "$SCRIPT_DIR/jni/libs/arm64-v8a/nntr_quantize" ]; then
+    log_info "Pushing nntr_quantize..."
+    adb push "$SCRIPT_DIR/jni/libs/arm64-v8a/nntr_quantize" "$INSTALL_DIR/" 2>&1 | tail -1
+    adb shell "chmod 755 $INSTALL_DIR/nntr_quantize"
+    log_success "nntr_quantize pushed"
+fi
 
 log_info "Pushing nntr_safetensors_info..."
 adb push "$SCRIPT_DIR/jni/libs/arm64-v8a/nntr_safetensors_info" "$INSTALL_DIR/" 2>&1 | tail -1

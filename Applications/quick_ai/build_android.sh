@@ -116,7 +116,7 @@ else
         log_info "Removing existing builddir..."
         rm -rf builddir
     fi
-    ./tools/package_android.sh
+    ./tools/package_android.sh -Dmmap-read=false
 fi
 
 # Check if build was successful
@@ -174,7 +174,7 @@ rm -rf libs obj
 
 log_info "Building with ndk-build (builds quick_ai_core, nntrainer_quick_ai, nntr_quantize, nntr_safetensors_info)..."
 # We explicitly set paths to ensure outputs are predictable
-if ndk-build NDK_PROJECT_PATH=. NDK_LIBS_OUT=./libs NDK_OUT=./obj APP_BUILD_SCRIPT=./Android.mk NDK_APPLICATION_MK=./Application.mk quick_ai_core nntrainer_quick_ai  nntr_quantize nntr_safetensors_info -j $(nproc); then
+if ndk-build NDK_PROJECT_PATH=. NDK_LIBS_OUT=./libs NDK_OUT=./obj APP_BUILD_SCRIPT=./Android.mk NDK_APPLICATION_MK=./Application.mk quick_ai_core nntrainer_quick_ai nntr_safetensors_info -j $(nproc); then
     log_success "Build completed successfully"
 else
     log_error "Build failed"
@@ -186,7 +186,6 @@ log_info "Build artifacts:"
 
 check_artifact "libquick_ai_core.so" || exit 1
 check_artifact "nntrainer_quick_ai" || exit 1
-check_artifact "nntr_quantize" || exit 1
 check_artifact "nntr_safetensors_info" || exit 1
 
 # Summary

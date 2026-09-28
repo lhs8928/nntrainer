@@ -216,11 +216,19 @@ void TieWordEmbedding::incremental_forwarding_embedding(
   nntrainer::Tensor &hidden_ = context.getOutput(SINGLE_INOUT_IDX);
   nntrainer::Tensor &input_ = context.getInput(SINGLE_INOUT_IDX);
 
+  if (from == 0) {
+    _Float16* w_ptr = (_Float16*)weight.getData();
+    std::cout << "[Weight Debug] embedding0 weights[0..4]: " 
+              << (float)w_ptr[0] << ", " << (float)w_ptr[1] << ", " 
+              << (float)w_ptr[2] << ", " << (float)w_ptr[3] << ", " << (float)w_ptr[4] << std::endl;
+  }
+
   nntrainer::TensorDim out_tensor_dim =
     nntrainer::TensorDim({1, 1, 1, out_dim}, hidden_.getTensorType());
 
   if (!(weight.getDataType() == nntrainer::TensorDim::DataType::Q4_0 ||
         weight.getDataType() == nntrainer::TensorDim::DataType::Q6_K ||
+        weight.getDataType() == nntrainer::TensorDim::DataType::FP16 ||
         weight.getDataType() == nntrainer::TensorDim::DataType::FP32))
     throw std::invalid_argument(
       "Tieword embedding is not supported yet for the data type");
@@ -230,6 +238,13 @@ void TieWordEmbedding::incremental_forwarding_embedding(
   for (size_t b = 0; b < b_size; ++b) {
     float *in_data =
       input_.getAddress<float>(b * input_.getDim().getFeatureLen());
+
+    if (from == 24) {
+      std::cout << "[Embedding Shape Debug] b: " << b << " | from: " << from 
+                << " | input_ height: " << input_.getDim().height() 
+                << " | input_ width: " << input_.getDim().width() 
+                << " | input_[0]: " << in_data[0] << " | input_[24]: " << (input_.getDim().height() > 24 ? in_data[24] : -1) << std::endl;
+    }
 
     nntrainer::Tensor batchsliced_hidden = hidden_.getBatchSlice(b, 1);
     int iter = to - from;
@@ -241,10 +256,8 @@ void TieWordEmbedding::incremental_forwarding_embedding(
         throw std::invalid_argument("input word index is greater than in_dim");
       }
 
-      nntrainer::Tensor cur_weight =
-        weight.getSharedDataTensor(out_tensor_dim, out_dim * embed_idx);
       nntrainer::Tensor out_tensor =
-        batchsliced_hidden.getSharedDataTensor(out_tensor_dim, out_dim * (i));
+        batchsliced_hidden.getSharedDataTensor(out_tensor_dim, out_dim * i);
 
       if (weight.getDataType() == nntrainer::TensorDim::DataType::Q6_K ||
           weight.getDataType() == nntrainer::TensorDim::DataType::Q4_0) {
@@ -278,10 +291,34 @@ void TieWordEmbedding::incremental_forwarding_embedding(
             nntrainer::dequantize_row_q6_K(src, tmp.getData(), out_dim);
           else
             nntrainer::dequantize_row_q4_0(src, tmp.getData(), out_dim);
-          out_tensor.copyData(tmp);
+          nntrainer::Tensor tmp_cast = (tmp.getDataType() != out_tensor.getDataType())
+                                         ? tmp.clone(out_tensor.getDataType())
+                                         : tmp;
+          out_tensor.copyData(tmp_cast);
         }
       } else {
-        out_tensor.copyData(cur_weight);
+        if (weight.getDataType() == nntrainer::TensorDim::DataType::FP16 &&
+            out_tensor.getDataType() == nntrainer::TensorDim::DataType::FP32) {
+          _Float16 *src_ptr = weight.getAddress<_Float16>(0) + embed_idx * out_dim;
+          float *dst_ptr = out_tensor.getAddress<float>(0);
+          for (unsigned int k = 0; k < out_dim; ++k) {
+            dst_ptr[k] = (float)src_ptr[k];
+          }
+        } else if (weight.getDataType() == nntrainer::TensorDim::DataType::FP16 &&
+                   out_tensor.getDataType() == nntrainer::TensorDim::DataType::FP16) {
+#ifdef ENABLE_FP16
+          _Float16 *src_ptr = weight.getAddress<_Float16>(0) + embed_idx * out_dim;
+          _Float16 *dst_ptr = out_tensor.getAddress<_Float16>(0);
+          for (unsigned int k = 0; k < out_dim; ++k) {
+            dst_ptr[k] = src_ptr[k];
+          }
+#endif
+        } else {
+          nntrainer::Tensor cur_weight =
+            weight.getSharedDataTensor(out_tensor_dim, out_dim * embed_idx);
+          nntrainer::Tensor cur_weight_cast = cur_weight.clone(out_tensor.getDataType());
+          out_tensor.copyData(cur_weight_cast);
+        }
       }
 
       if (scale != 1.0f) {
@@ -297,6 +334,9 @@ void TieWordEmbedding::incremental_forwarding_embedding(
   }
 }
 
+// Access the globally cached output_norm tensor to secure from memory recycling
+extern nntrainer::Tensor output_norm_cache;
+
 void TieWordEmbedding::incremental_forwarding_lmhead(
   nntrainer::RunLayerContext &context, unsigned int from, unsigned int to,
   bool training) {
@@ -304,10 +344,13 @@ void TieWordEmbedding::incremental_forwarding_lmhead(
   if (skip_prefill && is_prefill)
     return;
 
-  nntrainer::Tensor weight =
+  nntrainer::Tensor &weight =
     context.getWeight(weight_idx[TieWordEmbeddingParams::weight]);
 
-  nntrainer::Tensor &input_ = context.getInput(SINGLE_INOUT_IDX);
+  bool use_cache = (from > 0 && output_norm_cache.getData() != nullptr && (context.getName() == "output_of_causallm" || context.getName() == "lm_head"));
+  nntrainer::Tensor &input_ = use_cache
+                                ? output_norm_cache
+                                : context.getInput(SINGLE_INOUT_IDX);
   nntrainer::Tensor &hidden_ = context.getOutput(SINGLE_INOUT_IDX);
 
   ml::train::TensorDim input_dim = input_.getDim();
@@ -323,9 +366,11 @@ void TieWordEmbedding::incremental_forwarding_lmhead(
   unsigned int b_size = input_dim.batch();
 
   for (unsigned int b = 0; b < b_size; ++b) {
+    size_t slice_offset = use_cache
+                            ? b * input_dim.getFeatureLen() + from * input_.width()
+                            : b * input_dim.getFeatureLen() + (to - from - 1) * input_.width();
     nntrainer::Tensor input_step = input_.getSharedDataTensor(
-      input_step_dim,
-      b * input_dim.getFeatureLen() + (to - from - 1) * input_.width(), true);
+      input_step_dim, slice_offset, true);
     nntrainer::Tensor hidden_step = hidden_.getSharedDataTensor(
       hidden_step_dim, b * hidden_dim.getFeatureLen(), true);
 
@@ -390,7 +435,19 @@ void TieWordEmbedding::incremental_forwarding_lmhead(
         }
       });
     } else {
-      input_step.dot(weight, hidden_step, false, true);
+      nntrainer::TensorDim dim = hidden_step.getDim();
+      dim.setDataType(nntrainer::TensorDim::DataType::FP16);
+      nntrainer::Tensor hidden_step_fp16(dim, true);
+      hidden_step_fp16.setZero();
+
+      input_step.dot(weight, hidden_step_fp16, false, true);
+
+      _Float16* src = (_Float16*)hidden_step_fp16.getData();
+      float* dest = (float*)hidden_step.getData();
+      size_t len = hidden_step.getDim().getDataLen();
+      for (size_t i = 0; i < len; ++i) {
+        dest[i] = (float)src[i];
+      }
     }
 
     if (auto &disable_bias =

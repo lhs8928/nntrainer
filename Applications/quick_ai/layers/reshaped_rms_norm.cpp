@@ -41,7 +41,7 @@ void ReshapedRMSNormLayer::finalize(nntrainer::InitLayerContext &context) {
     nntrainer::TensorDim gamma_dim(
       1, 1, 1, feature_size,
       nntrainer::TensorDim::TensorType(context.getFormat(),
-                                       nntrainer::TensorDim::DataType::FP32));
+                                       context.getWeightDataType()));
     wt_idx[RMSParams::gamma] = context.requestWeight(
       gamma_dim, nntrainer::props::InitializerInfo::Enum::NONE,
       nntrainer::WeightRegularizer::NONE, 1.0f, 0.0f, "gamma", true);
@@ -114,10 +114,29 @@ void ReshapedRMSNormLayer::incremental_forwarding(
 #endif
 #ifdef ENABLE_FP16
     } else if (in_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
-      // FP16 activation: kernel accumulates squares in FP32 (no overflow).
-      nntrainer::rms_norm_wrt_width_fp16_intrinsic(
-        in_step.getData<_FP16>(), out_step.getData<_FP16>(),
-        in_step.getDim().height(), in_step.getDim().width(), epsilon);
+      _Float16* in_data = in_step.getData<_Float16>();
+      _Float16* out_data = out_step.getData<_Float16>();
+      unsigned int H = step_reshaped_dim.height();
+      unsigned int W = step_reshaped_dim.width();
+
+      for (unsigned int h = 0; h < H; ++h) {
+        float sum_sq = 0.0f;
+        for (unsigned int w = 0; w < W; ++w) {
+          float val = (float)in_data[h * W + w];
+          sum_sq += val * val;
+        }
+        float rms = std::sqrt(sum_sq / W + epsilon);
+        float inv_rms = 1.0f / rms;
+        
+        if (from == 0 && h == 0 && (context.getName() == "layer0_q_norm" || context.getName() == "layer0_k_norm")) {
+          std::cout << "[ReshapedRMSNorm Debug prefill] Name: " << context.getName() 
+                    << " | h0 sum_sq: " << sum_sq << " | rms: " << rms << " | inv_rms: " << inv_rms << std::endl;
+        }
+
+        for (unsigned int w = 0; w < W; ++w) {
+          out_data[h * W + w] = (_Float16)((float)in_data[h * W + w] * inv_rms);
+        }
+      }
 #endif
     } else {
       throw std::invalid_argument(
@@ -125,12 +144,74 @@ void ReshapedRMSNormLayer::incremental_forwarding(
     }
     if (use_gamma) {
       nntrainer::Tensor &gamma = context.getWeight(wt_idx[RMSParams::gamma]);
-      if (gamma.getDataType() != out_step.getDataType()) {
-        nntrainer::Tensor gamma_cast = gamma.clone(out_step.getDataType());
-        out_step.multiply_i(gamma_cast);
-      } else {
-        out_step.multiply_i(gamma);
+      nntrainer::Tensor gamma_cast = (gamma.getDataType() != out_step.getDataType()) 
+                                     ? gamma.clone(out_step.getDataType()) 
+                                     : gamma;
+
+      if (from == 0 && (context.getName() == "layer0_q_norm" || context.getName() == "layer0_k_norm")) {
+        std::cout << "[ReshapedRMSNorm Gamma prefill] Name: " << context.getName() << " | gamma_cast[0..4]: ";
+        if (gamma_cast.getDataType() == ml::train::TensorDim::DataType::FP16) {
+          _Float16 *g_ptr = gamma_cast.getData<_Float16>();
+          for (int i = 0; i < 5; ++i) std::cout << (float)g_ptr[i] << ", ";
+        } else {
+          float *g_ptr = gamma_cast.getData<float>();
+          for (int i = 0; i < 5; ++i) std::cout << g_ptr[i] << ", ";
+        }
+        std::cout << std::endl;
       }
+
+      if (context.getName() == "layer0_q_norm" && from == 24) {
+        std::cout << "[ReshapedRMSNorm Gamma Debug] Name: " << context.getName() << " | gamma_cast[0..4]: ";
+        if (gamma_cast.getDataType() == ml::train::TensorDim::DataType::FP16) {
+          _Float16 *g_ptr = gamma_cast.getData<_Float16>();
+          for (int i = 0; i < 5; ++i) std::cout << (float)g_ptr[i] << ", ";
+        } else {
+          float *g_ptr = gamma_cast.getData<float>();
+          for (int i = 0; i < 5; ++i) std::cout << g_ptr[i] << ", ";
+        }
+        std::cout << std::endl;
+      }
+
+      if (out_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
+    #ifdef ENABLE_FP16
+        _Float16 *out_data = out_step.getData<_Float16>();
+        _Float16 *g_ptr = gamma_cast.getData<_Float16>();
+        unsigned int total_len = step_reshaped_dim.height() * feature_size;
+        for (unsigned int i = 0; i < total_len; ++i) {
+          unsigned int g_idx = i % feature_size;
+          out_data[i] = (_Float16)((float)out_data[i] * (float)g_ptr[g_idx]);
+        }
+    #endif
+      } else {
+        ml::train::TensorDim row_dim = out_step.getDim();
+        row_dim.height(1); // exactly [1, 1, 1, 128]
+
+        for (unsigned int r = 0; r < step_reshaped_dim.height(); ++r) {
+          nntrainer::Tensor out_row = out_step.getSharedDataTensor(row_dim, r * feature_size, false);
+          out_row.multiply_i(gamma_cast);
+        }
+      }
+    }
+
+    if (context.getName() == "layer0_q_norm") {
+      std::cout << "[ReshapedRMSNorm Debug] Layer: " << context.getName() << " | from: " << from 
+                << " | Input[0..4]: ";
+      if (in_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
+        _Float16 *in_ptr = in_step.getData<_Float16>();
+        for (int i = 0; i < 5; ++i) std::cout << (float)in_ptr[i] << ", ";
+      } else {
+        float *in_ptr = in_step.getData<float>();
+        for (int i = 0; i < 5; ++i) std::cout << in_ptr[i] << ", ";
+      }
+      std::cout << " | Output[0..4]: ";
+      if (out_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
+        _Float16 *out_ptr = out_step.getData<_Float16>();
+        for (int i = 0; i < 5; ++i) std::cout << (float)out_ptr[i] << ", ";
+      } else {
+        float *out_ptr = out_step.getData<float>();
+        for (int i = 0; i < 5; ++i) std::cout << out_ptr[i] << ", ";
+      }
+      std::cout << std::endl;
     }
 
     // reshape again out_step
