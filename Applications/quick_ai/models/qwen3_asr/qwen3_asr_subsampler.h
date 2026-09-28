@@ -3,7 +3,9 @@
  * Copyright (C) 2026 Samsung Electronics Co., Ltd. All Rights Reserved.
  *
  * @file   qwen3_asr_subsampler.h
+ * @date   14 September 2026
  * @brief  Qwen3-ASR Audio Subsampler independent sub-model
+ * @author Hyeonseok Lee <hs89.lee@samsung.com>
  */
 
 #ifndef __QWEN3_ASR_SUBSAMPLER_H__
@@ -29,6 +31,7 @@ public:
   ~Qwen3ASRSubsampler() = default;
 
   void initialize(const std::string &model_tensor_type = "FP16-FP16");
+  void constructModel();
   void load_weight(const std::string &weight_path);
   std::vector<float *> inference(float *input_data);
 
@@ -36,6 +39,9 @@ public:
 
 private:
   std::unique_ptr<ml::train::Model> model;
+  ml::train::Tensor input_tensor;
+  ml::train::Tensor output_tensor;
+  bool model_constructed = false;
 };
 
 } // namespace quick_ai

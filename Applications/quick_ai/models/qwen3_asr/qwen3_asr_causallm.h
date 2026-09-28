@@ -40,6 +40,12 @@ protected:
   Tensor createAudioAttentionBlock(const int layer_id, Tensor input, unsigned int max_timestep);
 
   unsigned int audio_seq_len;
+
+public:
+  Qwen3ASRSubsampler* getSubsampler() { return &subsampler; }
+
+protected:
+  Qwen3ASRSubsampler subsampler;
 };
 
 /**
@@ -70,11 +76,11 @@ public:
   void setAudioPath(const std::string &path) { audio_path = path; }
 
   ml::train::Model* getModel() { return model.get(); }
-  Qwen3ASRSubsampler* getSubsampler() { return &subsampler; }
+
 
 private:
   std::string audio_path;
-  Qwen3ASRSubsampler subsampler;
+
 };
 
 } // namespace quick_ai
