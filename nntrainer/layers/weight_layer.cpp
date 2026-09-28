@@ -43,14 +43,21 @@ void WeightLayer::finalize(InitLayerContext &context) {
 
   std::vector<TensorDim> output_dims(1);
 
-  output_dims[SINGLE_INOUT_IDX] = weight_dim;
+  if (context.getNumInputs() > 0) {
+    output_dims[SINGLE_INOUT_IDX] = context.getInputDimensions()[0];
+  } else {
+    output_dims[SINGLE_INOUT_IDX] = weight_dim;
+  }
   output_dims[SINGLE_INOUT_IDX].setTensorType(
     {context.getFormat(), weight_dtype});
 
   context.setOutputDimensions(output_dims);
 
+  TensorDim typed_weight_dim = weight_dim;
+  typed_weight_dim.setTensorType({context.getFormat(), weight_dtype});
+
   weight_idx = context.requestWeight(
-    weight_dim, weight_initializer, weight_regularizer,
+    typed_weight_dim, weight_initializer, weight_regularizer,
     weight_regularizer_constant, weight_decay, weight_name, true);
 }
 
@@ -61,14 +68,27 @@ void WeightLayer::exportTo(Exporter &exporter,
 }
 
 void WeightLayer::setProperty(const std::vector<std::string> &values) {
-  auto remain_props = loadProperties(values, weight_props);
+  std::vector<std::string> mapped_values = values;
+  for (auto &v : mapped_values) {
+    if (v.rfind("weight_dtype=", 0) == 0) {
+      v = "tensor_dtype=" + v.substr(13);
+    }
+  }
+  auto remain_props = loadProperties(mapped_values, weight_props);
   LayerImpl::setProperty(remain_props);
 }
 
 void WeightLayer::forwarding(RunLayerContext &context, bool training) {
   Tensor &weight = context.getWeight(weight_idx);
   Tensor &output = context.getOutput(SINGLE_INOUT_IDX);
-  output.copy(weight);
+  if (output.getDim() == weight.getDim()) {
+    output.copy(weight);
+  } else {
+    size_t copy_bytes = output.bytes();
+    NNTR_THROW_IF(copy_bytes > weight.bytes(), std::invalid_argument)
+      << "Output dimension exceeds precomputed weight table size in WeightLayer";
+    std::memcpy(output.getData(), weight.getData(), copy_bytes);
+  }
 }
 
 void WeightLayer::calcDerivative(RunLayerContext &context) {

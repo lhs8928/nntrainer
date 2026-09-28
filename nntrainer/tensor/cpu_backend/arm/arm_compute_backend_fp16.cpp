@@ -12,15 +12,9 @@
  */
 #include <arm_compute_backend.h>
 #include <assert.h>
-#include <cmath>
-#include <cstdio>
-#include <cstdlib>
 #include <fallback_internal.h>
 #include <ggml_interface.h>
-#ifndef ARMV7
-// KleidiAI is aarch64-only; arm/meson.build excludes it for arch == 'arm'.
 #include <kleidiai_interface.h>
-#endif
 #include <neon_impl.h>
 #include <nntrainer_error.h>
 #ifdef USE_BLAS
@@ -36,33 +30,8 @@ void shgemm(const unsigned int TStorageOrder, bool TransA, bool TransB,
             const float alpha, const float *A, const unsigned int lda,
             const _FP16 *B, const unsigned int ldb, const float beta, float *C,
             const unsigned int ldc) {
-  if (std::getenv("NNTR_SHGEMM_DEBUG")) {
-    fprintf(stderr, "[SHGEMM] order=%u TransA=%d TransB=%d M=%u N=%u K=%u lda=%u ldb=%u ldc=%u alpha=%f beta=%f\n",
-            TStorageOrder, (int)TransA, (int)TransB, M, N, K, lda, ldb, ldc, alpha, beta);
-    fflush(stderr);
-  }
-  // B is stored as [K,N] if !TransB, or [N,K] if TransB (row-major), so it
-  // has N*K elements only when ldb equals the trailing dimension (K if
-  // TransB, N if !TransB) with no padding — allocate/convert exactly what
-  // scopy will actually read further down (ldb-based) to catch a mismatch.
-  const unsigned int b_rows = TransB ? N : K;
-  const unsigned int b_cols_ld = ldb;
-  size_t b_elems = (size_t)b_rows * b_cols_ld;
-  if (std::getenv("NNTR_SHGEMM_DEBUG")) {
-    fprintf(stderr, "[SHGEMM] b_rows=%u b_cols_ld(ldb)=%u b_elems=%zu (N*K=%zu)\n",
-            b_rows, b_cols_ld, b_elems, (size_t)N * K);
-    fflush(stderr);
-  }
   float *B_ = new float[N * K];
   scopy(N * K, B, 1, B_, 1);
-  if (std::getenv("NNTR_SHGEMM_DEBUG")) {
-    size_t nnan_src=0, nnan_A=0, nnan_conv=0;
-    for (size_t i=0;i<(size_t)N*K;++i) if (std::isnan((float)B[i])) nnan_src++;
-    for (size_t i=0;i<(size_t)N*K;++i) if (std::isnan(B_[i])) nnan_conv++;
-    for (size_t i=0;i<(size_t)M*K;++i) if (std::isnan(A[i])) nnan_A++;
-    fprintf(stderr, "[SHGEMM] pre-gemm: B(fp16-src) nan=%zu B_(converted) nan=%zu A(weight) nan=%zu\n", nnan_src, nnan_conv, nnan_A);
-    fflush(stderr);
-  }
 
 #ifdef USE_BLAS
   __cblas_sgemm(TStorageOrder, TransA, TransB, M, N, K, alpha, A, lda, B_, ldb,
@@ -71,13 +40,6 @@ void shgemm(const unsigned int TStorageOrder, bool TransA, bool TransB,
   __fallback_sgemm(TStorageOrder, TransA, TransB, M, N, K, alpha, A, lda, B_,
                    ldb, beta, C, ldc);
 #endif
-  if (std::getenv("NNTR_SHGEMM_DEBUG")) {
-    size_t nfin=0, nnan=0;
-    size_t ntot = (size_t)M*N;
-    for (size_t i=0;i<ntot;++i) { if (std::isnan(C[i])) nnan++; else nfin++; }
-    fprintf(stderr, "[SHGEMM] output finite=%zu nan=%zu / %zu\n", nfin, nnan, ntot);
-    fflush(stderr);
-  }
 
   delete[] B_;
 }
@@ -264,16 +226,8 @@ void sgemv(const unsigned int TStorageOrder, bool TransA, const unsigned int M,
            const unsigned int N, const float alpha, const _FP16 *A,
            const unsigned int lda, const _FP16 *X, const unsigned int incX,
            const float beta, _FP16 *Y, const unsigned int incY) {
-  if (TStorageOrder) {
-    __fallback_sgemv(TStorageOrder, TransA, M, N, alpha, A, lda, X, incX, beta,
-                     Y, incY);
-  } else {
-    if (TransA) {
-      nntrainer::neon::hgemv_transpose(A, X, Y, M, N, alpha, beta);
-    } else {
-      nntrainer::neon::hgemv(A, X, Y, M, N, alpha, beta);
-    }
-  }
+  __fallback_sgemv(TStorageOrder, TransA, M, N, alpha, A, lda, X, incX, beta,
+                   Y, incY);
 }
 
 void ele_mul(const unsigned int N, const _FP16 *X, const _FP16 *Y, _FP16 *Z,
@@ -470,9 +424,6 @@ void rms_norm_wrt_width_fp16_intrinsic(const float *__restrict X,
   neon::rms_norm_wrt_width_fp16_intrinsic(X, Y, H, W, epsilon);
 }
 
-#ifndef ARMV7
-// The KleidiAI qsi8d32p/qsi4c32p wrappers below call into kai_interface,
-// which arm/meson.build builds only for arch != 'arm'.
 void nntr_quant_qs4c32_f32(size_t n, size_t k, size_t bl,
                            void *rhs_native_mtx_f32,
                            void *rhs_native_mtx_qs4c32) {
@@ -518,7 +469,5 @@ void nntr_gemm_qsi8d32p_qsi4c32p_packed(size_t m, size_t n, size_t k,
     m, n, k, lhs_native_mtx_f32, rhs_packed_mtx_qs4cx, dst_act_mtx_f32,
     idx_variant, transB, lower_bound, upper_bound);
 }
-#endif // !ARMV7
-
 
 } /* namespace nntrainer */

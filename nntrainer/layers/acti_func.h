@@ -35,7 +35,7 @@ class Tensor;
 class ActiFunc {
 
 public:
-  constexpr static inline float NEGATIVE_SLOPE = 0.1f;
+  constexpr static inline float NEGATIVE_SLOPE = 0.01f;
 
   /**
    * @brief     Constructor of ActiFunc
@@ -436,26 +436,20 @@ public:
    */
   template <typename T = float>
   static Tensor &gelu(Tensor const &t_in, Tensor &t_out) {
-    if (t_in.getDataType() == Tdatatype::FP16) {
-      // Exact erf form: 0.5 x (1 + erf(x / sqrt(2))). Vectorized via the FP16
-      // NEON kernel (nntrainer::gelu_v2_fp16) -- reuses the proven FP32
-      // piecewise polynomial, loading FP16x4 and widening to FP32x4 for the
-      // polynomial then narrowing back on store. This replaces the previous
-      // HalfTensor::apply path (std::transform + scalar std::erf per element)
-      // which dominated the W8A16 backbone's ~12 GELU layers. (Earlier the
-      // FP16 branch hardcast to float* and called the FP32 kernel -> 2N-byte
-      // overread -> SIGSEGV, see PIPELINE_VERIFICATION.md §7.2; gelu_v2_fp16
-      // reads/writes FP16 storage directly, so no overread.)
-      #ifdef ENABLE_FP16
-      nntrainer::gelu_v2_fp16(t_in.size(), t_in.getData<_FP16>(),
-                              t_out.getData<_FP16>());
-#else
-      throw std::runtime_error("FP16 GELU requires ENABLE_FP16");
+    if (t_in.getDataType() == TensorDim::DataType::FP16) {
+#ifdef ENABLE_FP16
+      t_in.apply<_FP16>(
+        [&](_FP16 x) {
+          float fx = (float)x;
+          float val = fx * 0.5f * (1.0f + std::erf(fx * 0.70710678118f));
+          return (_FP16)val;
+        },
+        t_out);
 #endif
-      return t_out;
+    } else {
+      nntrainer::gelu_v2(t_in.size(), t_in.getData<float>(),
+                         t_out.getData<float>());
     }
-    nntrainer::gelu_v2(t_in.size(), t_in.getData<float>(),
-                       t_out.getData<float>());
     return t_out;
   }
 
@@ -495,24 +489,6 @@ public:
    */
   template <typename T = float>
   static Tensor &tanhGelu(Tensor const &t_in, Tensor &t_out) {
-    if (t_in.getDataType() == Tdatatype::FP16) {
-      // tanh approximate form: 0.5 x (1 + tanh(0.7978845608 (x + 0.044715 x^3)))
-      // Matches the FP16 __fallback_tanh_gelu kernel and the FP32 tanh_gelu
-      // scalar tail (neon_impl.cpp). apply<T> -> HalfTensor, same reason as
-      // gelu above; avoids the getData<float>() overread on FP16 storage.
-      const T c1 = static_cast<T>(0.7978845608028654f); // sqrt(2/pi)
-      const T c2 = static_cast<T>(0.044715f);
-      t_in.apply<T>(
-        [&](T x) {
-          T x3 = x * x * x;
-          return static_cast<T>(
-            0.5f * x *
-            (1.0f + static_cast<T>(std::tanh(
-                      static_cast<float>(c1 * (x + c2 * x3))))));
-        },
-        t_out);
-      return t_out;
-    }
     nntrainer::tanh_gelu(t_in.size(), t_in.getData<float>(),
                          t_out.getData<float>());
     return t_out;

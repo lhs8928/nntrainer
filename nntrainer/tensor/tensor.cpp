@@ -1677,6 +1677,8 @@ Tensor Tensor::getSharedDataTensor(const TensorDim dim_, size_t offset,
   return ret;
 }
 
+extern std::unordered_map<size_t, size_t> safetensors_weight_sizes;
+
 void Tensor::activate() {
 
   NNTR_THROW_IF(!is_virtual, std::invalid_argument)
@@ -1687,6 +1689,24 @@ void Tensor::activate() {
 #else
 
   auto file_offset = getFileOffset();
+  std::streamsize sz = static_cast<std::streamsize>(getMemoryBytes());
+
+  auto it = safetensors_weight_sizes.find(file_offset);
+  if (it != safetensors_weight_sizes.end() && it->second == sz / 2) {
+    // Eagerly allocate and read/convert FP16 from fd to FP32 memory
+    is_virtual = false;
+    itensor_->allocate();
+    std::vector<_Float16> fp16_buf(sz / 2 / sizeof(_Float16));
+    ssize_t bytes_read = pread(this->fd, fp16_buf.data(), sz / 2, file_offset);
+    NNTR_THROW_IF(bytes_read != static_cast<ssize_t>(sz / 2), std::runtime_error)
+      << "[activate] pread failed for virtual FP16 weight '" << getName() << "'";
+    float *fp32_ptr = (float *)getData();
+    for (size_t i = 0; i < fp16_buf.size(); ++i) {
+      fp32_ptr[i] = static_cast<float>(fp16_buf[i]);
+    }
+    return;
+  }
+
   size_t off = (file_offset / 4096) * 4096;
   size_t diff = file_offset - off;
   size_t len = getMemoryBytes() + diff;
