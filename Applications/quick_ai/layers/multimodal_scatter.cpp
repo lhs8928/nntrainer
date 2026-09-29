@@ -64,30 +64,6 @@ void MultimodalScatterLayer::forwarding(nntrainer::RunLayerContext &context,
   size_t element_bytes = is_fp16 ? sizeof(uint16_t) : sizeof(float);
   size_t vector_bytes = hidden_size * element_bytes;
 
-  if (is_fp16) {
-    _Float16* aud_ptr = (_Float16*)audio_features.getData();
-    _Float16* txt_ptr = (_Float16*)text_embed.getData();
-    float* id_ptr = (float*)input_ids.getData();
-    std::cout << "[Scatter Debug] input_ids[0..4]: " 
-              << id_ptr[0] << ", " << id_ptr[1] << ", " 
-              << id_ptr[2] << ", " << id_ptr[3] << ", " << id_ptr[4] << std::endl;
-    std::cout << "[Scatter Debug] text_embed[0..4]: " 
-              << (float)txt_ptr[0] << ", " << (float)txt_ptr[1] << ", " 
-              << (float)txt_ptr[2] << ", " << (float)txt_ptr[3] << ", " << (float)txt_ptr[4] << std::endl;
-    std::cout << "[Scatter Debug] audio_features[0..4]: " 
-              << (float)aud_ptr[0] << ", " << (float)aud_ptr[1] << ", " 
-              << (float)aud_ptr[2] << ", " << (float)aud_ptr[3] << ", " << (float)aud_ptr[4] << std::endl;
-  }
-  
-  if (is_fp16) {
-    _Float16* aud_ptr = (_Float16*)audio_features.getData();
-    int nan_cnt = 0;
-    for(size_t k = 0; k < audio_features.getDim().getDataLen(); ++k) {
-      if (std::isnan((float)aud_ptr[k])) nan_cnt++;
-    }
-    if (nan_cnt > 0) std::cout << "[MultimodalScatter] WARNING: Audio features contain " << nan_cnt << " NaNs!" << std::endl;
-  }
-
   for (unsigned int b = 0; b < batch; ++b) {
     unsigned int audio_idx = 0;
     
@@ -106,32 +82,6 @@ void MultimodalScatterLayer::forwarding(nntrainer::RunLayerContext &context,
           audio_idx++;
         }
       }
-    }
-  }
-
-  // Scan fused_embed for NaNs and print first 5 elements
-  if (batch > 0) {
-    size_t nan_cnt = 0;
-    size_t total_len = fused_embed.getDim().getDataLen();
-    if (is_fp16) {
-      _Float16* fused_ptr = (_Float16*)fused_embed.getData();
-      for (size_t k = 0; k < total_len; ++k) {
-        if (std::isnan((float)fused_ptr[k])) nan_cnt++;
-      }
-      std::cout << "[MultimodalScatter Debug] fused_embed[0..4]: " 
-                << (float)fused_ptr[0] << ", " << (float)fused_ptr[1] << ", " 
-                << (float)fused_ptr[2] << ", " << (float)fused_ptr[3] << ", " << (float)fused_ptr[4] << std::endl;
-    } else {
-      float* fused_ptr = (float*)fused_embed.getData();
-      for (size_t k = 0; k < total_len; ++k) {
-        if (std::isnan(fused_ptr[k])) nan_cnt++;
-      }
-      std::cout << "[MultimodalScatter Debug] fused_embed[0..4]: " 
-                << fused_ptr[0] << ", " << fused_ptr[1] << ", " 
-                << fused_ptr[2] << ", " << fused_ptr[3] << ", " << fused_ptr[4] << std::endl;
-    }
-    if (nan_cnt > 0) {
-      std::cout << "[MultimodalScatter] WARNING: fused_embed contains " << nan_cnt << " NaNs!" << std::endl;
     }
   }
 }

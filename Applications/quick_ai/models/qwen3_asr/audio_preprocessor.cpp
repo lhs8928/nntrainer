@@ -196,23 +196,6 @@ std::vector<float> AudioPreprocessor::generateMelFilterBank(unsigned int num_mel
     }
   }
 
-  std::cout << "[Step 3 Test] NNTrainer Mel Filter Bank total elements: " << mel_filters.size() << std::endl;
-  for (unsigned int j : {0, 1, 2, 5, 10}) {
-    std::cout << "Mel bin " << j << " non-zero: ";
-    bool has_nz = false;
-    for (unsigned int k = 0; k < num_fft_bins; ++k) {
-      float val = mel_filters[j * num_fft_bins + k];
-      if (val > 0.0f) {
-        std::cout << val << " (bin " << k << "), ";
-        has_nz = true;
-      }
-    }
-    if (!has_nz) {
-      std::cout << "(none)";
-    }
-    std::cout << std::endl;
-  }
-
   return mel_filters;
 }
 
@@ -275,21 +258,6 @@ std::vector<float> AudioPreprocessor::computeMelSpectrogram(const std::vector<fl
         imag -= frame_windowed[n] * sin_table[table_offset + n];
       }
       power_spectrum[k] = real * real + imag * imag;
-    }
-
-    if (f == 0) {
-      std::cout << "[Step 2 Test] NNTrainer Frame 0 STFT Power total bins: " << num_fft_bins << std::endl;
-      std::cout << "First 20 bins: " << std::endl;
-      for (unsigned int k = 0; k < std::min<unsigned int>(num_fft_bins, 20); ++k) {
-        std::cout << power_spectrum[k] << ", ";
-      }
-      std::cout << std::endl;
-      std::cout << "Last 20 bins: " << std::endl;
-      unsigned int start = num_fft_bins > 20 ? num_fft_bins - 20 : 0;
-      for (unsigned int k = start; k < num_fft_bins; ++k) {
-        std::cout << power_spectrum[k] << ", ";
-      }
-      std::cout << std::endl;
     }
 
     // Multiply by Mel-filter bank

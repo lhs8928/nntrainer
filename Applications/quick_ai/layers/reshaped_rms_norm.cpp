@@ -127,11 +127,6 @@ void ReshapedRMSNormLayer::incremental_forwarding(
         }
         float rms = std::sqrt(sum_sq / W + epsilon);
         float inv_rms = 1.0f / rms;
-        
-        if (from == 0 && h == 0 && (context.getName() == "layer0_q_norm" || context.getName() == "layer0_k_norm")) {
-          std::cout << "[ReshapedRMSNorm Debug prefill] Name: " << context.getName() 
-                    << " | h0 sum_sq: " << sum_sq << " | rms: " << rms << " | inv_rms: " << inv_rms << std::endl;
-        }
 
         for (unsigned int w = 0; w < W; ++w) {
           out_data[h * W + w] = (_Float16)((float)in_data[h * W + w] * inv_rms);
@@ -162,30 +157,6 @@ void ReshapedRMSNormLayer::incremental_forwarding(
         gamma_cast = gamma;
       }
 
-      if (from == 0 && (context.getName() == "layer0_q_norm" || context.getName() == "layer0_k_norm")) {
-        std::cout << "[ReshapedRMSNorm Gamma prefill] Name: " << context.getName() << " | gamma_cast[0..4]: ";
-        if (gamma_cast.getDataType() == ml::train::TensorDim::DataType::FP16) {
-          _Float16 *g_ptr = gamma_cast.getData<_Float16>();
-          for (int i = 0; i < 5; ++i) std::cout << (float)g_ptr[i] << ", ";
-        } else {
-          float *g_ptr = gamma_cast.getData<float>();
-          for (int i = 0; i < 5; ++i) std::cout << g_ptr[i] << ", ";
-        }
-        std::cout << std::endl;
-      }
-
-      if (context.getName() == "layer0_q_norm" && from == 24) {
-        std::cout << "[ReshapedRMSNorm Gamma Debug] Name: " << context.getName() << " | gamma_cast[0..4]: ";
-        if (gamma_cast.getDataType() == ml::train::TensorDim::DataType::FP16) {
-          _Float16 *g_ptr = gamma_cast.getData<_Float16>();
-          for (int i = 0; i < 5; ++i) std::cout << (float)g_ptr[i] << ", ";
-        } else {
-          float *g_ptr = gamma_cast.getData<float>();
-          for (int i = 0; i < 5; ++i) std::cout << g_ptr[i] << ", ";
-        }
-        std::cout << std::endl;
-      }
-
       if (out_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
     #ifdef ENABLE_FP16
         _Float16 *out_data = out_step.getData<_Float16>();
@@ -205,27 +176,6 @@ void ReshapedRMSNormLayer::incremental_forwarding(
           out_row.multiply_i(gamma_cast);
         }
       }
-    }
-
-    if (context.getName() == "layer0_q_norm") {
-      std::cout << "[ReshapedRMSNorm Debug] Layer: " << context.getName() << " | from: " << from 
-                << " | Input[0..4]: ";
-      if (in_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
-        _Float16 *in_ptr = in_step.getData<_Float16>();
-        for (int i = 0; i < 5; ++i) std::cout << (float)in_ptr[i] << ", ";
-      } else {
-        float *in_ptr = in_step.getData<float>();
-        for (int i = 0; i < 5; ++i) std::cout << in_ptr[i] << ", ";
-      }
-      std::cout << " | Output[0..4]: ";
-      if (out_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
-        _Float16 *out_ptr = out_step.getData<_Float16>();
-        for (int i = 0; i < 5; ++i) std::cout << (float)out_ptr[i] << ", ";
-      } else {
-        float *out_ptr = out_step.getData<float>();
-        for (int i = 0; i < 5; ++i) std::cout << out_ptr[i] << ", ";
-      }
-      std::cout << std::endl;
     }
 
     // reshape again out_step
