@@ -35,13 +35,13 @@ void ReshapedRMSNormLayer::finalize(nntrainer::InitLayerContext &context) {
     << "feature size must be a divisor of width";
 
   if (use_gamma) {
-    // gamma is unquantized FP32 on disk; request FP32 regardless of activation
-    // dtype (FP16 would reinterpret the FP32 bytes and corrupt gamma). The FP16
-    // path casts gamma down at the multiply site.
+    // gamma is unquantized and should match activation dtype if model weight dtype is quantized (e.g. Q4_0)
+    auto gamma_dtype = (context.getWeightDataType() == nntrainer::TensorDim::DataType::Q4_0)
+      ? context.getActivationDataType()
+      : context.getWeightDataType();
     nntrainer::TensorDim gamma_dim(
       1, 1, 1, feature_size,
-      nntrainer::TensorDim::TensorType(context.getFormat(),
-                                       context.getWeightDataType()));
+      nntrainer::TensorDim::TensorType(context.getFormat(), gamma_dtype));
     wt_idx[RMSParams::gamma] = context.requestWeight(
       gamma_dim, nntrainer::props::InitializerInfo::Enum::NONE,
       nntrainer::WeightRegularizer::NONE, 1.0f, 0.0f, "gamma", true);
@@ -144,9 +144,23 @@ void ReshapedRMSNormLayer::incremental_forwarding(
     }
     if (use_gamma) {
       nntrainer::Tensor &gamma = context.getWeight(wt_idx[RMSParams::gamma]);
-      nntrainer::Tensor gamma_cast = (gamma.getDataType() != out_step.getDataType()) 
-                                     ? gamma.clone(out_step.getDataType()) 
-                                     : gamma;
+      nntrainer::Tensor gamma_cast;
+      if (gamma.getDataType() != out_step.getDataType()) {
+        nntrainer::TensorDim g_dim = gamma.getDim();
+        g_dim.setDataType(out_step.getDataType());
+        gamma_cast = nntrainer::Tensor(g_dim, true);
+        if (out_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
+          float *src = gamma.getData<float>();
+          _Float16 *dst = gamma_cast.getData<_Float16>();
+          for (unsigned int i = 0; i < gamma.getDim().getDataLen(); ++i) dst[i] = (_Float16)src[i];
+        } else {
+          _Float16 *src = gamma.getData<_Float16>();
+          float *dst = gamma_cast.getData<float>();
+          for (unsigned int i = 0; i < gamma.getDim().getDataLen(); ++i) dst[i] = (float)src[i];
+        }
+      } else {
+        gamma_cast = gamma;
+      }
 
       if (from == 0 && (context.getName() == "layer0_q_norm" || context.getName() == "layer0_k_norm")) {
         std::cout << "[ReshapedRMSNorm Gamma prefill] Name: " << context.getName() << " | gamma_cast[0..4]: ";

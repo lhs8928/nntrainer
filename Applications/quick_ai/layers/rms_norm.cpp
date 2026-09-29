@@ -41,10 +41,12 @@ void RMSNormLayer::finalize(nntrainer::InitLayerContext &context) {
   // regardless of the activation dtype; declaring it FP16 reinterprets the
   // on-disk FP32 bytes as FP16 and corrupts gamma (≈FP16-max garbage). The
   // FP16 forward path casts gamma down to FP16 at the multiply site.
+  auto gamma_dtype = (context.getWeightDataType() == nntrainer::TensorDim::DataType::Q4_0)
+    ? context.getActivationDataType()
+    : context.getWeightDataType();
   nntrainer::TensorDim gamma_dim(
     1, 1, 1, dim[0].width(),
-    nntrainer::TensorDim::TensorType(context.getFormat(),
-                                     context.getWeightDataType()));
+    nntrainer::TensorDim::TensorType(context.getFormat(), gamma_dtype));
   wt_idx[RMSParams::gamma] = context.requestWeight(
     gamma_dim, nntrainer::props::InitializerInfo::Enum::NONE,
     nntrainer::WeightRegularizer::NONE, 1.0f, 0.0f, "gamma", true);
@@ -119,7 +121,19 @@ void RMSNormLayer::incremental_forwarding(nntrainer::RunLayerContext &context,
     // gamma (unquantized) may be stored at a different dtype than the FP16
     // activation; cast it to match before the elementwise multiply.
     if (gamma.getDataType() != out_step.getDataType()) {
-      nntrainer::Tensor gamma_cast = gamma.clone(out_step.getDataType());
+      nntrainer::Tensor gamma_cast;
+      nntrainer::TensorDim g_dim = gamma.getDim();
+      g_dim.setDataType(out_step.getDataType());
+      gamma_cast = nntrainer::Tensor(g_dim, true);
+      if (out_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
+        float *src = gamma.getData<float>();
+        _Float16 *dst = gamma_cast.getData<_Float16>();
+        for (unsigned int i = 0; i < gamma.getDim().getDataLen(); ++i) dst[i] = (_Float16)src[i];
+      } else {
+        _Float16 *src = gamma.getData<_Float16>();
+        float *dst = gamma_cast.getData<float>();
+        for (unsigned int i = 0; i < gamma.getDim().getDataLen(); ++i) dst[i] = (float)src[i];
+      }
       out_step.multiply_i(gamma_cast);
     } else {
       out_step.multiply_i(gamma);
