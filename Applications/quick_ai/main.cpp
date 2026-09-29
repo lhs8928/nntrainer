@@ -291,9 +291,13 @@ int main(int argc, char *argv[]) {
     // temporary std::string objects, and binding those temporaries to a
     // const reference is flagged by -Werror=range-loop-construct.
     for (const std::string key :
-         {"tokenizer_file", "embedding_file_name", "ple_file_name",
-          "sample_input", "yolo_ref_dir"}) {
+         {"tokenizer_file", "embedding_file_name", "subsampler_model_file_name",
+          "ple_file_name", "sample_input", "yolo_ref_dir"}) {
       resolveNntrConfigPath(nntr_cfg, key, model_path);
+    }
+
+    if (nntr_cfg.contains("subsampler") && nntr_cfg["subsampler"].is_object()) {
+      resolveNntrConfigPath(nntr_cfg["subsampler"], "model_file_name", model_path);
     }
 
     if (nntr_cfg.contains("system_prompt")) {
