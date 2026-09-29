@@ -82,8 +82,6 @@ unsigned int applyTKP(const float *logits, int len, float temperature,
 
   // Apply temperature to scores (keep original logits unchanged)
   if (temperature <= 1e-5) {
-    std::cerr << "[Warning] temperature is too small, using greedy strategy"
-              << std::endl;
     auto max_it = std::max_element(logits, logits + len);
     return std::distance(logits, max_it);
   }

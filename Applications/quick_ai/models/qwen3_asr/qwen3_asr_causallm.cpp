@@ -506,40 +506,11 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
 
   float *logits = output[0];
 
-  std::vector<std::pair<float, int>> indexed_logits;
-  for (unsigned int i = 0; i < NUM_VOCAB; ++i) {
-    indexed_logits.push_back({logits[i], i});
-  }
-  std::sort(indexed_logits.begin(), indexed_logits.end(), [](const auto& a, const auto& b) {
-    return a.first > b.first;
-  });
-  std::cout << "=== C++ Prefill Top-10 Logits ===" << std::endl;
-  for (int i = 0; i < 10; ++i) {
-    std::cout << "Rank " << i + 1 << ": Token ID " << indexed_logits[i].second 
-              << ", Logit " << indexed_logits[i].first << std::endl;
-  }
-
   // 6. Autoregressive Generation Loop
   unsigned int generation_cnt = 0;
   auto start_gen = std::chrono::high_resolution_clock::now();
 
   for (unsigned int step = init_len; step < MAX_SEQ_LEN; ++step) {
-    // Print top-10 logits for each step to verify directly against PyTorch
-    std::vector<std::pair<float, int>> step_logits;
-    step_logits.reserve(NUM_VOCAB);
-    for (unsigned int i = 0; i < NUM_VOCAB; ++i) {
-      step_logits.push_back({logits[i], i});
-    }
-    std::sort(step_logits.begin(), step_logits.end(), [](const auto &a, const auto &b) {
-      return a.first > b.first;
-    });
-    std::cout << "\n=== Step " << step << " Top-10 Logits ===" << std::endl;
-    for (int i = 0; i < 10; ++i) {
-      std::cout << "Rank " << i + 1 << ": Token ID " << step_logits[i].second
-                << ", Logit " << step_logits[i].first << " ('"
-                << tokenizer->Decode({static_cast<int>(step_logits[i].second)}) << "')" << std::endl;
-    }
-
     unsigned int next_token = applyTKP(logits, NUM_VOCAB, TEMPERATURE, TOP_K, TOP_P, rng);
 
     // clean up prefill/last step outputs
@@ -548,7 +519,6 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
     }
 
     if (next_token == 151645 || next_token == 151643) { // IM_END or BOS
-      std::cout << "[Qwen3-ASR] Generation completed (EOS detected)." << std::endl;
       break;
     }
 
@@ -557,11 +527,6 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
       ids_history[b * MAX_SEQ_LEN + step] = next_token;
       input_sample[b * MAX_SEQ_LEN + step] = static_cast<float>(next_token);
       output_list[b] += tokenizer->Decode({static_cast<int>(next_token)});
-    }
-
-    if (log_output) {
-      std::cout << "\n[Autoregress step " << step << "] next_token: " << next_token 
-                << " ('" << tokenizer->Decode({static_cast<int>(next_token)}) << "')" << std::endl;
     }
 
     generation_cnt++;
@@ -577,7 +542,16 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
 
   auto end_gen = std::chrono::high_resolution_clock::now();
   auto gen_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_gen - start_gen).count();
-  std::cout << "\n[Qwen3-ASR] Generated " << generation_cnt << " tokens in " << gen_ms << " ms ("
+
+  // Extract recognized speech text (strip special token prefix if present)
+  std::string transcription = output_list.empty() ? "" : output_list[0];
+  size_t asr_pos = transcription.find("<asr_text>");
+  if (asr_pos != std::string::npos) {
+    transcription = transcription.substr(asr_pos + 10);
+  }
+
+  std::cout << "\n[Qwen3-ASR] Output: " << transcription << std::endl;
+  std::cout << "[Qwen3-ASR] Generated " << generation_cnt << " tokens in " << gen_ms << " ms ("
             << (generation_cnt * 1000.0 / gen_ms) << " TPS)" << std::endl;
 
   std::ofstream out_f("history.txt");
