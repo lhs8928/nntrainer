@@ -216,13 +216,6 @@ void TieWordEmbedding::incremental_forwarding_embedding(
   nntrainer::Tensor &hidden_ = context.getOutput(SINGLE_INOUT_IDX);
   nntrainer::Tensor &input_ = context.getInput(SINGLE_INOUT_IDX);
 
-  if (from == 0) {
-    _Float16* w_ptr = (_Float16*)weight.getData();
-    std::cout << "[Weight Debug] embedding0 weights[0..4]: " 
-              << (float)w_ptr[0] << ", " << (float)w_ptr[1] << ", " 
-              << (float)w_ptr[2] << ", " << (float)w_ptr[3] << ", " << (float)w_ptr[4] << std::endl;
-  }
-
   nntrainer::TensorDim out_tensor_dim =
     nntrainer::TensorDim({1, 1, 1, out_dim}, hidden_.getTensorType());
 
@@ -238,13 +231,6 @@ void TieWordEmbedding::incremental_forwarding_embedding(
   for (size_t b = 0; b < b_size; ++b) {
     float *in_data =
       input_.getAddress<float>(b * input_.getDim().getFeatureLen());
-
-    if (from == 24) {
-      std::cout << "[Embedding Shape Debug] b: " << b << " | from: " << from 
-                << " | input_ height: " << input_.getDim().height() 
-                << " | input_ width: " << input_.getDim().width() 
-                << " | input_[0]: " << in_data[0] << " | input_[24]: " << (input_.getDim().height() > 24 ? in_data[24] : -1) << std::endl;
-    }
 
     nntrainer::Tensor batchsliced_hidden = hidden_.getBatchSlice(b, 1);
     int iter = to - from;

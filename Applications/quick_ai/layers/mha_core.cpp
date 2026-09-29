@@ -395,27 +395,6 @@ void MHACoreLayer::forwarding(nntrainer::RunLayerContext &context,
         cache_key, cache_value, cache_key_dim, cache_key_step_dim,
         cache_value_dim, cache_value_step_dim);
     }
-
-    if (from == 24) {
-      std::cout << "[Layer Debug] " << context.getName() << " | from: " << from 
-                << " | query_step[0..4]: ";
-      if (query_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
-        _FP16 *q_ptr = query_step.getData<_FP16>();
-        for (int i = 0; i < 5; ++i) std::cout << (float)q_ptr[i] << ", ";
-      } else {
-        float *q_ptr = query_step.getData<float>();
-        for (int i = 0; i < 5; ++i) std::cout << q_ptr[i] << ", ";
-      }
-      std::cout << " | output_step[0..4]: ";
-      if (output_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
-        _FP16 *o_ptr = output_step.getData<_FP16>();
-        for (int i = 0; i < 5; ++i) std::cout << (float)o_ptr[i] << ", ";
-      } else {
-        float *o_ptr = output_step.getData<float>();
-        for (int i = 0; i < 5; ++i) std::cout << o_ptr[i] << ", ";
-      }
-      std::cout << std::endl;
-    }
   }
 
   cache_index += step_size;

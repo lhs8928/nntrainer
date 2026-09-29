@@ -323,10 +323,6 @@ void Qwen3ASRCausalLM::registerCustomLayers() {
 void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
                            const WSTR system_prompt, const WSTR tail_prompt,
                            bool log_output) {
-  std::cout << "[Dtype Size Debug] sizeof(_FP16): " << sizeof(_FP16) 
-            << ", sizeof(_Float16): " << sizeof(_Float16) 
-            << ", sizeof(float): " << sizeof(float) << std::endl;
-
   if (!is_initialized) {
     throw std::runtime_error("Qwen3ASRCausalLM model is not initialized.");
   }
@@ -352,20 +348,6 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
     if (!audio_path.empty()) {
       std::cout << "[Qwen3-ASR] Loading and preprocessing audio WAV: " << audio_path << std::endl;
       std::vector<float> pcm = preprocessor.loadWav(audio_path);
-      
-      std::cout << "[Step 1 Test] NNTrainer loadWav total samples: " << pcm.size() << std::endl;
-      std::cout << "First 20 samples: " << std::endl;
-      for (size_t i = 0; i < std::min<size_t>(pcm.size(), 20); ++i) {
-        std::cout << pcm[i] << ", ";
-      }
-      std::cout << std::endl;
-      std::cout << "Last 20 samples: " << std::endl;
-      size_t start = pcm.size() > 20 ? pcm.size() - 20 : 0;
-      for (size_t i = start; i < pcm.size(); ++i) {
-        std::cout << pcm[i] << ", ";
-      }
-      std::cout << std::endl;
-
       mel_features = preprocessor.computeMelSpectrogram(pcm);
       std::cout << "[Qwen3-ASR] Raw extracted Mel features: " << mel_features.size() / 128 << " frames" << std::endl;
     } else {
@@ -395,15 +377,6 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
         mel_features_transposed[f * audio_seq_len + t] = mel_features[t * 128 + f];
       }
     }
-  }
-
-  std::cout << "[Step 4 Test] NNTrainer mel_features_transposed shape: [128, " << audio_seq_len << "]" << std::endl;
-  for (unsigned int r : {0, 1, 2, 127}) {
-    std::cout << "  [Row " << r << "]: ";
-    for (unsigned int k = 0; k < std::min<unsigned int>(audio_seq_len, 5); ++k) {
-      std::cout << mel_features_transposed[r * audio_seq_len + k] << ", ";
-    }
-    std::cout << std::endl;
   }
 
   // Run Subsampler sub-model chunk-by-chunk to produce fused_audio_embeds [1, 1, downsampled_len, 1024]
@@ -470,12 +443,6 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
   std::string prompt_ = system_prompt + prompt + tail_prompt;
   auto _input = tokenizer->Encode(prompt_);
 
-  std::cout << "[Qwen3-ASR Debug] Encoded Prompt Token IDs (" << _input.size() << " tokens): ";
-  for (size_t i = 0; i < _input.size(); ++i) {
-    std::cout << _input[i] << " ";
-  }
-  std::cout << std::endl;
-
   std::vector<int64_t> init_input;
   unsigned int _len = _input.size();
   unsigned int num_allow_str = MAX_SEQ_LEN - NUM_TO_GENERATE;
@@ -538,9 +505,6 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
     BATCH_SIZE, inference_inputs, label, init_len, 0, init_len, false);
 
   float *logits = output[0];
-
-  std::cout << "[Logits Debug] Token 11528 ('language') Logit: " << logits[11528] << std::endl;
-  std::cout << "[Logits Debug] Token 17408 (' ruling') Logit: " << logits[17408] << std::endl;
 
   std::vector<std::pair<float, int>> indexed_logits;
   for (unsigned int i = 0; i < NUM_VOCAB; ++i) {

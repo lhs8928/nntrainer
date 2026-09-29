@@ -31,7 +31,6 @@ void RMSNormLayer::finalize(nntrainer::InitLayerContext &context) {
 
   if (context.getName().find("output_norm") != std::string::npos) {
     cache_max_height = 1024;
-    std::cout << "[RMSNormLayer::finalize Debug] matched output_norm! cache_max_height set to: " << cache_max_height << std::endl;
   }
 
   if (!std::get<nntrainer::props::SkipPrefill>(rms_props).empty())
@@ -163,13 +162,10 @@ void RMSNormLayer::incremental_forwarding(nntrainer::RunLayerContext &context,
 void RMSNormLayer::updateTensorsByInputDimensions(
   nntrainer::RunLayerContext &context,
   std::vector<nntrainer::TensorDim> input_dimensions) {
-  std::cout << "[updateTensorsByInputDimensions Debug] Layer: " << context.getName() 
-            << " | Input height: " << input_dimensions[0].height() << std::endl;
   context.updateInput(SINGLE_INOUT_IDX, input_dimensions[0]);
   context.updateOutput(SINGLE_INOUT_IDX, input_dimensions[0]);
   if (context.getName().find("output_norm") != std::string::npos) {
     cache_max_height = 1024;
-    std::cout << "[updateTensorsByInputDimensions Debug] matched output_norm! cache_max_height set to: " << cache_max_height << std::endl;
   }
 }
 
