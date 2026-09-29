@@ -285,8 +285,11 @@ void Qwen3ASRCausalLM::initialize() {
 }
 
 void Qwen3ASRCausalLM::load_weight(const std::string &path) {
-  std::cout << "[Qwen3-ASR] Loading weights for Subsampler sub-model from: " << path << std::endl;
-  subsampler.load_weight(path);
+  const std::string &subsampler_path =
+    subsampler_model_file_name.empty() ? path : subsampler_model_file_name;
+
+  std::cout << "[Qwen3-ASR] Loading weights for Subsampler sub-model from: " << subsampler_path << std::endl;
+  subsampler.load_weight(subsampler_path);
 
   std::cout << "[Qwen3-ASR] Loading weights for Main CausalLM model from: " << path << std::endl;
   Transformer::load_weight(path);
