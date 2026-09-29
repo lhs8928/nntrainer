@@ -500,9 +500,13 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
 
   // 5. Run prefill step
   std::cout << "[Qwen3-ASR] Running prefill inference..." << std::endl;
+  auto start_prefill = std::chrono::high_resolution_clock::now();
   std::vector<float *> label;
   std::vector<float *> output = model->incremental_inference(
     BATCH_SIZE, inference_inputs, label, init_len, 0, init_len, false);
+  auto end_prefill = std::chrono::high_resolution_clock::now();
+  auto prefill_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_prefill - start_prefill).count();
+  double prefill_tps = (prefill_ms > 0) ? (init_len * 1000.0 / prefill_ms) : 0.0;
 
   float *logits = output[0];
 
@@ -551,6 +555,8 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
   }
 
   std::cout << "\n[Qwen3-ASR] Output: " << transcription << std::endl;
+  std::cout << "[Qwen3-ASR] Prefill: " << init_len << " tokens in " << prefill_ms << " ms ("
+            << prefill_tps << " TPS)" << std::endl;
   std::cout << "[Qwen3-ASR] Generated " << generation_cnt << " tokens in " << gen_ms << " ms ("
             << (generation_cnt * 1000.0 / gen_ms) << " TPS)" << std::endl;
 
