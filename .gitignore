@@ -105,7 +105,18 @@ ctre-unicode.hpp
 encoder.hpp
 json.hpp
 
-
 # YOLOv11 local build artifacts (NDK build outputs / PyTorch checkpoints, not source)
 Applications/CausalLM/models/YOLOv11/jni/
 yolo11*.pt
+
+# speaker diarization temporary and distribution artifacts
+android_debug_tensors.bin
+android_nntrainer_log.txt
+nntrainer_debug_tensors.bin
+nntrainer_output_log.txt
+rpi4_nntrainer_log.txt
+speaker_diarization_log.txt
+pytorch_golden_tensors.npz
+dist_rpi4/
+tools/sysroot_arm64/
+weights/

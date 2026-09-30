@@ -161,7 +161,7 @@ else
   extra_defines += '-DKERNEL_CACHE=0'
 endif
 
-if get_option('platform') != 'android' and host_machine.cpu_family() == 'aarch64'
+if get_option('platform') != 'android' and host_machine.cpu_family() == 'aarch64' and get_option('arm-arch') != 'none'
   extra_defines += '-D__ARM_FEATURE_DOTPROD=1'
   extra_defines += '-D__ARM_FEATURE_MATMUL_INT8=1'
 endif
@@ -232,7 +232,15 @@ if get_option('enable-fp16')
    endif
 else
   if arch == 'aarch64'
-    add_project_arguments('-march=armv8.2-a+dotprod+i8mm', language: ['c', 'cpp'])
+    arm_arch_opt = get_option('arm-arch')
+    if arm_arch_opt == 'armv9.2-a'
+      add_project_arguments('-march=armv9.2-a+sve2+sme', language: ['c', 'cpp'])
+    elif arm_arch_opt == 'armv8.2-a'
+      add_project_arguments('-march=armv8.2-a+dotprod+i8mm', language: ['c', 'cpp'])
+    else
+      add_project_arguments('-march=armv8-a+crc+simd', '-mno-outline-atomics', language: ['c', 'cpp'])
+      extra_defines += '-DNO_KAI=1'
+    endif
   endif
 endif
 

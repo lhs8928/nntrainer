@@ -21,6 +21,9 @@ if arch == 'aarch64' or arm_arch_opt != 'none'
   if arm_arch_opt == 'armv9.2-a'
     # SVE/SVE2 implementation for armv9.2-a
     ggml_impl_interface_sources += 'nntr_ggml_impl_sve.cpp'
+  elif arm_arch_opt == 'none'
+    # Fallback for armv8.0-a machines without dotprod/i8mm (e.g. Raspberry Pi 4 Cortex-A72)
+    ggml_impl_interface_sources += 'nntr_ggml_impl_fallback.cpp'
   else
     # NEON implementation (armv8.2-a, armv7l, or auto)
     ggml_impl_interface_sources += 'nntr_ggml_impl_neon.cpp'
