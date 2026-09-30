@@ -10,7 +10,7 @@ arm_compute_backend_sources = [
 ]
 
 arch = host_machine.cpu_family()
-if arch != 'arm'
+if arch != 'arm' and get_option('arm-arch') != 'none'
   subdir('kai_interface')
   nntrainer_inc += include_directories('kai_interface')
   nntrainer_inc_abs += meson.current_source_dir() / 'kai_interface'
