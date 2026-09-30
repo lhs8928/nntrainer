@@ -4,7 +4,7 @@
  *
  * @file   wespeaker_resnet34.cpp
  * @date   29 September 2026
- * @brief  WeSpeaker ResNet34 Speaker Embedding Model implementation in NNTrainer
+ * @brief  WeSpeaker ResNet34 Speaker Embedding Model implementation in NNTrainer (NHWC Layout)
  * @see    https://github.com/nntrainer/nntrainer
  * @author Hyeonseok Lee <hs89.lee@samsung.com>
  * @bug    No known bugs except for NYI items
@@ -44,37 +44,67 @@ static inline float relu(float x) {
   return std::max(0.0f, x);
 }
 
-static inline void im2col(const float *data_im, size_t channels,
-                          size_t height, size_t width, size_t kernel_h, size_t kernel_w,
-                          size_t pad, size_t stride, float *data_col) {
-  size_t height_col = (height + 2 * pad - kernel_h) / stride + 1;
-  size_t width_col = (width + 2 * pad - kernel_w) / stride + 1;
-  size_t out_spatial = height_col * width_col;
-  size_t channels_col = channels * kernel_h * kernel_w;
+// NHWC im2col: gathers input patches into Col[out_h * out_w, k_h * k_w * in_c]
+static inline void im2col_nhwc(const float *data_im, size_t in_c,
+                              size_t in_h, size_t in_w, size_t k_h, size_t k_w,
+                              size_t pad, size_t stride, float *data_col) {
+  size_t out_h = (in_h + 2 * pad - k_h) / stride + 1;
+  size_t out_w = (in_w + 2 * pad - k_w) / stride + 1;
+  size_t K = k_h * k_w * in_c;
 
-  #pragma omp parallel for if(channels_col >= 32) schedule(static)
-  for (size_t c = 0; c < channels_col; ++c) {
-    size_t w_offset = c % kernel_w;
-    size_t h_offset = (c / kernel_w) % kernel_h;
-    size_t c_im = c / (kernel_h * kernel_w);
-    const float *im_c = data_im + c_im * (height * width);
-    float *col_row = data_col + c * out_spatial;
-
-    for (size_t h = 0; h < height_col; ++h) {
-      int h_pad = static_cast<int>(h * stride + h_offset) - static_cast<int>(pad);
-      if (h_pad >= 0 && h_pad < static_cast<int>(height)) {
-        const float *im_row = im_c + h_pad * width;
-        float *col_target = col_row + h * width_col;
-        for (size_t w = 0; w < width_col; ++w) {
-          int w_pad = static_cast<int>(w * stride + w_offset) - static_cast<int>(pad);
-          if (w_pad >= 0 && w_pad < static_cast<int>(width)) {
-            col_target[w] = im_row[w_pad];
+  // Fast path for standard 3x3 stride-1 pad-1 convolution: merges 3 horizontal taps into a single memcpy
+  if (k_h == 3 && k_w == 3 && stride == 1 && pad == 1) {
+    #pragma omp parallel for schedule(static)
+    for (size_t oh = 0; oh < out_h; ++oh) {
+      for (size_t ow = 0; ow < out_w; ++ow) {
+        float *col_row = data_col + (oh * out_w + ow) * K;
+        for (size_t kh = 0; kh < 3; ++kh) {
+          int ih = static_cast<int>(oh + kh) - 1;
+          float *dst_kh = col_row + kh * (3 * in_c);
+          if (ih >= 0 && ih < static_cast<int>(in_h)) {
+            if (ow >= 1 && ow + 1 < in_w) {
+              // Interior horizontal run: copy all 3 taps (3 * in_c floats) in a single contiguous memcpy
+              const float *src = data_im + (static_cast<size_t>(ih) * in_w + (ow - 1)) * in_c;
+              std::memcpy(dst_kh, src, 3 * in_c * sizeof(float));
+            } else {
+              // Left / right boundary
+              for (size_t kw = 0; kw < 3; ++kw) {
+                int iw = static_cast<int>(ow + kw) - 1;
+                float *dst = dst_kh + kw * in_c;
+                if (iw >= 0 && iw < static_cast<int>(in_w)) {
+                  const float *src = data_im + (static_cast<size_t>(ih) * in_w + static_cast<size_t>(iw)) * in_c;
+                  std::memcpy(dst, src, in_c * sizeof(float));
+                } else {
+                  std::memset(dst, 0, in_c * sizeof(float));
+                }
+              }
+            }
           } else {
-            col_target[w] = 0.0f;
+            // Top / bottom padding boundary
+            std::memset(dst_kh, 0, 3 * in_c * sizeof(float));
           }
         }
-      } else {
-        std::memset(col_row + h * width_col, 0, width_col * sizeof(float));
+      }
+    }
+    return;
+  }
+
+  #pragma omp parallel for schedule(static)
+  for (size_t oh = 0; oh < out_h; ++oh) {
+    for (size_t ow = 0; ow < out_w; ++ow) {
+      float *col_row = data_col + (oh * out_w + ow) * K;
+      for (size_t kh = 0; kh < k_h; ++kh) {
+        int ih = static_cast<int>(oh * stride + kh) - static_cast<int>(pad);
+        for (size_t kw = 0; kw < k_w; ++kw) {
+          int iw = static_cast<int>(ow * stride + kw) - static_cast<int>(pad);
+          float *dst = col_row + (kh * k_w + kw) * in_c;
+          if (ih >= 0 && ih < static_cast<int>(in_h) && iw >= 0 && iw < static_cast<int>(in_w)) {
+            const float *src = data_im + (static_cast<size_t>(ih) * in_w + static_cast<size_t>(iw)) * in_c;
+            std::memcpy(dst, src, in_c * sizeof(float));
+          } else {
+            std::memset(dst, 0, in_c * sizeof(float));
+          }
+        }
       }
     }
   }
@@ -85,54 +115,75 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
                                  size_t stride, size_t pad, const float *weights) {
   size_t out_h = (in_h + 2 * pad - k_h) / stride + 1;
   size_t out_w = (in_w + 2 * pad - k_w) / stride + 1;
-  size_t N = out_h * out_w;
-  size_t M = out_c;
+  size_t M = out_h * out_w;
+  size_t N = out_c;
   size_t K = in_c * k_h * k_w;
 
   if (k_h == 1 && k_w == 1 && stride == 1 && pad == 0) {
-    RUN_SGEMM(M, N, K, weights, in, out);
+    // Direct 1x1 conv in NHWC: zero copy, zero scratchpad, pure contiguous GEMM
+    RUN_SGEMM(M, N, K, in, weights, out);
     return;
   }
 
   if (k_h == 1 && k_w == 1 && stride > 1 && pad == 0) {
+    // 1x1 stride-2 shortcut downsample
     thread_local static std::vector<float> subsampled;
-    if (subsampled.size() < in_c * N) {
-      subsampled.resize(in_c * N);
+    if (subsampled.size() < M * in_c) {
+      subsampled.resize(M * in_c);
     }
-    for (size_t c = 0; c < in_c; ++c) {
-      const float *in_c_ptr = in + c * (in_h * in_w);
-      float *sub_c_ptr = subsampled.data() + c * N;
-      for (size_t oh = 0; oh < out_h; ++oh) {
-        for (size_t ow = 0; ow < out_w; ++ow) {
-          sub_c_ptr[oh * out_w + ow] = in_c_ptr[(oh * stride) * in_w + (ow * stride)];
-        }
+    #pragma omp parallel for schedule(static)
+    for (size_t oh = 0; oh < out_h; ++oh) {
+      const float *in_row = in + (oh * stride) * in_w * in_c;
+      float *sub_row = subsampled.data() + oh * out_w * in_c;
+      for (size_t ow = 0; ow < out_w; ++ow) {
+        std::memcpy(sub_row + ow * in_c, in_row + (ow * stride) * in_c, in_c * sizeof(float));
       }
     }
-    RUN_SGEMM(M, N, K, weights, subsampled.data(), out);
+    RUN_SGEMM(M, N, K, subsampled.data(), weights, out);
     return;
   }
 
   thread_local static std::vector<float> col_data;
-  if (col_data.size() < K * N) {
-    col_data.resize(K * N);
+  if (col_data.size() < M * K) {
+    col_data.resize(M * K);
   }
-  im2col(in, in_c, in_h, in_w, k_h, k_w, pad, stride, col_data.data());
-  RUN_SGEMM(M, N, K, weights, col_data.data(), out);
+  im2col_nhwc(in, in_c, in_h, in_w, k_h, k_w, pad, stride, col_data.data());
+  RUN_SGEMM(M, N, K, col_data.data(), weights, out);
 }
 
 void WeSpeakerResNet34::runBatchNorm2d(const float *in, float *out, size_t channels,
                                       size_t height, size_t width, const BatchNormParams &bn, bool apply_relu) {
-  size_t hw = height * width;
-  for (size_t c = 0; c < channels; ++c) {
-    float scale = bn.gamma[c] / std::sqrt(bn.var[c] + bn.eps);
-    float bias = bn.beta[c] - bn.gamma[c] * bn.mean[c] / std::sqrt(bn.var[c] + bn.eps);
+  size_t M = height * width;
+  size_t C = channels;
 
-    const float *in_c = in + c * hw;
-    float *out_c = out + c * hw;
+  thread_local static std::vector<float> scale(256);
+  thread_local static std::vector<float> bias(256);
+  if (scale.size() < C) {
+    scale.resize(C);
+    bias.resize(C);
+  }
 
-    for (size_t i = 0; i < hw; ++i) {
-      float val = in_c[i] * scale + bias;
-      out_c[i] = apply_relu ? relu(val) : val;
+  for (size_t c = 0; c < C; ++c) {
+    float inv_std = 1.0f / std::sqrt(bn.var[c] + bn.eps);
+    scale[c] = bn.gamma[c] * inv_std;
+    bias[c] = bn.beta[c] - bn.mean[c] * scale[c];
+  }
+
+  #pragma omp parallel for schedule(static)
+  for (size_t m = 0; m < M; ++m) {
+    const float *x = in + m * C;
+    float *y = out + m * C;
+    if (apply_relu) {
+      #pragma omp simd
+      for (size_t c = 0; c < C; ++c) {
+        float val = x[c] * scale[c] + bias[c];
+        y[c] = (val > 0.0f) ? val : 0.0f;
+      }
+    } else {
+      #pragma omp simd
+      for (size_t c = 0; c < C; ++c) {
+        y[c] = x[c] * scale[c] + bias[c];
+      }
     }
   }
 }
@@ -141,40 +192,46 @@ void WeSpeakerResNet34::runBasicBlock(const float *in, float *out, size_t in_h, 
                                      const BasicBlockWeights &block, size_t &out_h, size_t &out_w) {
   out_h = (in_h + 2 * 1 - 3) / block.stride + 1;
   out_w = (in_w + 2 * 1 - 3) / block.stride + 1;
+  size_t total_out = block.out_channels * out_h * out_w;
 
-  // 1. conv1: [out_c, out_h, out_w]
-  std::vector<float> conv1_out(block.out_channels * out_h * out_w);
+  thread_local static std::vector<float> conv1_out;
+  thread_local static std::vector<float> bn1_out;
+  thread_local static std::vector<float> conv2_out;
+  thread_local static std::vector<float> residual;
+
+  if (conv1_out.size() < total_out) conv1_out.resize(total_out);
+  if (bn1_out.size() < total_out) bn1_out.resize(total_out);
+  if (conv2_out.size() < total_out) conv2_out.resize(total_out);
+  if (residual.size() < total_out) residual.resize(total_out);
+
+  // 1. conv1 (3x3, stride=block.stride, pad=1): [out_h, out_w, out_c]
   runConv2d(in, conv1_out.data(), block.in_channels, block.out_channels,
             in_h, in_w, 3, 3, block.stride, 1, block.conv1_w);
 
   // 2. bn1 + relu
-  std::vector<float> bn1_out(block.out_channels * out_h * out_w);
   runBatchNorm2d(conv1_out.data(), bn1_out.data(), block.out_channels, out_h, out_w, block.bn1, true);
 
-  // 3. conv2: stride 1, padding 1
-  std::vector<float> conv2_out(block.out_channels * out_h * out_w);
+  // 3. conv2: stride 1, pad 1
   runConv2d(bn1_out.data(), conv2_out.data(), block.out_channels, block.out_channels,
             out_h, out_w, 3, 3, 1, 1, block.conv2_w);
 
   // 4. bn2 (no relu)
-  std::vector<float> bn2_out(block.out_channels * out_h * out_w);
-  runBatchNorm2d(conv2_out.data(), bn2_out.data(), block.out_channels, out_h, out_w, block.bn2, false);
+  runBatchNorm2d(conv2_out.data(), out, block.out_channels, out_h, out_w, block.bn2, false);
 
   // 5. Shortcut / Residual
-  std::vector<float> residual(block.out_channels * out_h * out_w);
   if (block.downsample) {
-    std::vector<float> ds_conv(block.out_channels * out_h * out_w);
-    runConv2d(in, ds_conv.data(), block.in_channels, block.out_channels,
+    runConv2d(in, conv1_out.data(), block.in_channels, block.out_channels,
               in_h, in_w, 1, 1, block.stride, 0, block.downsample_conv_w);
-    runBatchNorm2d(ds_conv.data(), residual.data(), block.out_channels, out_h, out_w, block.downsample_bn, false);
+    runBatchNorm2d(conv1_out.data(), residual.data(), block.out_channels, out_h, out_w, block.downsample_bn, false);
+    #pragma omp parallel for schedule(static)
+    for (size_t i = 0; i < total_out; ++i) {
+      out[i] = relu(out[i] + residual[i]);
+    }
   } else {
-    std::memcpy(residual.data(), in, block.out_channels * out_h * out_w * sizeof(float));
-  }
-
-  // 6. Addition + ReLU
-  size_t total_elems = block.out_channels * out_h * out_w;
-  for (size_t i = 0; i < total_elems; ++i) {
-    out[i] = relu(bn2_out[i] + residual[i]);
+    #pragma omp parallel for schedule(static)
+    for (size_t i = 0; i < total_out; ++i) {
+      out[i] = relu(out[i] + in[i]);
+    }
   }
 }
 
@@ -236,15 +293,15 @@ void WeSpeakerResNet34::forwardBackbone(const float *fbank, float *out_feat,
                                        size_t chunk_idx, DebugTensorCallback debug_cb) {
   std::string pfx = "emb_chunk" + std::to_string(chunk_idx) + "_";
 
-  // 1. conv1: [1, 1, 80, 998] -> [1, 32, 80, 998]
+  // 1. conv1: [80, 998, 1] -> [80, 998, 32]
   std::vector<float> conv1_out(32 * 80 * 998);
   runConv2d(fbank, conv1_out.data(), 1, 32, 80, 998, 3, 3, 1, 1, conv1_w_);
-  if (debug_cb) debug_cb(pfx + "resnet_conv1", conv1_out.data(), {1, 32, 80, 998});
+  if (debug_cb) debug_cb(pfx + "resnet_conv1", conv1_out.data(), {1, 80, 998, 32});
 
-  // 2. bn1 (no relu for debug hook parity): [1, 32, 80, 998]
+  // 2. bn1 (no relu for debug hook parity): [80, 998, 32]
   std::vector<float> bn1_out(32 * 80 * 998);
   runBatchNorm2d(conv1_out.data(), bn1_out.data(), 32, 80, 998, bn1_, false);
-  if (debug_cb) debug_cb(pfx + "resnet_bn1", bn1_out.data(), {1, 32, 80, 998});
+  if (debug_cb) debug_cb(pfx + "resnet_bn1", bn1_out.data(), {1, 80, 998, 32});
 
   for (float &val : bn1_out) val = relu(val);
 
@@ -258,10 +315,8 @@ void WeSpeakerResNet34::forwardBackbone(const float *fbank, float *out_feat,
     std::vector<float> next_feat(layer1_[b].out_channels * curr_h * curr_w);
     runBasicBlock(curr_feat.data(), next_feat.data(), curr_h, curr_w, layer1_[b], next_h, next_w);
     curr_feat = std::move(next_feat);
-    curr_h = next_h;
-    curr_w = next_w;
   }
-  if (debug_cb) debug_cb(pfx + "resnet_layer1", curr_feat.data(), {1, 32, curr_h, curr_w});
+  if (debug_cb) debug_cb(pfx + "resnet_layer1", curr_feat.data(), {1, curr_h, curr_w, 32});
 
   // 4. layer2: 4 blocks (64 channels, 40 x 499)
   for (size_t b = 0; b < layer2_.size(); ++b) {
@@ -274,7 +329,7 @@ void WeSpeakerResNet34::forwardBackbone(const float *fbank, float *out_feat,
     curr_h = next_h;
     curr_w = next_w;
   }
-  if (debug_cb) debug_cb(pfx + "resnet_layer2", curr_feat.data(), {1, 64, curr_h, curr_w});
+  if (debug_cb) debug_cb(pfx + "resnet_layer2", curr_feat.data(), {1, curr_h, curr_w, 64});
 
   // 5. layer3: 6 blocks (128 channels, 20 x 250)
   for (size_t b = 0; b < layer3_.size(); ++b) {
@@ -287,7 +342,7 @@ void WeSpeakerResNet34::forwardBackbone(const float *fbank, float *out_feat,
     curr_h = next_h;
     curr_w = next_w;
   }
-  if (debug_cb) debug_cb(pfx + "resnet_layer3", curr_feat.data(), {1, 128, curr_h, curr_w});
+  if (debug_cb) debug_cb(pfx + "resnet_layer3", curr_feat.data(), {1, curr_h, curr_w, 128});
 
   // 6. layer4: 3 blocks (256 channels, 10 x 125)
   for (size_t b = 0; b < layer4_.size(); ++b) {
@@ -300,7 +355,7 @@ void WeSpeakerResNet34::forwardBackbone(const float *fbank, float *out_feat,
     curr_h = next_h;
     curr_w = next_w;
   }
-  if (debug_cb) debug_cb(pfx + "resnet_layer4", curr_feat.data(), {1, 256, curr_h, curr_w});
+  if (debug_cb) debug_cb(pfx + "resnet_layer4", curr_feat.data(), {1, curr_h, curr_w, 256});
 
   std::memcpy(out_feat, curr_feat.data(), 256 * 10 * 125 * sizeof(float));
 }
@@ -327,12 +382,14 @@ std::vector<float> WeSpeakerResNet34::forwardPool(const float *feat, const float
   float var_denom = v1 - (v2 / v1) + 1e-8f;
 
   for (size_t d = 0; d < FEAT_DIM; ++d) {
-    const float *feat_d = feat + d * NUM_FRAMES;
+    size_t c = d / 10;
+    size_t h = d % 10;
 
-    // Weighted mean
+    // Weighted mean across time frames in NHWC layout [H=10, W=125, C=256]
     float sum_feat = 0.0f;
     for (size_t t = 0; t < NUM_FRAMES; ++t) {
-      sum_feat += feat_d[t] * w[t];
+      float val = feat[(h * NUM_FRAMES + t) * 256 + c];
+      sum_feat += val * w[t];
     }
     float mean_val = sum_feat / v1;
     stats[d] = mean_val;
@@ -340,7 +397,8 @@ std::vector<float> WeSpeakerResNet34::forwardPool(const float *feat, const float
     // Weighted variance & std
     float var_sum = 0.0f;
     for (size_t t = 0; t < NUM_FRAMES; ++t) {
-      float diff = feat_d[t] - mean_val;
+      float val = feat[(h * NUM_FRAMES + t) * 256 + c];
+      float diff = val - mean_val;
       var_sum += (diff * diff) * w[t];
     }
     float std_val = std::sqrt(std::max(0.0f, var_sum / var_denom));
@@ -358,16 +416,9 @@ std::vector<float> WeSpeakerResNet34::forwardPool(const float *feat, const float
     }
     embedding[oc] = acc;
   }
-  if (debug_cb) debug_cb(pfx + "resnet_seg_1", embedding.data(), {1, 256});
+  if (debug_cb) debug_cb(pfx + "spk_embedding", embedding.data(), {1, 256});
 
   return embedding;
-}
-
-std::vector<float> WeSpeakerResNet34::forward(const float *fbank, const float *mask,
-                                             size_t step_idx, DebugTensorCallback debug_cb) {
-  std::vector<float> feat(256 * 10 * 125);
-  forwardBackbone(fbank, feat.data(), step_idx, debug_cb);
-  return forwardPool(feat.data(), mask, step_idx, 0, debug_cb);
 }
 
 } // namespace speaker_diarization

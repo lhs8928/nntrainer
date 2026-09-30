@@ -110,6 +110,7 @@ Applications/CausalLM/models/YOLOv11/jni/
 yolo11*.pt
 
 # speaker diarization temporary and distribution artifacts
+asr_en.wav
 android_debug_tensors.bin
 android_nntrainer_log.txt
 nntrainer_debug_tensors.bin

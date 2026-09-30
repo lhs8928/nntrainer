@@ -55,9 +55,9 @@ include $(PREBUILT_SHARED_LIBRARY)
 
 include $(CLEAR_VARS)
 
-LOCAL_CFLAGS += -std=c++17 -O3 -pthread -fexceptions
-LOCAL_CXXFLAGS += -std=c++17 -frtti -fexceptions
-LOCAL_LDFLAGS += -fexceptions
+LOCAL_CFLAGS += -std=c++17 -O3 -pthread -fexceptions -fopenmp
+LOCAL_CXXFLAGS += -std=c++17 -frtti -fexceptions -fopenmp
+LOCAL_LDFLAGS += -fexceptions -fopenmp -static-openmp
 LOCAL_MODULE := nntrainer_speaker_diarization
 LOCAL_LDLIBS := -llog -landroid
 
