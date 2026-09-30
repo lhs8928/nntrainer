@@ -6,38 +6,40 @@ run_command(['cp', '-lr', res_path, nntr_deepq_resdir], check: true)
 
 env_dir='../../Environment'
 
-jsoncpp_dep = dependency('jsoncpp')
-libcurl_dep = dependency('libcurl')
+jsoncpp_dep = dependency('jsoncpp', required: false)
+libcurl_dep = dependency('libcurl', required: false)
 
-deepq_sources = [
-  'main.cpp',
-  env_dir / 'CartPole/cartpole.cpp'
-]
+if jsoncpp_dep.found() and libcurl_dep.found()
+  deepq_sources = [
+    'main.cpp',
+    env_dir / 'CartPole/cartpole.cpp'
+  ]
 
-deepq_inc = [
-  env_dir
-]
+  deepq_inc = [
+    env_dir
+  ]
 
-deepq_deps=[
-  iniparser_dep,
-  nntrainer_dep,
-  tflite_dep,
-  jsoncpp_dep,
-  libcurl_dep
-]
+  deepq_deps=[
+    iniparser_dep,
+    nntrainer_dep,
+    tflite_dep,
+    jsoncpp_dep,
+    libcurl_dep
+  ]
 
-if get_option('use_gym')
-   message('[Applications/ReinforcementLearning] Eabling OpenAI/Gym using gym-http-api')
-   deepq_deps += dependency('gym-http-api')
-   deepq_deps += dependency('boost')
+  if get_option('use_gym')
+     message('[Applications/ReinforcementLearning] Eabling OpenAI/Gym using gym-http-api')
+     deepq_deps += dependency('gym-http-api')
+     deepq_deps += dependency('boost')
+  endif
+
+  e = executable('nntrainer_deepq',
+    deepq_sources,
+    dependencies: deepq_deps,
+    include_directories: include_directories(env_dir),
+    install: get_option('install-app'),
+    install_dir: application_install_dir
+  )
 endif
-
-e = executable('nntrainer_deepq',
-  deepq_sources,
-  dependencies: deepq_deps,
-  include_directories: include_directories(env_dir),
-  install: get_option('install-app'),
-  install_dir: application_install_dir
-)
 
 # test('app_DeepQ', e, args: [res_path / 'DeepQ.ini'], timeout: 60)
