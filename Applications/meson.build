@@ -21,6 +21,7 @@ if enable_ccapi
 endif
 subdir('VGG/jni')
 subdir('Resnet/jni')
+subdir('SpeakerDiarization/jni')
 subdir('Multi_input/jni')
 
 # if enable_capi
