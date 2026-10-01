@@ -119,5 +119,6 @@ rpi4_nntrainer_log.txt
 speaker_diarization_log.txt
 pytorch_golden_tensors.npz
 dist_rpi4/
+dist_rpi5/
 tools/sysroot_arm64/
 weights/
