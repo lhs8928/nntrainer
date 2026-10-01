@@ -4,7 +4,7 @@
  *
  * @file   wespeaker_resnet34.cpp
  * @date   29 September 2026
- * @brief  WeSpeaker ResNet34 Speaker Embedding Model implementation in NNTrainer (NHWC Layout)
+ * @brief  WeSpeaker ResNet34 Speaker Embedding Model in NNTrainer (Fused Conv+BN NHWC)
  * @see    https://github.com/nntrainer/nntrainer
  * @author Hyeonseok Lee <hs89.lee@samsung.com>
  * @bug    No known bugs except for NYI items
@@ -52,7 +52,7 @@ static inline void im2col_nhwc(const float *data_im, size_t in_c,
   size_t out_w = (in_w + 2 * pad - k_w) / stride + 1;
   size_t K = k_h * k_w * in_c;
 
-  // Fast path for standard 3x3 stride-1 pad-1 convolution: merges 3 horizontal taps into a single memcpy
+  // Fast path for standard 3x3 stride-1 pad-1 convolution: merges 3 horizontal taps into a single contiguous memcpy
   if (k_h == 3 && k_w == 3 && stride == 1 && pad == 1) {
     #pragma omp parallel for schedule(static)
     for (size_t oh = 0; oh < out_h; ++oh) {
@@ -63,11 +63,9 @@ static inline void im2col_nhwc(const float *data_im, size_t in_c,
           float *dst_kh = col_row + kh * (3 * in_c);
           if (ih >= 0 && ih < static_cast<int>(in_h)) {
             if (ow >= 1 && ow + 1 < in_w) {
-              // Interior horizontal run: copy all 3 taps (3 * in_c floats) in a single contiguous memcpy
               const float *src = data_im + (static_cast<size_t>(ih) * in_w + (ow - 1)) * in_c;
               std::memcpy(dst_kh, src, 3 * in_c * sizeof(float));
             } else {
-              // Left / right boundary
               for (size_t kw = 0; kw < 3; ++kw) {
                 int iw = static_cast<int>(ow + kw) - 1;
                 float *dst = dst_kh + kw * in_c;
@@ -80,7 +78,6 @@ static inline void im2col_nhwc(const float *data_im, size_t in_c,
               }
             }
           } else {
-            // Top / bottom padding boundary
             std::memset(dst_kh, 0, 3 * in_c * sizeof(float));
           }
         }
@@ -112,7 +109,8 @@ static inline void im2col_nhwc(const float *data_im, size_t in_c,
 
 void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size_t out_c,
                                  size_t in_h, size_t in_w, size_t k_h, size_t k_w,
-                                 size_t stride, size_t pad, const float *weights) {
+                                 size_t stride, size_t pad, const float *weights, const float *bias,
+                                 bool apply_relu) {
   size_t out_h = (in_h + 2 * pad - k_h) / stride + 1;
   size_t out_w = (in_w + 2 * pad - k_w) / stride + 1;
   size_t M = out_h * out_w;
@@ -120,13 +118,8 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
   size_t K = in_c * k_h * k_w;
 
   if (k_h == 1 && k_w == 1 && stride == 1 && pad == 0) {
-    // Direct 1x1 conv in NHWC: zero copy, zero scratchpad, pure contiguous GEMM
     RUN_SGEMM(M, N, K, in, weights, out);
-    return;
-  }
-
-  if (k_h == 1 && k_w == 1 && stride > 1 && pad == 0) {
-    // 1x1 stride-2 shortcut downsample
+  } else if (k_h == 1 && k_w == 1 && stride > 1 && pad == 0) {
     thread_local static std::vector<float> subsampled;
     if (subsampled.size() < M * in_c) {
       subsampled.resize(M * in_c);
@@ -140,50 +133,37 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
       }
     }
     RUN_SGEMM(M, N, K, subsampled.data(), weights, out);
-    return;
+  } else {
+    thread_local static std::vector<float> col_data;
+    if (col_data.size() < M * K) {
+      col_data.resize(M * K);
+    }
+    im2col_nhwc(in, in_c, in_h, in_w, k_h, k_w, pad, stride, col_data.data());
+    RUN_SGEMM(M, N, K, col_data.data(), weights, out);
   }
 
-  thread_local static std::vector<float> col_data;
-  if (col_data.size() < M * K) {
-    col_data.resize(M * K);
-  }
-  im2col_nhwc(in, in_c, in_h, in_w, k_h, k_w, pad, stride, col_data.data());
-  RUN_SGEMM(M, N, K, col_data.data(), weights, out);
-}
-
-void WeSpeakerResNet34::runBatchNorm2d(const float *in, float *out, size_t channels,
-                                      size_t height, size_t width, const BatchNormParams &bn, bool apply_relu) {
-  size_t M = height * width;
-  size_t C = channels;
-
-  thread_local static std::vector<float> scale(256);
-  thread_local static std::vector<float> bias(256);
-  if (scale.size() < C) {
-    scale.resize(C);
-    bias.resize(C);
-  }
-
-  for (size_t c = 0; c < C; ++c) {
-    float inv_std = 1.0f / std::sqrt(bn.var[c] + bn.eps);
-    scale[c] = bn.gamma[c] * inv_std;
-    bias[c] = bn.beta[c] - bn.mean[c] * scale[c];
-  }
-
-  #pragma omp parallel for schedule(static)
-  for (size_t m = 0; m < M; ++m) {
-    const float *x = in + m * C;
-    float *y = out + m * C;
-    if (apply_relu) {
-      #pragma omp simd
-      for (size_t c = 0; c < C; ++c) {
-        float val = x[c] * scale[c] + bias[c];
-        y[c] = (val > 0.0f) ? val : 0.0f;
+  // Fused Bias addition and optional ReLU in a single pass in L1 cache
+  if (bias) {
+    #pragma omp parallel for schedule(static)
+    for (size_t m = 0; m < M; ++m) {
+      float *out_row = out + m * N;
+      if (apply_relu) {
+        #pragma omp simd
+        for (size_t n = 0; n < N; ++n) {
+          float val = out_row[n] + bias[n];
+          out_row[n] = (val > 0.0f) ? val : 0.0f;
+        }
+      } else {
+        #pragma omp simd
+        for (size_t n = 0; n < N; ++n) {
+          out_row[n] += bias[n];
+        }
       }
-    } else {
-      #pragma omp simd
-      for (size_t c = 0; c < C; ++c) {
-        y[c] = x[c] * scale[c] + bias[c];
-      }
+    }
+  } else if (apply_relu) {
+    #pragma omp parallel for schedule(static)
+    for (size_t i = 0; i < M * N; ++i) {
+      out[i] = (out[i] > 0.0f) ? out[i] : 0.0f;
     }
   }
 }
@@ -195,59 +175,40 @@ void WeSpeakerResNet34::runBasicBlock(const float *in, float *out, size_t in_h, 
   size_t total_out = block.out_channels * out_h * out_w;
 
   thread_local static std::vector<float> conv1_out;
-  thread_local static std::vector<float> bn1_out;
-  thread_local static std::vector<float> conv2_out;
-  thread_local static std::vector<float> residual;
+  thread_local static std::vector<float> ds_out;
 
   if (conv1_out.size() < total_out) conv1_out.resize(total_out);
-  if (bn1_out.size() < total_out) bn1_out.resize(total_out);
-  if (conv2_out.size() < total_out) conv2_out.resize(total_out);
-  if (residual.size() < total_out) residual.resize(total_out);
 
-  // 1. conv1 (3x3, stride=block.stride, pad=1): [out_h, out_w, out_c]
+  // 1. conv1 + bias1 + relu (Fused in a single pass!)
   runConv2d(in, conv1_out.data(), block.in_channels, block.out_channels,
-            in_h, in_w, 3, 3, block.stride, 1, block.conv1_w);
+            in_h, in_w, 3, 3, block.stride, 1, block.conv1_w, block.conv1_b, /*apply_relu=*/true);
 
-  // 2. bn1 + relu
-  runBatchNorm2d(conv1_out.data(), bn1_out.data(), block.out_channels, out_h, out_w, block.bn1, true);
+  // 2. conv2 + bias2 (Fused, no relu before residual addition)
+  runConv2d(conv1_out.data(), out, block.out_channels, block.out_channels,
+            out_h, out_w, 3, 3, 1, 1, block.conv2_w, block.conv2_b, /*apply_relu=*/false);
 
-  // 3. conv2: stride 1, pad 1
-  runConv2d(bn1_out.data(), conv2_out.data(), block.out_channels, block.out_channels,
-            out_h, out_w, 3, 3, 1, 1, block.conv2_w);
-
-  // 4. bn2 (no relu)
-  runBatchNorm2d(conv2_out.data(), out, block.out_channels, out_h, out_w, block.bn2, false);
-
-  // 5. Shortcut / Residual
+  // 3. Shortcut / Residual addition + final ReLU
   if (block.downsample) {
-    runConv2d(in, conv1_out.data(), block.in_channels, block.out_channels,
-              in_h, in_w, 1, 1, block.stride, 0, block.downsample_conv_w);
-    runBatchNorm2d(conv1_out.data(), residual.data(), block.out_channels, out_h, out_w, block.downsample_bn, false);
+    if (ds_out.size() < total_out) ds_out.resize(total_out);
+    runConv2d(in, ds_out.data(), block.in_channels, block.out_channels,
+              in_h, in_w, 1, 1, block.stride, 0, block.downsample_conv_w, block.downsample_conv_b, /*apply_relu=*/false);
     #pragma omp parallel for schedule(static)
     for (size_t i = 0; i < total_out; ++i) {
-      out[i] = relu(out[i] + residual[i]);
+      float val = out[i] + ds_out[i];
+      out[i] = (val > 0.0f) ? val : 0.0f;
     }
   } else {
     #pragma omp parallel for schedule(static)
     for (size_t i = 0; i < total_out; ++i) {
-      out[i] = relu(out[i] + in[i]);
+      float val = out[i] + in[i];
+      out[i] = (val > 0.0f) ? val : 0.0f;
     }
   }
 }
 
-static BatchNormParams extract_bn(const WeightLoader &loader, const std::string &prefix) {
-  BatchNormParams bn;
-  bn.gamma = loader.getTensor(prefix + ".weight");
-  bn.beta  = loader.getTensor(prefix + ".bias");
-  bn.mean  = loader.getTensor(prefix + ".running_mean");
-  bn.var   = loader.getTensor(prefix + ".running_var");
-  bn.eps   = 1e-5f;
-  return bn;
-}
-
 bool WeSpeakerResNet34::init(const WeightLoader &loader) {
   conv1_w_ = loader.getTensor("resnet.conv1.weight");
-  bn1_     = extract_bn(loader, "resnet.bn1");
+  conv1_b_ = loader.getTensor("resnet.conv1.bias");
 
   auto load_stage = [&](const std::string &stage_name, size_t num_blocks,
                         size_t in_c, size_t out_c, size_t init_stride) {
@@ -255,9 +216,9 @@ bool WeSpeakerResNet34::init(const WeightLoader &loader) {
     for (size_t b = 0; b < num_blocks; ++b) {
       std::string pfx = "resnet." + stage_name + "." + std::to_string(b);
       blocks[b].conv1_w = loader.getTensor(pfx + ".conv1.weight");
-      blocks[b].bn1     = extract_bn(loader, pfx + ".bn1");
+      blocks[b].conv1_b = loader.getTensor(pfx + ".conv1.bias");
       blocks[b].conv2_w = loader.getTensor(pfx + ".conv2.weight");
-      blocks[b].bn2     = extract_bn(loader, pfx + ".bn2");
+      blocks[b].conv2_b = loader.getTensor(pfx + ".conv2.bias");
 
       if (b == 0) {
         blocks[b].in_channels = in_c;
@@ -266,7 +227,7 @@ bool WeSpeakerResNet34::init(const WeightLoader &loader) {
         blocks[b].downsample = (in_c != out_c || init_stride != 1);
         if (blocks[b].downsample) {
           blocks[b].downsample_conv_w = loader.getTensor(pfx + ".shortcut.0.weight");
-          blocks[b].downsample_bn     = extract_bn(loader, pfx + ".shortcut.1");
+          blocks[b].downsample_conv_b = loader.getTensor(pfx + ".shortcut.0.bias");
         }
       } else {
         blocks[b].in_channels = out_c;
@@ -286,30 +247,22 @@ bool WeSpeakerResNet34::init(const WeightLoader &loader) {
   seg_1_w_ = loader.getTensor("resnet.seg_1.weight");
   seg_1_b_ = loader.getTensor("resnet.seg_1.bias");
 
-  return (conv1_w_ && seg_1_w_ && seg_1_b_);
+  return (conv1_w_ && conv1_b_ && seg_1_w_ && seg_1_b_);
 }
 
 void WeSpeakerResNet34::forwardBackbone(const float *fbank, float *out_feat,
                                        size_t chunk_idx, DebugTensorCallback debug_cb) {
   std::string pfx = "emb_chunk" + std::to_string(chunk_idx) + "_";
 
-  // 1. conv1: [80, 998, 1] -> [80, 998, 32]
-  std::vector<float> conv1_out(32 * 80 * 998);
-  runConv2d(fbank, conv1_out.data(), 1, 32, 80, 998, 3, 3, 1, 1, conv1_w_);
-  if (debug_cb) debug_cb(pfx + "resnet_conv1", conv1_out.data(), {1, 80, 998, 32});
+  // 1. Stem Conv1 + Bias1 + ReLU (Fused): [80, 998, 1] -> [80, 998, 32]
+  std::vector<float> curr_feat(32 * 80 * 998);
+  runConv2d(fbank, curr_feat.data(), 1, 32, 80, 998, 3, 3, 1, 1, conv1_w_, conv1_b_, /*apply_relu=*/true);
+  if (debug_cb) debug_cb(pfx + "resnet_conv1", curr_feat.data(), {1, 80, 998, 32});
 
-  // 2. bn1 (no relu for debug hook parity): [80, 998, 32]
-  std::vector<float> bn1_out(32 * 80 * 998);
-  runBatchNorm2d(conv1_out.data(), bn1_out.data(), 32, 80, 998, bn1_, false);
-  if (debug_cb) debug_cb(pfx + "resnet_bn1", bn1_out.data(), {1, 80, 998, 32});
-
-  for (float &val : bn1_out) val = relu(val);
-
-  // 3. layer1: 3 blocks (32 channels, 80 x 998)
-  std::vector<float> curr_feat = std::move(bn1_out);
   size_t curr_h = 80;
   size_t curr_w = 998;
 
+  // 2. layer1: 3 blocks (32 channels, 80 x 998)
   for (size_t b = 0; b < layer1_.size(); ++b) {
     size_t next_h = 0, next_w = 0;
     std::vector<float> next_feat(layer1_[b].out_channels * curr_h * curr_w);
@@ -318,7 +271,7 @@ void WeSpeakerResNet34::forwardBackbone(const float *fbank, float *out_feat,
   }
   if (debug_cb) debug_cb(pfx + "resnet_layer1", curr_feat.data(), {1, curr_h, curr_w, 32});
 
-  // 4. layer2: 4 blocks (64 channels, 40 x 499)
+  // 3. layer2: 4 blocks (64 channels, 40 x 499)
   for (size_t b = 0; b < layer2_.size(); ++b) {
     size_t next_h = 0, next_w = 0;
     size_t target_h = (b == 0) ? (curr_h + 2 - 3) / 2 + 1 : curr_h;
@@ -331,7 +284,7 @@ void WeSpeakerResNet34::forwardBackbone(const float *fbank, float *out_feat,
   }
   if (debug_cb) debug_cb(pfx + "resnet_layer2", curr_feat.data(), {1, curr_h, curr_w, 64});
 
-  // 5. layer3: 6 blocks (128 channels, 20 x 250)
+  // 4. layer3: 6 blocks (128 channels, 20 x 250)
   for (size_t b = 0; b < layer3_.size(); ++b) {
     size_t next_h = 0, next_w = 0;
     size_t target_h = (b == 0) ? (curr_h + 2 - 3) / 2 + 1 : curr_h;
@@ -344,7 +297,7 @@ void WeSpeakerResNet34::forwardBackbone(const float *fbank, float *out_feat,
   }
   if (debug_cb) debug_cb(pfx + "resnet_layer3", curr_feat.data(), {1, curr_h, curr_w, 128});
 
-  // 6. layer4: 3 blocks (256 channels, 10 x 125)
+  // 5. layer4: 3 blocks (256 channels, 10 x 125)
   for (size_t b = 0; b < layer4_.size(); ++b) {
     size_t next_h = 0, next_w = 0;
     size_t target_h = (b == 0) ? (curr_h + 2 - 3) / 2 + 1 : curr_h;
