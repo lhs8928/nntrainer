@@ -29,17 +29,30 @@
 #include <nntr_ggml_impl.h>
 #include <nntr_ggml_impl_utils.h>
 
+static inline int32x4_t vdotq_s32_compat(int32x4_t acc, int8x16_t x, int8x16_t y) {
+#if defined(__ARM_FEATURE_DOTPROD)
+  return vdotq_s32(acc, x, y);
+#else
+  int16x8_t p0 = vmull_s8(vget_low_s8(x), vget_low_s8(y));
+  int16x8_t p1 = vmull_s8(vget_high_s8(x), vget_high_s8(y));
+  int32x4_t s0 = vpaddlq_s16(p0);
+  int32x4_t s1 = vpaddlq_s16(p1);
+  int32x2_t r0 = vpadd_s32(vget_low_s32(s0), vget_high_s32(s0));
+  int32x2_t r1 = vpadd_s32(vget_low_s32(s1), vget_high_s32(s1));
+  return vaddq_s32(acc, vcombine_s32(r0, r1));
+#endif
+}
+
 void nntr_gemv_q4_0_4x8_q8_0(int n, float *__restrict s, size_t bs,
                              const void *__restrict vx,
                              const void *__restrict vy, int nr, int nc) {
   const int qk = Q8_0;
   const int nb = n / qk;
   const int ncols_interleaved = 4;
-  const int blocklen = 8;
 
   assert(n % qk == 0);
   assert(nc % ncols_interleaved == 0);
-#if defined(__ARM_FEATURE_DOTPROD)
+
   const block_q4_0x4 *b_ptr = (const block_q4_0x4 *)vx;
   for (int c = 0; c < nc; c += ncols_interleaved) {
     const block_q8_0 *a_ptr = (const block_q8_0 *)vy;
@@ -60,15 +73,15 @@ void nntr_gemv_q4_0_4x8_q8_0(int n, float *__restrict s, size_t bs,
       int32x4_t ret0 = vdupq_n_s32(0);
       int32x4_t ret1 = vdupq_n_s32(0);
 
-      ret0 = vdotq_s32(ret0, b0 << 4, a0);
-      ret1 = vdotq_s32(ret1, b1 << 4, a0);
-      ret0 = vdotq_s32(ret0, b2 << 4, a1);
-      ret1 = vdotq_s32(ret1, b3 << 4, a1);
+      ret0 = vdotq_s32_compat(ret0, b0 << 4, a0);
+      ret1 = vdotq_s32_compat(ret1, b1 << 4, a0);
+      ret0 = vdotq_s32_compat(ret0, b2 << 4, a1);
+      ret1 = vdotq_s32_compat(ret1, b3 << 4, a1);
 
-      ret0 = vdotq_s32(ret0, b0 & 0xf0U, a2);
-      ret1 = vdotq_s32(ret1, b1 & 0xf0U, a2);
-      ret0 = vdotq_s32(ret0, b2 & 0xf0U, a3);
-      ret1 = vdotq_s32(ret1, b3 & 0xf0U, a3);
+      ret0 = vdotq_s32_compat(ret0, b0 & 0xf0U, a2);
+      ret1 = vdotq_s32_compat(ret1, b1 & 0xf0U, a2);
+      ret0 = vdotq_s32_compat(ret0, b2 & 0xf0U, a3);
+      ret1 = vdotq_s32_compat(ret1, b3 & 0xf0U, a3);
 
       int32x4_t ret = vpaddq_s32(ret0, ret1);
 
@@ -80,73 +93,6 @@ void nntr_gemv_q4_0_4x8_q8_0(int n, float *__restrict s, size_t bs,
     vst1q_f32(s, acc);
     s += ncols_interleaved;
   }
-  return;
-
-#else
-  const void *b_ptr = vx;
-  const void *a_ptr = vy;
-  float *res_ptr = s;
-
-  __asm__ __volatile__(
-    "movi v2.16b, #0x4\n"
-    "movi v1.16b, #0xf0\n"
-    "add %x[b_ptr], %x[b_ptr], #0x8\n"
-    "1:" // Column loop
-    "add x23, %x[a_ptr], #0x2\n"
-    "movi v0.16b, #0x0\n"
-    "mov x22, %x[nb]\n"
-    "2:" // Block loop
-    "ldr q31, [%x[b_ptr], #0x0]\n"
-    "ldr q30, [%x[b_ptr], #0x10]\n"
-    "mov x21, x23\n"
-    "movi v29.4s, #0x0\n"
-    "ldr q28, [%x[b_ptr], #0x20]\n"
-    "ldr q27, [%x[b_ptr], #0x30]\n"
-    "movi v26.4s, #0x0\n"
-    "sub x20, x23, #0x2\n"
-    "ld1r { v25.8h }, [x20]\n"
-    "ldr q24, [%x[b_ptr], #-0x8]\n"
-    "sub x22, x22, #0x1\n"
-    "add x23, x23, #0x22\n"
-    "ld1r { v23.2d }, [x21], #0x8\n"
-    "sshl v22.16b, v31.16b, v2.16b\n"
-    "sshl v16.16b, v30.16b, v2.16b\n"
-    "add %x[b_ptr], %x[b_ptr], #0x48\n"
-    "ld1r { v21.2d }, [x21], #0x8\n"
-    "sshl v20.16b, v28.16b, v2.16b\n"
-    "sshl v19.16b, v27.16b, v2.16b\n"
-    "ld1r { v18.2d }, [x21], #0x8\n"
-    "ld1r { v17.2d }, [x21], #0x8\n"
-    "and v31.16b, v31.16b, v1.16b\n"
-    "and v30.16b, v30.16b, v1.16b\n"
-    ".inst 0x4e9796dd  // sdot v29.4s, v22.16b, v23.16b\n"
-    ".inst 0x4e97961a  // sdot v26.4s, v16.16b, v23.16b\n"
-    "and v28.16b, v28.16b, v1.16b\n"
-    "and v27.16b, v27.16b, v1.16b\n"
-    "fcvtl v25.4s, v25.4h\n"
-    "fcvtl v16.4s, v24.4h\n"
-    ".inst 0x4e95969d  // sdot v29.4s, v20.16b, v21.16b\n"
-    ".inst 0x4e95967a  // sdot v26.4s, v19.16b, v21.16b\n"
-    "fmul v16.4s, v16.4s, v25.4s\n"
-    ".inst 0x4e9297fd  // sdot v29.4s, v31.16b, v18.16b\n"
-    ".inst 0x4e9297da  // sdot v26.4s, v30.16b, v18.16b\n"
-    ".inst 0x4e91979d  // sdot v29.4s, v28.16b, v17.16b\n"
-    ".inst 0x4e91977a  // sdot v26.4s, v27.16b, v17.16b\n"
-    "addp v29.4s, v29.4s, v26.4s\n"
-    "scvtf v29.4s, v29.4s, #0x4\n"
-    "fmla v0.4s, v29.4s, v16.4s\n"
-    "cbnz x22, 2b\n"
-    "sub %x[nc], %x[nc], #0x4\n"
-    "str q0, [%x[res_ptr], #0x0]\n"
-    "add %x[res_ptr], %x[res_ptr], #0x10\n"
-    "cbnz %x[nc], 1b\n"
-    : [b_ptr] "+&r"(b_ptr), [res_ptr] "+&r"(res_ptr), [nc] "+&r"(nc)
-    : [a_ptr] "r"(a_ptr), [nb] "r"(nb)
-    : "memory", "v0", "v1", "v2", "v16", "v17", "v18", "v19", "v20", "v21",
-      "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31",
-      "x20", "x21", "x22", "x23");
-  return;
-#endif
 }
 
 #ifdef ENABLE_FP16
@@ -159,11 +105,10 @@ void nntr_gemv_q4_0_4x8_q8_0_fp16(int n, __fp16 *__restrict s, size_t bs,
   const int qk = Q8_0;
   const int nb = n / qk;
   const int ncols_interleaved = 4;
-  const int blocklen = 8;
 
   assert(n % qk == 0);
   assert(nc % ncols_interleaved == 0);
-#if defined(__ARM_FEATURE_DOTPROD)
+
   const block_q4_0x4 *b_ptr = (const block_q4_0x4 *)vx;
   for (int c = 0; c < nc; c += ncols_interleaved) {
     const block_q8_0 *a_ptr = (const block_q8_0 *)vy;
@@ -184,15 +129,15 @@ void nntr_gemv_q4_0_4x8_q8_0_fp16(int n, __fp16 *__restrict s, size_t bs,
       int32x4_t ret0 = vdupq_n_s32(0);
       int32x4_t ret1 = vdupq_n_s32(0);
 
-      ret0 = vdotq_s32(ret0, b0 << 4, a0);
-      ret1 = vdotq_s32(ret1, b1 << 4, a0);
-      ret0 = vdotq_s32(ret0, b2 << 4, a1);
-      ret1 = vdotq_s32(ret1, b3 << 4, a1);
+      ret0 = vdotq_s32_compat(ret0, b0 << 4, a0);
+      ret1 = vdotq_s32_compat(ret1, b1 << 4, a0);
+      ret0 = vdotq_s32_compat(ret0, b2 << 4, a1);
+      ret1 = vdotq_s32_compat(ret1, b3 << 4, a1);
 
-      ret0 = vdotq_s32(ret0, b0 & 0xf0U, a2);
-      ret1 = vdotq_s32(ret1, b1 & 0xf0U, a2);
-      ret0 = vdotq_s32(ret0, b2 & 0xf0U, a3);
-      ret1 = vdotq_s32(ret1, b3 & 0xf0U, a3);
+      ret0 = vdotq_s32_compat(ret0, b0 & 0xf0U, a2);
+      ret1 = vdotq_s32_compat(ret1, b1 & 0xf0U, a2);
+      ret0 = vdotq_s32_compat(ret0, b2 & 0xf0U, a3);
+      ret1 = vdotq_s32_compat(ret1, b3 & 0xf0U, a3);
 
       int32x4_t ret = vpaddq_s32(ret0, ret1);
 
@@ -204,74 +149,6 @@ void nntr_gemv_q4_0_4x8_q8_0_fp16(int n, __fp16 *__restrict s, size_t bs,
     vst1_f16((__fp16 *)s, vcvt_f16_f32(acc));
     s += ncols_interleaved;
   }
-  return;
-
-#else
-  const void *b_ptr = vx;
-  const void *a_ptr = vy;
-  __fp16 *res_ptr = s;
-
-  __asm__ __volatile__(
-    "movi v2.16b, #0x4\n"
-    "movi v1.16b, #0xf0\n"
-    "add %x[b_ptr], %x[b_ptr], #0x8\n"
-    "1:" // Column loop
-    "add x23, %x[a_ptr], #0x2\n"
-    "movi v0.16b, #0x0\n"
-    "mov x22, %x[nb]\n"
-    "2:" // Block loop
-    "ldr q31, [%x[b_ptr], #0x0]\n"
-    "ldr q30, [%x[b_ptr], #0x10]\n"
-    "mov x21, x23\n"
-    "movi v29.4s, #0x0\n"
-    "ldr q28, [%x[b_ptr], #0x20]\n"
-    "ldr q27, [%x[b_ptr], #0x30]\n"
-    "movi v26.4s, #0x0\n"
-    "sub x20, x23, #0x2\n"
-    "ld1r { v25.8h }, [x20]\n"
-    "ldr q24, [%x[b_ptr], #-0x8]\n"
-    "sub x22, x22, #0x1\n"
-    "add x23, x23, #0x22\n"
-    "ld1r { v23.2d }, [x21], #0x8\n"
-    "sshl v22.16b, v31.16b, v2.16b\n"
-    "sshl v16.16b, v30.16b, v2.16b\n"
-    "add %x[b_ptr], %x[b_ptr], #0x48\n"
-    "ld1r { v21.2d }, [x21], #0x8\n"
-    "sshl v20.16b, v28.16b, v2.16b\n"
-    "sshl v19.16b, v27.16b, v2.16b\n"
-    "ld1r { v18.2d }, [x21], #0x8\n"
-    "ld1r { v17.2d }, [x21], #0x8\n"
-    "and v31.16b, v31.16b, v1.16b\n"
-    "and v30.16b, v30.16b, v1.16b\n"
-    ".inst 0x4e9796dd  // sdot v29.4s, v22.16b, v23.16b\n"
-    ".inst 0x4e97961a  // sdot v26.4s, v16.16b, v23.16b\n"
-    "and v28.16b, v28.16b, v1.16b\n"
-    "and v27.16b, v27.16b, v1.16b\n"
-    "fcvtl v25.4s, v25.4h\n"
-    "fcvtl v16.4s, v24.4h\n"
-    ".inst 0x4e95969d  // sdot v29.4s, v20.16b, v21.16b\n"
-    ".inst 0x4e95967a  // sdot v26.4s, v19.16b, v21.16b\n"
-    "fmul v16.4s, v16.4s, v25.4s\n"
-    ".inst 0x4e9297fd  // sdot v29.4s, v31.16b, v18.16b\n"
-    ".inst 0x4e9297da  // sdot v26.4s, v30.16b, v18.16b\n"
-    ".inst 0x4e91979d  // sdot v29.4s, v28.16b, v17.16b\n"
-    ".inst 0x4e91977a  // sdot v26.4s, v27.16b, v17.16b\n"
-    "addp v29.4s, v29.4s, v26.4s\n"
-    "scvtf v29.4s, v29.4s, #0x4\n"
-    "fmla v0.4s, v29.4s, v16.4s\n"
-    "cbnz x22, 2b\n"
-    "sub %x[nc], %x[nc], #0x4\n"
-    "fcvtn v0.4h, v0.4s\n"
-    "str d0, [%x[res_ptr], #0x0]\n"
-    "add %x[res_ptr], %x[res_ptr], #0x8\n"
-    "cbnz %x[nc], 1b\n"
-    : [b_ptr] "+&r"(b_ptr), [res_ptr] "+&r"(res_ptr), [nc] "+&r"(nc)
-    : [a_ptr] "r"(a_ptr), [nb] "r"(nb)
-    : "memory", "v0", "v1", "v2", "v16", "v17", "v18", "v19", "v20", "v21",
-      "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31",
-      "x20", "x21", "x22", "x23");
-  return;
-#endif
 }
 #endif // ENABLE_FP16
 
@@ -292,6 +169,7 @@ void nntr_gemm_q4_0_4x8_q8_0(int n, float *__restrict s, size_t bs,
   float *res_ptr = s;
   size_t res_stride = bs * sizeof(float);
 
+#if defined(__ARM_FEATURE_MATMUL_INT8)
   __asm__ __volatile__("mov x10, %x[nr]\n"
                        "mov x9, #0x88\n"
                        "cmp x10, #0x10\n"
@@ -687,6 +565,75 @@ void nntr_gemm_q4_0_4x8_q8_0(int n, float *__restrict s, size_t bs,
                          "v30", "v31", "x9", "x10", "x20", "x21", "x22", "x23",
                          "x24", "x25", "x26", "x27", "x28");
   return;
+#else
+  for (int c = 0; c < nc; c += ncols_interleaved) {
+    const block_q4_0x4 *b_col_base = (const block_q4_0x4 *)vx + (c / ncols_interleaved) * nb;
+    for (int r = 0; r < nr; r += 4) {
+      const block_q8_0x4 *a_row_base = (const block_q8_0x4 *)vy + (r / 4) * nb;
+
+      float32x4_t acc[4] = {vdupq_n_f32(0.0f), vdupq_n_f32(0.0f), vdupq_n_f32(0.0f), vdupq_n_f32(0.0f)};
+
+      const block_q4_0x4 *b_ptr = b_col_base;
+      const block_q8_0x4 *a_ptr = a_row_base;
+
+      for (int b = 0; b < nb; b++) {
+        int8x16_t b0 = vld1q_s8((const int8_t *)b_ptr->qs);
+        int8x16_t b1 = vld1q_s8((const int8_t *)b_ptr->qs + 16);
+        int8x16_t b2 = vld1q_s8((const int8_t *)b_ptr->qs + 32);
+        int8x16_t b3 = vld1q_s8((const int8_t *)b_ptr->qs + 48);
+        float16x4_t bd = vld1_f16((const __fp16 *)b_ptr->d);
+
+        int8x16_t b0_shl = b0 << 4;
+        int8x16_t b1_shl = b1 << 4;
+        int8x16_t b2_shl = b2 << 4;
+        int8x16_t b3_shl = b3 << 4;
+
+        int8x16_t b0_and = b0 & 0xf0U;
+        int8x16_t b1_and = b1 & 0xf0U;
+        int8x16_t b2_and = b2 & 0xf0U;
+        int8x16_t b3_and = b3 & 0xf0U;
+
+        for (int m = 0; m < 4; ++m) {
+          int8x8_t a0_raw = vld1_s8(&a_ptr->qs[m * 8]);
+          int8x8_t a1_raw = vld1_s8(&a_ptr->qs[32 + m * 8]);
+          int8x8_t a2_raw = vld1_s8(&a_ptr->qs[64 + m * 8]);
+          int8x8_t a3_raw = vld1_s8(&a_ptr->qs[96 + m * 8]);
+
+          int8x16_t a0 = vcombine_s8(a0_raw, a0_raw);
+          int8x16_t a1 = vcombine_s8(a1_raw, a1_raw);
+          int8x16_t a2 = vcombine_s8(a2_raw, a2_raw);
+          int8x16_t a3 = vcombine_s8(a3_raw, a3_raw);
+          float16x4_t ad = vdup_n_f16(((const __fp16 *)a_ptr->d)[m]);
+
+          int32x4_t ret0 = vdupq_n_s32(0);
+          int32x4_t ret1 = vdupq_n_s32(0);
+
+          ret0 = vdotq_s32_compat(ret0, b0_shl, a0);
+          ret1 = vdotq_s32_compat(ret1, b1_shl, a0);
+          ret0 = vdotq_s32_compat(ret0, b2_shl, a1);
+          ret1 = vdotq_s32_compat(ret1, b3_shl, a1);
+
+          ret0 = vdotq_s32_compat(ret0, b0_and, a2);
+          ret1 = vdotq_s32_compat(ret1, b1_and, a2);
+          ret0 = vdotq_s32_compat(ret0, b2_and, a3);
+          ret1 = vdotq_s32_compat(ret1, b3_and, a3);
+
+          int32x4_t ret = vpaddq_s32(ret0, ret1);
+
+          acc[m] = vfmaq_f32(acc[m], vcvtq_n_f32_s32(ret, 4),
+                             vmulq_f32(vcvt_f32_f16(ad), vcvt_f32_f16(bd)));
+        }
+
+        a_ptr++;
+        b_ptr++;
+      }
+
+      for (int m = 0; m < 4; ++m) {
+        vst1q_f32(&s[(r + m) * bs + c], acc[m]);
+      }
+    }
+  }
+#endif
 }
 
 #ifdef ENABLE_FP16
@@ -696,8 +643,8 @@ void nntr_gemm_q4_0_4x8_q8_0(int n, float *__restrict s, size_t bs,
 // res_ptr advance halves to 8 bytes. Caller passes `bs` as the FP16 element
 // stride; res_stride is computed as bs * sizeof(_FP16) inside.
 void nntr_gemm_q4_0_4x8_q8_0_fp16(int n, _FP16 *__restrict s, size_t bs,
-                                  const void *__restrict vx,
-                                  const void *__restrict vy, int nr, int nc) {
+                                   const void *__restrict vx,
+                                   const void *__restrict vy, int nr, int nc) {
   const int qk = Q8_0;
   const int nb = n / qk;
   const int ncols_interleaved = 4;
@@ -712,6 +659,7 @@ void nntr_gemm_q4_0_4x8_q8_0_fp16(int n, _FP16 *__restrict s, size_t bs,
   _FP16 *res_ptr = s;
   size_t res_stride = bs * sizeof(_FP16);
 
+#if defined(__ARM_FEATURE_MATMUL_INT8)
   __asm__ __volatile__("mov x10, %x[nr]\n"
                        "mov x9, #0x88\n"
                        "cmp x10, #0x10\n"
@@ -1127,6 +1075,75 @@ void nntr_gemm_q4_0_4x8_q8_0_fp16(int n, _FP16 *__restrict s, size_t bs,
                          "v30", "v31", "x9", "x10", "x20", "x21", "x22", "x23",
                          "x24", "x25", "x26", "x27", "x28");
   return;
+#else
+  for (int c = 0; c < nc; c += ncols_interleaved) {
+    const block_q4_0x4 *b_col_base = (const block_q4_0x4 *)vx + (c / ncols_interleaved) * nb;
+    for (int r = 0; r < nr; r += 4) {
+      const block_q8_0x4 *a_row_base = (const block_q8_0x4 *)vy + (r / 4) * nb;
+
+      float32x4_t acc[4] = {vdupq_n_f32(0.0f), vdupq_n_f32(0.0f), vdupq_n_f32(0.0f), vdupq_n_f32(0.0f)};
+
+      const block_q4_0x4 *b_ptr = b_col_base;
+      const block_q8_0x4 *a_ptr = a_row_base;
+
+      for (int b = 0; b < nb; b++) {
+        int8x16_t b0 = vld1q_s8((const int8_t *)b_ptr->qs);
+        int8x16_t b1 = vld1q_s8((const int8_t *)b_ptr->qs + 16);
+        int8x16_t b2 = vld1q_s8((const int8_t *)b_ptr->qs + 32);
+        int8x16_t b3 = vld1q_s8((const int8_t *)b_ptr->qs + 48);
+        float16x4_t bd = vld1_f16((const __fp16 *)b_ptr->d);
+
+        int8x16_t b0_shl = b0 << 4;
+        int8x16_t b1_shl = b1 << 4;
+        int8x16_t b2_shl = b2 << 4;
+        int8x16_t b3_shl = b3 << 4;
+
+        int8x16_t b0_and = b0 & 0xf0U;
+        int8x16_t b1_and = b1 & 0xf0U;
+        int8x16_t b2_and = b2 & 0xf0U;
+        int8x16_t b3_and = b3 & 0xf0U;
+
+        for (int m = 0; m < 4; ++m) {
+          int8x8_t a0_raw = vld1_s8(&a_ptr->qs[m * 8]);
+          int8x8_t a1_raw = vld1_s8(&a_ptr->qs[32 + m * 8]);
+          int8x8_t a2_raw = vld1_s8(&a_ptr->qs[64 + m * 8]);
+          int8x8_t a3_raw = vld1_s8(&a_ptr->qs[96 + m * 8]);
+
+          int8x16_t a0 = vcombine_s8(a0_raw, a0_raw);
+          int8x16_t a1 = vcombine_s8(a1_raw, a1_raw);
+          int8x16_t a2 = vcombine_s8(a2_raw, a2_raw);
+          int8x16_t a3 = vcombine_s8(a3_raw, a3_raw);
+          float16x4_t ad = vdup_n_f16(((const __fp16 *)a_ptr->d)[m]);
+
+          int32x4_t ret0 = vdupq_n_s32(0);
+          int32x4_t ret1 = vdupq_n_s32(0);
+
+          ret0 = vdotq_s32_compat(ret0, b0_shl, a0);
+          ret1 = vdotq_s32_compat(ret1, b1_shl, a0);
+          ret0 = vdotq_s32_compat(ret0, b2_shl, a1);
+          ret1 = vdotq_s32_compat(ret1, b3_shl, a1);
+
+          ret0 = vdotq_s32_compat(ret0, b0_and, a2);
+          ret1 = vdotq_s32_compat(ret1, b1_and, a2);
+          ret0 = vdotq_s32_compat(ret0, b2_and, a3);
+          ret1 = vdotq_s32_compat(ret1, b3_and, a3);
+
+          int32x4_t ret = vpaddq_s32(ret0, ret1);
+
+          acc[m] = vfmaq_f32(acc[m], vcvtq_n_f32_s32(ret, 4),
+                             vmulq_f32(vcvt_f32_f16(ad), vcvt_f32_f16(bd)));
+        }
+
+        a_ptr++;
+        b_ptr++;
+      }
+
+      for (int m = 0; m < 4; ++m) {
+        vst1_f16((__fp16 *)&s[(r + m) * bs + c], vcvt_f16_f32(acc[m]));
+      }
+    }
+  }
+#endif
 }
 #endif // ENABLE_FP16
 
@@ -1378,7 +1395,7 @@ void nntr_gemm_q8_0_4x8_q8_0(int n, float *__restrict s, size_t bs,
   assert(nr % 4 == 0);
   assert(nc % ncols_interleaved == 0);
 
-#if defined(__ARM_FEATURE_DOTPROD)
+#if defined(__ARM_FEATURE_MATMUL_INT8)
   for (int y = 0; y < nr; y += 4) {
     const block_q8_0x4 *a_ptr_base = (const block_q8_0x4 *)vy + (y / 4) * nb;
 
