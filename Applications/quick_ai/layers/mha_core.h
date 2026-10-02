@@ -527,7 +527,14 @@ private:
    * When W == UINT_MAX (full attention), this reduces exactly to
    * i*(i+1)/2 == calc_attn_index(i), preserving byte-identical behaviour.
    */
-  size_t calc_windowed_attn_index(size_t i);
+  inline size_t calc_windowed_attn_index(size_t i) const {
+    if (i <= local_window_size) {
+      return (i * (i + 1)) / 2;
+    } else {
+      return (local_window_size * (local_window_size + 1)) / 2 +
+             (i - local_window_size) * local_window_size;
+    }
+  }
 
 }; // end of class MHACoreLayer
 } // namespace quick_ai

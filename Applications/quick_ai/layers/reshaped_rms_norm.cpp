@@ -114,8 +114,8 @@ void ReshapedRMSNormLayer::incremental_forwarding(
 #endif
 #ifdef ENABLE_FP16
     } else if (in_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
-      _Float16* in_data = in_step.getData<_Float16>();
-      _Float16* out_data = out_step.getData<_Float16>();
+      _FP16* in_data = in_step.getData<_FP16>();
+      _FP16* out_data = out_step.getData<_FP16>();
       unsigned int H = step_reshaped_dim.height();
       unsigned int W = step_reshaped_dim.width();
 
@@ -129,7 +129,7 @@ void ReshapedRMSNormLayer::incremental_forwarding(
         float inv_rms = 1.0f / rms;
 
         for (unsigned int w = 0; w < W; ++w) {
-          out_data[h * W + w] = (_Float16)((float)in_data[h * W + w] * inv_rms);
+          out_data[h * W + w] = (_FP16)((float)in_data[h * W + w] * inv_rms);
         }
       }
 #endif
@@ -146,10 +146,10 @@ void ReshapedRMSNormLayer::incremental_forwarding(
         gamma_cast = nntrainer::Tensor(g_dim, true);
         if (out_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
           float *src = gamma.getData<float>();
-          _Float16 *dst = gamma_cast.getData<_Float16>();
-          for (unsigned int i = 0; i < gamma.getDim().getDataLen(); ++i) dst[i] = (_Float16)src[i];
+          _FP16 *dst = gamma_cast.getData<_FP16>();
+          for (unsigned int i = 0; i < gamma.getDim().getDataLen(); ++i) dst[i] = (_FP16)src[i];
         } else {
-          _Float16 *src = gamma.getData<_Float16>();
+          _FP16 *src = gamma.getData<_FP16>();
           float *dst = gamma_cast.getData<float>();
           for (unsigned int i = 0; i < gamma.getDim().getDataLen(); ++i) dst[i] = (float)src[i];
         }
@@ -159,12 +159,12 @@ void ReshapedRMSNormLayer::incremental_forwarding(
 
       if (out_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
     #ifdef ENABLE_FP16
-        _Float16 *out_data = out_step.getData<_Float16>();
-        _Float16 *g_ptr = gamma_cast.getData<_Float16>();
+        _FP16 *out_data = out_step.getData<_FP16>();
+        _FP16 *g_ptr = gamma_cast.getData<_FP16>();
         unsigned int total_len = step_reshaped_dim.height() * feature_size;
         for (unsigned int i = 0; i < total_len; ++i) {
           unsigned int g_idx = i % feature_size;
-          out_data[i] = (_Float16)((float)out_data[i] * (float)g_ptr[g_idx]);
+          out_data[i] = (_FP16)((float)out_data[i] * (float)g_ptr[g_idx]);
         }
     #endif
       } else {

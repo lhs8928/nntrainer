@@ -126,10 +126,10 @@ void RMSNormLayer::incremental_forwarding(nntrainer::RunLayerContext &context,
       gamma_cast = nntrainer::Tensor(g_dim, true);
       if (out_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
         float *src = gamma.getData<float>();
-        _Float16 *dst = gamma_cast.getData<_Float16>();
-        for (unsigned int i = 0; i < gamma.getDim().getDataLen(); ++i) dst[i] = (_Float16)src[i];
+        _FP16 *dst = gamma_cast.getData<_FP16>();
+        for (unsigned int i = 0; i < gamma.getDim().getDataLen(); ++i) dst[i] = (_FP16)src[i];
       } else {
-        _Float16 *src = gamma.getData<_Float16>();
+        _FP16 *src = gamma.getData<_FP16>();
         float *dst = gamma_cast.getData<float>();
         for (unsigned int i = 0; i < gamma.getDim().getDataLen(); ++i) dst[i] = (float)src[i];
       }

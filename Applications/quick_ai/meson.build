@@ -65,6 +65,7 @@ if quick_ai_use_tokenizer_for_deps
     causallm_rtmcc_head_dep,
     causallm_causal_conv1d_dep,
     causallm_custom_multiply_dep,
+    causallm_multimodal_scatter_dep,
   ]
 endif
 
@@ -105,10 +106,12 @@ if get_option('platform') == 'windows'
     endif
 else
     if tokenizer_option != ''
-        error('quick_ai-tokenizer-lib is only supported for Windows CausalLM builds.')
+        tokenizer_path = tokenizer_option
+    elif meson.is_cross_build() and host_machine.cpu_family() == 'aarch64'
+        tokenizer_path = meson.current_source_dir() / 'tokenizers_c_win' / 'target' / 'aarch64-unknown-linux-gnu' / 'release' / 'libtokenizers_c.a'
+    else
+        tokenizer_path = meson.current_source_dir() / 'lib' / 'libtokenizers_c.a'
     endif
-
-    tokenizer_path = meson.current_source_dir() / 'lib' / 'libtokenizers_c.a'
 endif
 
 generate_windows_tokenizer = tokenizer_option == ''

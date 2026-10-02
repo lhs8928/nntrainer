@@ -200,7 +200,7 @@ void MHACoreLayer::finalize(nntrainer::InitLayerContext &context) {
   /** Weight for Sink */
   use_sink = std::get<props::UseSink>(mha_core_props).get();
   if (use_sink) {
-#if ENABLE_FP16 && defined(__ANDROID__)
+#if ENABLE_FP16
     nntrainer::TensorDim sink_dim(
       1, 1, 1, num_heads_Q,
       nntrainer::TensorDim::TensorType(context.getFormat(),
@@ -345,7 +345,7 @@ void MHACoreLayer::forwarding(nntrainer::RunLayerContext &context,
       output_step_dim, batch * output_dim.getFeatureLen(), true);
 
     if (query_step.getDataType() == ml::train::TensorDim::DataType::FP32) {
-#if ENABLE_FP16 && defined(__ANDROID__)
+#if ENABLE_FP16
       nntrainer::TensorDim Q_step_dim = query_step_dim;
       nntrainer::TensorDim K_step_dim = key_step_dim;
       nntrainer::TensorDim V_step_dim = value_step_dim;
@@ -515,7 +515,7 @@ void MHACoreLayer::incremental_forwarding(nntrainer::RunLayerContext &context,
       output_step_dim, batch * output_dim.getFeatureLen(), true);
 
     if (query_step.getDataType() == ml::train::TensorDim::DataType::FP32) {
-#if ENABLE_FP16 && defined(__ANDROID__)
+#if ENABLE_FP16
       nntrainer::TensorDim Q_step_dim = query_step_dim;
       nntrainer::TensorDim K_step_dim = key_step_dim;
       nntrainer::TensorDim V_step_dim = value_step_dim;
@@ -1673,20 +1673,6 @@ void MHACoreLayer::setProperty(const std::vector<std::string> &values) {
 }
 
 size_t MHACoreLayer::calc_attn_index(size_t i) { return (i * (i + 1)) / 2; };
-
-size_t MHACoreLayer::calc_windowed_attn_index(size_t i) {
-  // S(i) = sum_{k=0}^{i-1} min(k+1, W)
-  // For i <= W:  S(i) = i*(i+1)/2   (same as full-attention triangular index)
-  // For i >  W:  S(i) = W*(W+1)/2 + (i - W)*W
-  // When W == UINT_MAX, i <= W is always true, so we never evaluate
-  // W*(W+1)/2 and there is no overflow.
-  if (i <= local_window_size) {
-    return (i * (i + 1)) / 2;
-  } else {
-    return (local_window_size * (local_window_size + 1)) / 2 +
-           (i - local_window_size) * local_window_size;
-  }
-};
 
 #ifdef PLUGGABLE
 
