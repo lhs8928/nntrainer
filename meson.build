@@ -163,7 +163,9 @@ endif
 
 if get_option('platform') != 'android' and host_machine.cpu_family() == 'aarch64'
   extra_defines += '-D__ARM_FEATURE_DOTPROD=1'
-  extra_defines += '-D__ARM_FEATURE_MATMUL_INT8=1'
+  if get_option('arm-arch') == 'armv9.2-a' or get_option('arm-arch') == 'armv8.6-a'
+    extra_defines += '-D__ARM_FEATURE_MATMUL_INT8=1'
+  endif
 endif
 
 if get_option('enable-fp16')
@@ -197,7 +199,7 @@ if get_option('enable-fp16')
        extra_defines += '-DARM_ARCH_ARMV9_2A=1'
        extra_defines += '-DENABLE_SVE2=1'
      elif arm_arch_opt == 'armv8.2-a'
-       add_project_arguments('-march=armv8.2-a+fp16+dotprod+i8mm', language: ['c', 'cpp'])
+       add_project_arguments('-march=armv8.2-a+fp16+dotprod', language: ['c', 'cpp'])
        extra_defines += '-DARM_ARCH_ARMV8_2A=1'
      else
        # auto: default to armv8.2-a+fp16+dotprod+i8mm for native aarch64 builds

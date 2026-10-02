@@ -11,9 +11,14 @@ matmul_clamp_f32_qsi8d32p_qsi4c32p_sources = [
     'kai_matmul_clamp_f32_qsi8d32p1x4_qsi4c32p4x4_1x4_neon_dotprod.c',
     'kai_matmul_clamp_f32_qsi8d32p1x8_qsi4c32p4x8_1x4x32_neon_dotprod.c',
     'kai_matmul_clamp_f32_qsi8d32p4x4_qsi4c32p4x4_16x4_neon_dotprod.c',
+]
+
+if get_option('arm-arch') == 'armv9.2-a' or get_option('arm-arch') == 'armv8.6-a'
+  matmul_clamp_f32_qsi8d32p_qsi4c32p_sources += [
     'kai_matmul_clamp_f32_qsi8d32p4x8_qsi4c32p4x8_16x4_neon_i8mm.c',
     'kai_matmul_clamp_f32_qsi8d32p4x8_qsi4c32p4x8_8x4x32_neon_i8mm.c',
-]
+  ]
+endif
 
 if get_option('arm-arch') == 'armv9.2-a'
   matmul_clamp_f32_qsi8d32p_qsi4c32p_headers += [
