@@ -81,7 +81,7 @@ void TensorBase::read(std::ifstream &file, size_t start_offset,
 
   auto it = safetensors_weight_sizes.find(start_offset);
   if (it != safetensors_weight_sizes.end() && it->second == sz / 2) {
-    std::vector<_Float16> fp16_buf(sz / 2 / sizeof(_Float16));
+    std::vector<_FP16> fp16_buf(sz / 2 / sizeof(_FP16));
     checkedRead(file, (char *)fp16_buf.data(), sz / 2, "[Tensor::read] FP16 read failed",
                 start_offset, read_from_offset);
     float *fp32_ptr = (float *)getData();
@@ -108,7 +108,7 @@ void TensorBase::read(ReadSource src, size_t start_offset,
 
   auto it = safetensors_weight_sizes.find(start_offset);
   if (it != safetensors_weight_sizes.end() && it->second == sz / 2) {
-    std::vector<_Float16> fp16_buf(sz / 2 / sizeof(_Float16));
+    std::vector<_FP16> fp16_buf(sz / 2 / sizeof(_FP16));
     checkedRead(src, (char *)fp16_buf.data(), sz / 2, "[Tensor::read] FP16 read failed",
                 start_offset, read_from_offset);
     float *fp32_ptr = (float *)getData();

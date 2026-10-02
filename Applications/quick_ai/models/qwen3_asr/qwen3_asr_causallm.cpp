@@ -384,14 +384,14 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
   unsigned int num_chunks = (audio_seq_len + 99) / 100;
   if (num_chunks == 0) num_chunks = 1;
 
-  std::vector<_Float16> fused_audio_embeds_fp16;
+  std::vector<_FP16> fused_audio_embeds_fp16;
   std::vector<float> fused_audio_embeds_fp32;
   void *audio_input_ptr = nullptr;
 
   if (act_dtype == "FP32") {
     fused_audio_embeds_fp32.resize(static_cast<size_t>(downsampled_len) * 1024, 0.0f);
   } else {
-    fused_audio_embeds_fp16.resize(static_cast<size_t>(downsampled_len) * 1024, static_cast<_Float16>(0.0f));
+    fused_audio_embeds_fp16.resize(static_cast<size_t>(downsampled_len) * 1024, static_cast<_FP16>(0.0f));
   }
 
   nntrainer::Tensor chunk_tensor(nntrainer::TensorDim(1, 1, 128, 100, nntrainer::TensorDim::Format::NCHW, nntrainer::TensorDim::DataType::FP32));
@@ -422,9 +422,9 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
         float *dst = fused_audio_embeds_fp32.data() + out_token_idx * 1024;
         std::copy_n(src, 1024, dst);
       } else {
-        _Float16 *dst = fused_audio_embeds_fp16.data() + out_token_idx * 1024;
+        _FP16 *dst = fused_audio_embeds_fp16.data() + out_token_idx * 1024;
         for (int k = 0; k < 1024; ++k) {
-          dst[k] = static_cast<_Float16>(src[k]);
+          dst[k] = static_cast<_FP16>(src[k]);
         }
       }
       out_token_idx++;

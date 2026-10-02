@@ -1696,7 +1696,7 @@ void Tensor::activate() {
     // Eagerly allocate and read/convert FP16 from fd to FP32 memory
     is_virtual = false;
     itensor_->allocate();
-    std::vector<_Float16> fp16_buf(sz / 2 / sizeof(_Float16));
+    std::vector<_FP16> fp16_buf(sz / 2 / sizeof(_FP16));
     ssize_t bytes_read = pread(this->fd, fp16_buf.data(), sz / 2, file_offset);
     NNTR_THROW_IF(bytes_read != static_cast<ssize_t>(sz / 2), std::runtime_error)
       << "[activate] pread failed for virtual FP16 weight '" << getName() << "'";
