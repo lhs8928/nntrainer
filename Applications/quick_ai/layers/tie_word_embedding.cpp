@@ -285,7 +285,7 @@ void TieWordEmbedding::incremental_forwarding_embedding(
       } else {
         if (weight.getDataType() == nntrainer::TensorDim::DataType::FP16 &&
             out_tensor.getDataType() == nntrainer::TensorDim::DataType::FP32) {
-          _Float16 *src_ptr = weight.getAddress<_Float16>(0) + embed_idx * out_dim;
+          _FP16 *src_ptr = weight.getAddress<_FP16>(0) + embed_idx * out_dim;
           float *dst_ptr = out_tensor.getAddress<float>(0);
           for (unsigned int k = 0; k < out_dim; ++k) {
             dst_ptr[k] = (float)src_ptr[k];
@@ -293,8 +293,8 @@ void TieWordEmbedding::incremental_forwarding_embedding(
         } else if (weight.getDataType() == nntrainer::TensorDim::DataType::FP16 &&
                    out_tensor.getDataType() == nntrainer::TensorDim::DataType::FP16) {
 #ifdef ENABLE_FP16
-          _Float16 *src_ptr = weight.getAddress<_Float16>(0) + embed_idx * out_dim;
-          _Float16 *dst_ptr = out_tensor.getAddress<_Float16>(0);
+          _FP16 *src_ptr = weight.getAddress<_FP16>(0) + embed_idx * out_dim;
+          _FP16 *dst_ptr = out_tensor.getAddress<_FP16>(0);
           for (unsigned int k = 0; k < out_dim; ++k) {
             dst_ptr[k] = src_ptr[k];
           }
@@ -428,7 +428,7 @@ void TieWordEmbedding::incremental_forwarding_lmhead(
 
       input_step.dot(weight, hidden_step_fp16, false, true);
 
-      _Float16* src = (_Float16*)hidden_step_fp16.getData();
+      _FP16* src = (_FP16*)hidden_step_fp16.getData();
       float* dest = (float*)hidden_step.getData();
       size_t len = hidden_step.getDim().getDataLen();
       for (size_t i = 0; i < len; ++i) {

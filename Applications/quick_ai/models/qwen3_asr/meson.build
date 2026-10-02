@@ -6,5 +6,5 @@ qwen3_asr_src = [
 
 qwen3_asr_inc = include_directories('.')
 
-causallm_src += qwen3_asr_src
-causallm_inc += qwen3_asr_inc
+quick_ai_src += qwen3_asr_src
+quick_ai_inc += qwen3_asr_inc
