@@ -1,7 +1,7 @@
 {
   "batch_size": 1,
   "init_seq_len": 15,
-  "max_seq_len": 128,
+  "max_seq_len": 512,
   "vocab_size": 151936,
   "hidden_size": 2048,
   "num_layers": 28,
@@ -14,7 +14,7 @@
   "tokenizer_file": "tokenizer.json",
   "is_causal": true,
   "tie_word_embeddings": false,
-  "num_to_generate": 11,
+  "num_to_generate": 128,
   "embedding_dtype": "FP16",
   "fc_layer_dtype": "FP16",
   "audio_tower_weight_dtype": "FP16",
