@@ -961,7 +961,7 @@ void NeuralNetwork::load(const std::string &file_path,
       if (!visited_weights.insert(&weight->getVariableRef()).second) {
         continue;
       }
-      size_t size = weight->getVariable().getMemoryBytes();
+      size_t size = weight->getVariableRef().getMemoryBytes();
       auto tensor_data_type = weight->getDim().getDataType();
       weight->getVariableRef().setFileOffset(start_from);
       ///@todo instead of checking the data type,
@@ -972,6 +972,7 @@ void NeuralNetwork::load(const std::string &file_path,
       if (tensor_data_type != TensorDim::DataType::FP32 &&
           tensor_data_type != TensorDim::DataType::FP16 &&
           tensor_data_type != TensorDim::DataType::Q6_K &&
+          tensor_data_type != TensorDim::DataType::Q4_K &&
           tensor_data_type != TensorDim::DataType::Q4_0 &&
           tensor_data_type != TensorDim::DataType::QS4CX) {
         // for tensor with qparam

@@ -1616,6 +1616,7 @@ void Conv2DLayer::forwarding(RunLayerContext &context, bool training) {
                 << std::flush;
     }
     const bool weight_is_q8 = (weight_dtype == nntrainer::Tdatatype::Q8_0);
+    const bool weight_is_qint8 = (weight_dtype == nntrainer::Tdatatype::QINT8);
     const bool weight_is_quant =
       (weight_dtype == nntrainer::Tdatatype::Q4_0 ||
        weight_dtype == nntrainer::Tdatatype::QINT4 || weight_is_q8);
@@ -1632,7 +1633,7 @@ void Conv2DLayer::forwarding(RunLayerContext &context, bool training) {
     TensorDim filter_dim_squeezed{filter_kernel.batch(),
                                   filter_kernel.getDim().getFeatureLen()};
     filter_dim_squeezed.setTensorType(filter_kernel.getTensorType());
-    if (!weight_is_quant) {
+    if (!weight_is_quant && !weight_is_qint8) {
       filter_kernel.reshape(filter_dim_squeezed);
     }
 
@@ -1659,8 +1660,9 @@ void Conv2DLayer::forwarding(RunLayerContext &context, bool training) {
         ? &context.getTensor(wt_idx[ConvParams::im2col_scratch])
         : nullptr;
     Tensor *qgemm_scratch =
-      weight_is_quant ? &context.getTensor(wt_idx[ConvParams::qgemm_scratch])
-                      : nullptr;
+      (weight_is_quant && !weight_is_qint8)
+        ? &context.getTensor(wt_idx[ConvParams::qgemm_scratch])
+        : nullptr;
     // Q8_0 activation scratch is sized per batch (see finalize) and shared by
     // reference here; each batch slice b takes its own region via
     // getBatchSlice(b, 1) so concurrent ParallelBatch slices never alias.
@@ -2475,6 +2477,7 @@ void Conv2DLayer::forwarding(RunLayerContext &context, bool training) {
               geom.dil_h = dilation[0].get();
               geom.dil_w = dilation[1].get();
               geom.out_w = out_dim.width();
+              geom.is_nhwc = true;
 #ifdef ENABLE_FP16
               if (can_q8act && q8_buf) {
                 const int n_sp = geom.in_h * geom.in_w;
@@ -2724,10 +2727,39 @@ void Conv2DLayer::forwarding(RunLayerContext &context, bool training) {
                                   result.height(), result.width(), cnchw_type);
 
               Tensor filt_nchw;
+              static std::mutex qint8_deq_mtx;
+              static std::unordered_map<const void *, std::vector<float>> qint8_deq_cache;
+              const float *qint8_deq_ptr = nullptr;
+
               if (filter_kernel.getDataType() == nntrainer::Tdatatype::FP32) {
                 filt_nchw =
                   Tensor::Map<float>(filter_kernel.getData<float>(),
                                      filter_kernel.bytes(), fdim_nchw);
+              } else if (filter_kernel.getDataType() == nntrainer::Tdatatype::QINT8) {
+                const void *kptr = filter_kernel.getData();
+                const size_t CRS_tot = (size_t)in_dim.channel() * kernel_size[0].get() * kernel_size[1].get();
+                {
+                  std::lock_guard<std::mutex> lk(qint8_deq_mtx);
+                  auto it = qint8_deq_cache.find(kptr);
+                  if (it == qint8_deq_cache.end()) {
+                    std::vector<float> buf((size_t)filter_size * CRS_tot);
+                    const int8_t *qdata = filter_kernel.getData<int8_t>();
+                    const float *scales = (const float *)filter_kernel.getScale();
+                    for (size_t o = 0; o < filter_size; ++o) {
+                      float sc = scales ? scales[o] : 1.0f;
+                      for (size_t k = 0; k < CRS_tot; ++k) {
+                        buf[o * CRS_tot + k] = (float)qdata[o * CRS_tot + k] * sc;
+                      }
+                    }
+                    it = qint8_deq_cache.emplace(kptr, std::move(buf)).first;
+                  }
+                  qint8_deq_ptr = it->second.data();
+                }
+                fnchw_type.data_type = nntrainer::Tdatatype::FP32;
+                fdim_nchw = TensorDim({1, 1, filter_size, (unsigned int)CRS_tot}, fnchw_type);
+                filt_nchw = Tensor::Map<float>(const_cast<float *>(qint8_deq_ptr),
+                                               (size_t)filter_size * CRS_tot * sizeof(float),
+                                               fdim_nchw);
               }
 #ifdef ENABLE_FP16
               else {
