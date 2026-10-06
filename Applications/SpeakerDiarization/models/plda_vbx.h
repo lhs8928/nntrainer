@@ -4,7 +4,7 @@
  *
  * @file   plda_vbx.h
  * @date   29 September 2026
- * @brief  PLDA transformation, VBx clustering, and timeline reconstruction in NNTrainer
+ * @brief  PLDA transformation, AHC/VBx clustering, and timeline reconstruction in NNTrainer
  * @see    https://github.com/nntrainer/nntrainer
  * @author Hyeonseok Lee <hs89.lee@samsung.com>
  * @bug    No known bugs except for NYI items
@@ -47,13 +47,15 @@ public:
    * @brief Cluster speaker embeddings across chunks and construct continuous timeline segments.
    * @param embeddings Flat array of embeddings [num_chunks * num_local_speakers, 256].
    * @param segmentations Segmentation probabilities [num_chunks, 589, 3].
-   * @param speaker_counting Active speaker count per frame [949].
+   * @param speaker_counting Active speaker count per frame.
+   * @param total_frames Total global frames across audio (0 = auto-calculate).
    * @return List of diarization speaker segments.
    */
   std::vector<SpeakerSegment> diarize(
     const std::vector<float> &embeddings,
     const std::vector<std::vector<float>> &segmentations,
-    const std::vector<uint8_t> &speaker_counting);
+    const std::vector<uint8_t> &speaker_counting,
+    size_t total_frames = 0);
 
 private:
   // xvec_transform.npz
