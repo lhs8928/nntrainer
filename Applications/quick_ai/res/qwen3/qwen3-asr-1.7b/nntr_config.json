@@ -17,9 +17,12 @@
   "num_to_generate": 11,
   "embedding_dtype": "FP16",
   "fc_layer_dtype": "FP16",
-  "conv_layer_dtype": "FP32",
   "audio_tower_weight_dtype": "FP16",
-  "subsampler_model_tensor_type": "FP32-FP32",
+  "subsampler": {
+    "model_file_name": "nntr_qwen3_asr_1.7b_fp16_subsampler.bin",
+    "model_tensor_type": "FP32-FP32",
+    "conv_layer_dtype": "FP32"
+  },
   "lmhead_dtype": "FP16",
   "rms_norm_eps": 1e-06,
   "rope_theta": 1000000,
@@ -31,8 +34,8 @@
   },
   "bad_word_ids": [],
   "sample_input": "",
-  "audio_file": "asr_en_speech_short_16k.wav",
+  "audio_file": "asr_en.wav",
   "use_q_k_norm": true,
-  "model_file_name": "nntr_qwen3_asr_1.7b_fp16_audio32_len9.safetensors",
+  "model_file_name": "nntr_qwen3_asr_1.7b_fp16.bin",
   "audio_seq_len": 66
 }
