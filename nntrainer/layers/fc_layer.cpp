@@ -81,14 +81,14 @@ void FullyConnectedLayer::finalize(InitLayerContext &context) {
   context.setEffDimFlagInputDimension(0, 0b1001);
   context.setDynDimFlagInputDimension(0, 0b1000);
 
-  bool is_nchw = (context.getFormat() == Tformat::NCHW);
-  /** set output dimensions */
   auto const &in_dim = context.getInputDimensions()[0];
+  bool is_nchw = (in_dim.getFormat() == Tformat::NCHW);
+  /** set output dimensions */
   output_dims[0] = in_dim;
   is_nchw ? output_dims[0].width(unit) : output_dims[0].channel(unit);
 
   output_dims[0].setTensorType(
-    {context.getFormat(), context.getActivationDataType()});
+    {in_dim.getFormat(), context.getActivationDataType()});
 
   // W8A8 int8-resident MLP (NNTR_W8A8, see W8A8_DESIGN.md): an MLP up-projection
   // FC (name ends in "ffn_up") with a Q8_0 weight emits a per-tensor-scale QINT8
@@ -140,14 +140,14 @@ void FullyConnectedLayer::finalize(InitLayerContext &context) {
   const auto bias_dtype = weight_is_float ? context.getActivationDataType()
                                           : TensorDim::DataType::FP32;
   TensorDim bias_dim(1, is_nchw ? 1 : unit, 1, is_nchw ? unit : 1,
-                     TensorDim::TensorType(context.getFormat(), bias_dtype),
+                     TensorDim::TensorType(in_dim.getFormat(), bias_dtype),
                      is_nchw ? 0b0001 : 0b0100);
 
   /** Weight Dimension : (1, 1, in_dim.width(), unit)*/
   TensorDim weight_dim(
     1, is_nchw ? 1 : unit, is_nchw ? in_dim.width() : 1,
     is_nchw ? unit : in_dim.channel(),
-    TensorDim::TensorType(context.getFormat(), context.getWeightDataType()),
+    TensorDim::TensorType(in_dim.getFormat(), context.getWeightDataType()),
     is_nchw ? 0b0011 : 0b0101);
 
   weight_idx[FCParams::weight] = context.requestWeight(

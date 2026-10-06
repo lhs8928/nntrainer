@@ -69,7 +69,10 @@ public:
    * @param rhs TensorBase object to copy
    */
   CharTensor(TensorBase &rhs) :
-    TensorBase(rhs), qscheme(QScheme::PER_TENSOR_AFFINE) {}
+    TensorBase(rhs),
+    qscheme(dynamic_cast<CharTensor *>(&rhs)
+              ? dynamic_cast<CharTensor *>(&rhs)->qscheme
+              : QScheme::PER_TENSOR_AFFINE) {}
 
   /**
    * @brief Basic Destructor
@@ -248,6 +251,12 @@ public:
             bool read_from_offset) override;
 
   /**
+   * @copydoc Tensor::read(ReadSource src)
+   */
+  void read(ReadSource src, size_t start_offset,
+            bool read_from_offset) override;
+
+  /**
    * @copydoc Tensor::argmax()
    */
   std::vector<unsigned int> argmax() const override;
@@ -292,6 +301,12 @@ public:
    */
   void read_quantization_info(std::ifstream &file, size_t start_offset,
                               bool read_from_offset) override;
+
+  /**
+   * @copydoc TensorBase::read_quantization_info()
+   */
+  void read_quantization_info(ReadSource src, size_t start_offset,
+                              bool read_from_offset);
 
   /**
    * @copydoc Tensor::scale_size()
