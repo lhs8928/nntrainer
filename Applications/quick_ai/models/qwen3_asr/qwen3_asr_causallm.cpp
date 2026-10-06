@@ -111,7 +111,7 @@ Tensor Qwen3ASRTransformer::createAudioEncoder(Tensor audio_input) {
     {withKey("name", "audio_tower_ln_post"),
      withKey("axis", "3"),
      withKey("epsilon", "1e-5"),
-     withKey("weight_dtype", audio_tower_weight_dtype)}));
+     withKey("weight_dtype", "FP16")}));
   h = ln_post(h);
 
   // 10. Projections
@@ -145,7 +145,7 @@ Tensor Qwen3ASRTransformer::createAudioAttentionBlock(const int layer_id, Tensor
     {withKey("name", prefix + "attention_norm"),
      withKey("axis", "3"),
      withKey("epsilon", "1e-5"),
-     withKey("weight_dtype", audio_tower_weight_dtype)}));
+     withKey("weight_dtype", "FP16")}));
   Tensor normed = norm(input);
 
   LayerHandle q_proj(createLayer(
@@ -171,15 +171,6 @@ Tensor Qwen3ASRTransformer::createAudioAttentionBlock(const int layer_id, Tensor
   Tensor key = k_proj(normed);
   Tensor value = v_proj(normed);
 
-  if (act_dtype != "FP32") {
-    LayerHandle q_cast_fp32(createLayer("cast", {withKey("name", prefix + "q_cast_fp32"), withKey("tensor_dtype", "FP32")}));
-    LayerHandle k_cast_fp32(createLayer("cast", {withKey("name", prefix + "k_cast_fp32"), withKey("tensor_dtype", "FP32")}));
-    LayerHandle v_cast_fp32(createLayer("cast", {withKey("name", prefix + "v_cast_fp32"), withKey("tensor_dtype", "FP32")}));
-    query = q_cast_fp32(query);
-    key = k_cast_fp32(key);
-    value = v_cast_fp32(value);
-  }
-
   LayerHandle attention(createLayer(
     "mha_core",
     {withKey("name", prefix + "attention"),
@@ -189,14 +180,6 @@ Tensor Qwen3ASRTransformer::createAudioAttentionBlock(const int layer_id, Tensor
      withKey("use_rope", "false"),
      withKey("is_causal", "false")}));
   Tensor context = attention({query, key, value});
-
-  if (act_dtype != "FP32") {
-    LayerHandle context_cast(createLayer(
-      "cast",
-      {withKey("name", prefix + "context_cast_" + act_dtype),
-       withKey("tensor_dtype", act_dtype)}));
-    context = context_cast(context);
-  }
 
   LayerHandle out_proj(createLayer(
     "fully_connected",
@@ -214,7 +197,7 @@ Tensor Qwen3ASRTransformer::createAudioAttentionBlock(const int layer_id, Tensor
     {withKey("name", prefix + "ffn_norm"),
      withKey("axis", "3"),
      withKey("epsilon", "1e-5"),
-     withKey("weight_dtype", audio_tower_weight_dtype)}));
+     withKey("weight_dtype", "FP16")}));
   Tensor ffn_normed = ffn_norm(residual);
 
   LayerHandle ffn_up(createLayer(
