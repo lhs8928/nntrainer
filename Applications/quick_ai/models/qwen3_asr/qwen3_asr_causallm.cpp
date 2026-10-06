@@ -19,6 +19,7 @@
 #include <reshaped_rms_norm.h>
 #include <tie_word_embedding.h>
 #include <swiglu.h>
+#include <nhwc_to_nchw.h>
 #include "audio_preprocessor.h"
 #include <api/streamer.h>
 #include <performance_metrics.h>
@@ -313,6 +314,8 @@ void Qwen3ASRCausalLM::registerCustomLayers() {
         nntrainer::createLayer<quick_ai::TieWordEmbedding>);
       app_context->registerFactory(
         nntrainer::createLayer<quick_ai::SwiGLULayer>);
+      app_context->registerFactory(
+        nntrainer::createLayer<quick_ai::NHWCToNCHWLayer>);
     } catch (const std::invalid_argument &e) {
       std::cerr << "failed to register factory, reason: " << e.what()
                 << std::endl;
@@ -397,6 +400,8 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
   nntrainer::Tensor chunk_tensor(nntrainer::TensorDim(1, 1, 128, 100, nntrainer::TensorDim::Format::NCHW, nntrainer::TensorDim::DataType::FP32));
   float *chunk_ptr = chunk_tensor.getData<float>();
 
+  auto t_sub_start = std::chrono::high_resolution_clock::now();
+
   size_t out_token_idx = 0;
   for (unsigned int c = 0; c < num_chunks; ++c) {
     unsigned int start_frame = c * 100;
@@ -431,8 +436,12 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
     }
   }
 
+  auto t_sub_end = std::chrono::high_resolution_clock::now();
+  double sub_time_ms = std::chrono::duration<double, std::milli>(t_sub_end - t_sub_start).count();
+
   std::cout << "[Qwen3-ASR] Subsampler sub-model completed: " << num_chunks
-            << " chunks -> " << out_token_idx << " audio tokens [1, 1, "
+            << " chunks in " << sub_time_ms << " ms ("
+            << (sub_time_ms / num_chunks) << " ms/chunk) -> " << out_token_idx << " audio tokens [1, 1, "
             << downsampled_len << ", 1024]" << std::endl;
 
   audio_input_ptr = (act_dtype == "FP32")

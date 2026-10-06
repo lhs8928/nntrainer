@@ -26,6 +26,7 @@ causallm_rtmcc_gau_src_abs = [meson.current_source_dir() / 'rtmcc_gau.cpp']
 causallm_rtmcc_head_src_abs = [meson.current_source_dir() / 'rtmcc_head.cpp']
 causallm_xi_pooling_src_abs = [meson.current_source_dir() / 'xi_pooling.cpp']
 causallm_multimodal_scatter_src_abs = [meson.current_source_dir() / 'multimodal_scatter.cpp']
+causallm_nhwc_to_nchw_src_abs = [meson.current_source_dir() / 'nhwc_to_nchw.cpp']
 
 causallm_rms_norm = shared_library(
     'rms_norm_layer',
@@ -134,6 +135,19 @@ if quick_ai_use_tokenizer_layers
       link_with: causallm_multimodal_scatter,
       include_directories: causallm_layer_inc
   )
+
+  causallm_nhwc_to_nchw = shared_library(
+      'nhwc_to_nchw_layer',
+      causallm_nhwc_to_nchw_src_abs,
+      include_directories: causallm_layer_inc,
+      dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+      install: quick_ai_use_tokenizer_layers,
+      install_dir: application_install_dir
+  )
+  causallm_nhwc_to_nchw_dep = declare_dependency(
+      link_with: causallm_nhwc_to_nchw,
+      include_directories: causallm_layer_inc
+  )
 else
   # Dummy dependencies for CED-only builds
   causallm_swiglu_dep = declare_dependency()
@@ -143,6 +157,7 @@ else
   causallm_tie_word_embedding_dep = declare_dependency()
   causallm_lm_head_dep = declare_dependency()
   causallm_multimodal_scatter_dep = declare_dependency()
+  causallm_nhwc_to_nchw_dep = declare_dependency()
 endif
 
 causallm_mha_core = shared_library(

@@ -120,6 +120,7 @@ LOCAL_SRC_FILES := \
     ../layers/shared_fully_connected_layer.cpp \
     ../models/qwen3_asr/audio_preprocessor.cpp \
     ../layers/multimodal_scatter.cpp \
+    ../layers/nhwc_to_nchw.cpp \
     ../models/qwen3_asr/qwen3_asr_causallm.cpp \
     ../models/qwen3_asr/qwen3_asr_subsampler.cpp \
     ../api/streamer.cpp \
@@ -264,6 +265,7 @@ LOCAL_SRC_FILES := ../quantize.cpp \
     ../layers/custom_multiply.cpp \
     ../models/qwen3_asr/audio_preprocessor.cpp \
     ../layers/multimodal_scatter.cpp \
+    ../layers/nhwc_to_nchw.cpp \
     ../models/qwen3_asr/qwen3_asr_causallm.cpp \
     ../models/qwen3_asr/qwen3_asr_subsampler.cpp \
     ../api/streamer.cpp

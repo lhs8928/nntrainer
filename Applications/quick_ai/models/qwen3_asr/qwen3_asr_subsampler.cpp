@@ -26,7 +26,8 @@ void Qwen3ASRSubsampler::constructModel(const std::string &conv_dtype,
   model->setProperty({
     nntrainer::withKey("batch_size", "1"),
     nntrainer::withKey("epochs", "1"),
-    nntrainer::withKey("model_tensor_type", subsampler_tensor_type)
+    nntrainer::withKey("model_tensor_type", subsampler_tensor_type),
+    nntrainer::withKey("tensor_format", "NHWC")
   });
 
   // Extract weight and act dtype from subsampler_tensor_type
@@ -34,15 +35,17 @@ void Qwen3ASRSubsampler::constructModel(const std::string &conv_dtype,
   std::string subsampler_weight_dtype = (dash != std::string::npos) ? subsampler_tensor_type.substr(0, dash) : subsampler_tensor_type;
   std::string subsampler_act_dtype = (dash != std::string::npos) ? subsampler_tensor_type.substr(dash + 1) : subsampler_tensor_type;
 
-  // Input: [1, 1, 128, 100]
+  // Input: [1, 1, 128, 100] in NHWC
   ml::train::TensorDim::DataType in_dtype = (subsampler_act_dtype == "FP16")
     ? ml::train::TensorDim::DataType::FP16
     : ml::train::TensorDim::DataType::FP32;
   input_tensor = ml::train::Tensor(
-    nntrainer::TensorDim(1, 1, 128, 100, nntrainer::TensorDim::Format::NCHW, in_dtype),
+    nntrainer::TensorDim(1, 1, 128, 100, nntrainer::TensorDim::Format::NHWC, in_dtype),
     "subsampler_input");
 
   // 1. conv2d1: stride 2, padding 1, filters 480, kernel size 3
+  // Stem layer (in_ch = 1, CRS = 9) is not divisible by 32, so it stays FP32
+  std::string conv1_dtype = (conv_dtype == "Q8_0" || conv_dtype == "Q4_0" || conv_dtype == "QINT8") ? "FP32" : conv_dtype;
   ml::train::LayerHandle conv1(ml::train::createLayer("conv2d", {
     nntrainer::withKey("name", "audio_tower_conv1"),
     nntrainer::withKey("filters", "480"),
@@ -50,7 +53,7 @@ void Qwen3ASRSubsampler::constructModel(const std::string &conv_dtype,
     nntrainer::withKey("stride", "2,2"),
     nntrainer::withKey("padding", "1,1"),
     nntrainer::withKey("disable_bias", "false"),
-    nntrainer::withKey("weight_dtype", conv_dtype)
+    nntrainer::withKey("weight_dtype", conv1_dtype)
   }));
   ml::train::Tensor h = conv1(input_tensor);
 
@@ -95,6 +98,12 @@ void Qwen3ASRSubsampler::constructModel(const std::string &conv_dtype,
     nntrainer::withKey("activation", "gelu")
   }));
   h = gelu3(h);
+
+  // Bridge format from NHWC [16, 13, 480] to NCHW [480, 16, 13] for post-conv Qwen3 decoder alignment
+  ml::train::LayerHandle bridge(ml::train::createLayer("nhwc_to_nchw", {
+    nntrainer::withKey("name", "audio_tower_nhwc_to_nchw")
+  }));
+  h = bridge(h);
 
   // 4. Permute from [480, 16, 13] to [13, 480, 16] in FP32
   ml::train::LayerHandle permute(ml::train::createLayer("permute", {
@@ -153,6 +162,7 @@ void Qwen3ASRSubsampler::load_weight(const std::string &path) {
   auto fmt = (dot != std::string::npos && path.substr(dot + 1) == "safetensors")
     ? ml::train::ModelFormat::MODEL_FORMAT_SAFETENSORS
     : ml::train::ModelFormat::MODEL_FORMAT_BIN;
+  std::cout << "[Subsampler] Loading weights from: " << path << std::endl;
   model->load(path, fmt);
 }
 
