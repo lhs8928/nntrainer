@@ -24,6 +24,67 @@
 
 #include <vector>
 
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+
+#pragma pack(push, 1)
+struct BlockQ4_0_Tied {
+  uint16_t d;
+  uint8_t qs[16];
+};
+
+struct BlockQ8_0_Tied {
+  uint16_t d;
+  int8_t qs[32];
+};
+#pragma pack(pop)
+
+static inline float fp16_to_fp32_tied(uint16_t h) {
+  __fp16 val;
+  std::memcpy(&val, &h, sizeof(uint16_t));
+  return static_cast<float>(val);
+}
+
+static inline float vec_dot_q4_0_q8_0_fused(const void *__restrict vx,
+                                            const void *__restrict vy,
+                                            int nb) {
+  const auto *x = reinterpret_cast<const BlockQ4_0_Tied *>(vx);
+  const auto *y = reinterpret_cast<const BlockQ8_0_Tied *>(vy);
+  const int8x16_t m8 = vdupq_n_s8(8);
+  const uint8x16_t m4b = vdupq_n_u8(0x0F);
+  float total_sum = 0.0f;
+
+  for (int b = 0; b < nb; ++b) {
+    const uint8x16_t q4_raw = vld1q_u8(x[b].qs);
+    const int8x16_t q4_low = vsubq_s8(vreinterpretq_s8_u8(vandq_u8(q4_raw, m4b)), m8);
+    const int8x16_t q4_high = vsubq_s8(vreinterpretq_s8_u8(vshrq_n_u8(q4_raw, 4)), m8);
+
+    const int8x16_t q8_low = vld1q_s8(y[b].qs);
+    const int8x16_t q8_high = vld1q_s8(y[b].qs + 16);
+
+#if defined(__ARM_FEATURE_DOTPROD)
+    int32x4_t acc = vdotq_s32(vdupq_n_s32(0), q4_low, q8_low);
+    acc = vdotq_s32(acc, q4_high, q8_high);
+    int32_t sum_i = vaddvq_s32(acc);
+#else
+    int16x8_t p0 = vmull_s8(vget_low_s8(q4_low), vget_low_s8(q8_low));
+    p0 = vmlal_s8(p0, vget_high_s8(q4_low), vget_high_s8(q8_low));
+    p0 = vmlal_s8(p0, vget_low_s8(q4_high), vget_low_s8(q8_high));
+    p0 = vmlal_s8(p0, vget_high_s8(q4_high), vget_high_s8(q8_high));
+    int32_t sum_i = vaddlvq_s16(p0);
+#endif
+
+    float d_x = fp16_to_fp32_tied(x[b].d);
+    float d_y = fp16_to_fp32_tied(y[b].d);
+    total_sum += (float)sum_i * (d_x * d_y);
+  }
+
+  return total_sum;
+}
+#endif
+
+extern void nntr_quantize_row_q8_0(const float *__restrict x, void *__restrict vy, int64_t k);
+
 namespace quick_ai {
 
 static constexpr size_t SINGLE_INOUT_IDX = 0;
@@ -221,6 +282,7 @@ void TieWordEmbedding::incremental_forwarding_embedding(
 
   if (!(weight.getDataType() == nntrainer::TensorDim::DataType::Q4_0 ||
         weight.getDataType() == nntrainer::TensorDim::DataType::Q6_K ||
+        weight.getDataType() == nntrainer::TensorDim::DataType::Q4_K ||
         weight.getDataType() == nntrainer::TensorDim::DataType::FP16 ||
         weight.getDataType() == nntrainer::TensorDim::DataType::FP32))
     throw std::invalid_argument(
@@ -246,12 +308,15 @@ void TieWordEmbedding::incremental_forwarding_embedding(
         batchsliced_hidden.getSharedDataTensor(out_tensor_dim, out_dim * i);
 
       if (weight.getDataType() == nntrainer::TensorDim::DataType::Q6_K ||
+          weight.getDataType() == nntrainer::TensorDim::DataType::Q4_K ||
           weight.getDataType() == nntrainer::TensorDim::DataType::Q4_0) {
         ///@note this should be replaced with quantizer operation
         const bool is_q6k =
           weight.getDataType() == nntrainer::TensorDim::DataType::Q6_K;
-        const int blk = is_q6k ? 256 : 32;
-        const int bytes_per_blk = is_q6k ? 210 : 18;
+        const bool is_q4k =
+          weight.getDataType() == nntrainer::TensorDim::DataType::Q4_K;
+        const int blk = (is_q6k || is_q4k) ? 256 : 32;
+        const int bytes_per_blk = is_q6k ? 210 : (is_q4k ? 144 : 18);
         const int num_blocks_per_row = (weight.width() + blk - 1) / blk;
         const void *src =
           (void *)((char *)weight.getData<uint8_t>() +
@@ -260,6 +325,8 @@ void TieWordEmbedding::incremental_forwarding_embedding(
         if (out_tensor.getDataType() == nntrainer::TensorDim::DataType::FP32) {
           if (is_q6k)
             nntrainer::dequantize_row_q6_K(src, out_tensor.getData(), out_dim);
+          else if (is_q4k)
+            nntrainer::dequantize_row_q4_K(src, out_tensor.getData(), out_dim);
           else
             nntrainer::dequantize_row_q4_0(src, out_tensor.getData(), out_dim);
         } else {
@@ -275,6 +342,8 @@ void TieWordEmbedding::incremental_forwarding_embedding(
           nntrainer::Tensor tmp(fp32_dim, true);
           if (is_q6k)
             nntrainer::dequantize_row_q6_K(src, tmp.getData(), out_dim);
+          else if (is_q4k)
+            nntrainer::dequantize_row_q4_K(src, tmp.getData(), out_dim);
           else
             nntrainer::dequantize_row_q4_0(src, tmp.getData(), out_dim);
           nntrainer::Tensor tmp_cast = (tmp.getDataType() != out_tensor.getDataType())
@@ -367,9 +436,10 @@ void TieWordEmbedding::incremental_forwarding_lmhead(
                   std::invalid_argument)
       << "weight type is not supported for custom tie word embedding layer";
 
-    if (weight.getDataType() == nntrainer::TensorDim::DataType::Q6_K) {
+    if (weight.getDataType() == nntrainer::TensorDim::DataType::Q6_K ||
+        weight.getDataType() == nntrainer::TensorDim::DataType::Q4_K) {
       ///@note The tied (embedding-shaped) weight is [vocab, hidden]. The fused
-      /// Q6_K GEMV computes logits[v] = input . weight[v] row-wise, which needs
+      /// Q6_K / Q4_K GEMV computes logits[v] = input . weight[v] row-wise, which needs
       /// no data transpose, and is ~2x faster per decode token than a per-row
       /// dequantize+sdot loop. The lmhead output is forced FP32 (finalize);
       /// cast a FP16 activation up to FP32 first so FloatTensor::dotQnK writes
@@ -407,6 +477,24 @@ void TieWordEmbedding::incremental_forwarding_lmhead(
       const unsigned int compute_thread_num = tm.getComputeThreadCount();
       const unsigned int thread_num =
         compute_thread_num == 0 ? 1 : compute_thread_num;
+
+#if defined(__ARM_NEON)
+      // High-speed fused NEON path: quantize input once to Q8_0, then run fused dot
+      const size_t q8_row_size = sizeof(BlockQ8_0_Tied) * num_blocks_per_row;
+      std::vector<char> q8_act_buf(q8_row_size);
+      nntr_quantize_row_q8_0(input_data, q8_act_buf.data(), hidden_size);
+      const void *q8_act = q8_act_buf.data();
+
+      tm.parallel_for(0, static_cast<size_t>(thread_num), [=](size_t t) {
+        const unsigned int start = (t * vocab_size) / thread_num;
+        const unsigned int end = ((t + 1) * vocab_size) / thread_num;
+
+        for (unsigned int row = start; row < end; ++row) {
+          const void *wrow = weight_data + row_stride * row;
+          logits[row] = vec_dot_q4_0_q8_0_fused(wrow, q8_act, num_blocks_per_row);
+        }
+      });
+#else
       tm.parallel_for(0, static_cast<size_t>(thread_num), [=](size_t t) {
         const unsigned int start = (t * vocab_size) / thread_num;
         const unsigned int end = ((t + 1) * vocab_size) / thread_num;
@@ -420,6 +508,7 @@ void TieWordEmbedding::incremental_forwarding_lmhead(
             nntrainer::sdot(hidden_size, input_data, 1, dequant_row.data(), 1);
         }
       });
+#endif
     } else {
       nntrainer::TensorDim dim = hidden_step.getDim();
       dim.setDataType(nntrainer::TensorDim::DataType::FP16);
