@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 
 namespace quick_ai {
 
@@ -330,6 +331,10 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
     throw std::runtime_error("Qwen3ASRCausalLM model is not initialized.");
   }
 
+  auto t_run_start = std::chrono::high_resolution_clock::now();
+  double mel_time_ms = 0.0;
+  double audio_duration_sec = 0.0;
+
   // 1. Check/load audio file and extract Mel features matching compiled audio_seq_len
   std::vector<float> mel_features_transposed(static_cast<size_t>(audio_seq_len) * 128, 0.0f);
   bool loaded_pytorch_mel = false;
@@ -346,11 +351,13 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
   }
 
   if (!loaded_pytorch_mel) {
+    auto t_mel_start = std::chrono::high_resolution_clock::now();
     std::vector<float> mel_features;
     quick_ai::AudioPreprocessor preprocessor;
     if (!audio_path.empty()) {
       std::cout << "[Qwen3-ASR] Loading and preprocessing audio WAV: " << audio_path << std::endl;
       std::vector<float> pcm = preprocessor.loadWav(audio_path);
+      audio_duration_sec = static_cast<double>(pcm.size()) / 16000.0;
       mel_features = preprocessor.computeMelSpectrogram(pcm);
       std::cout << "[Qwen3-ASR] Raw extracted Mel features: " << mel_features.size() / 128 << " frames" << std::endl;
     } else {
@@ -359,6 +366,7 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
       if (std::filesystem::exists(fallback)) {
         audio_path = fallback;
         std::vector<float> pcm = preprocessor.loadWav(audio_path);
+        audio_duration_sec = static_cast<double>(pcm.size()) / 16000.0;
         mel_features = preprocessor.computeMelSpectrogram(pcm);
       } else {
         std::cerr << "[Qwen3-ASR] Error: No audio path provided and fallback not found!" << std::endl;
@@ -380,6 +388,8 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
         mel_features_transposed[f * audio_seq_len + t] = mel_features[t * 128 + f];
       }
     }
+    auto t_mel_end = std::chrono::high_resolution_clock::now();
+    mel_time_ms = std::chrono::duration<double, std::milli>(t_mel_end - t_mel_start).count();
   }
 
   // Run Subsampler sub-model chunk-by-chunk to produce fused_audio_embeds [1, 1, downsampled_len, 1024]
@@ -568,6 +578,45 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
             << prefill_tps << " TPS)" << std::endl;
   std::cout << "[Qwen3-ASR] Generated " << generation_cnt << " tokens in " << gen_ms << " ms ("
             << (generation_cnt * 1000.0 / gen_ms) << " TPS)" << std::endl;
+
+  auto t_run_end = std::chrono::high_resolution_clock::now();
+  double total_run_ms = std::chrono::duration<double, std::milli>(t_run_end - t_run_start).count();
+  double overhead_ms = total_run_ms - (mel_time_ms + sub_time_ms + (double)prefill_ms + (double)gen_ms);
+  if (overhead_ms < 0) overhead_ms = 0;
+
+  double rtf = (audio_duration_sec > 0.0) ? ((total_run_ms / 1000.0) / audio_duration_sec) : 0.0;
+
+  std::cout << "\n========================================================================================\n"
+            << "                      Qwen3-ASR 1.7B Inference Latency Breakdown\n"
+            << "========================================================================================\n"
+            << " Audio File / Duration  : " << audio_path << " (" << std::fixed << std::setprecision(2) << audio_duration_sec << " s, " << audio_seq_len << " frames)\n"
+            << " Output Transcription   : \"" << transcription << "\"\n"
+            << "----------------------------------------------------------------------------------------\n"
+            << " Pipeline Stage            Time (ms)     Time (s)     Ratio (%)     Throughput\n"
+            << "----------------------------------------------------------------------------------------\n"
+            << " 1. Audio WAV & Mel      : " << std::setw(8) << std::setprecision(1) << mel_time_ms << " ms   "
+            << std::setw(6) << std::setprecision(2) << (mel_time_ms / 1000.0) << " s    "
+            << std::setw(6) << std::setprecision(1) << (mel_time_ms * 100.0 / total_run_ms) << " %     -\n"
+            << " 2. Subsampler (" << std::setw(2) << num_chunks << " Chunks): " << std::setw(8) << std::setprecision(1) << sub_time_ms << " ms   "
+            << std::setw(6) << std::setprecision(2) << (sub_time_ms / 1000.0) << " s    "
+            << std::setw(6) << std::setprecision(1) << (sub_time_ms * 100.0 / total_run_ms) << " %     "
+            << std::setprecision(1) << (sub_time_ms / num_chunks) << " ms/chunk\n"
+            << " 3. Prefill Inference    : " << std::setw(8) << std::setprecision(1) << (double)prefill_ms << " ms   "
+            << std::setw(6) << std::setprecision(2) << (prefill_ms / 1000.0) << " s    "
+            << std::setw(6) << std::setprecision(1) << (prefill_ms * 100.0 / total_run_ms) << " %     "
+            << std::setprecision(2) << prefill_tps << " TPS (" << init_len << " tokens)\n"
+            << " 4. Decode Generation    : " << std::setw(8) << std::setprecision(1) << (double)gen_ms << " ms   "
+            << std::setw(6) << std::setprecision(2) << (gen_ms / 1000.0) << " s    "
+            << std::setw(6) << std::setprecision(1) << (gen_ms * 100.0 / total_run_ms) << " %     "
+            << std::setprecision(2) << (generation_cnt * 1000.0 / gen_ms) << " TPS (" << generation_cnt << " tokens)\n"
+            << " 5. Tokenize & Overheads : " << std::setw(8) << std::setprecision(1) << overhead_ms << " ms   "
+            << std::setw(6) << std::setprecision(2) << (overhead_ms / 1000.0) << " s    "
+            << std::setw(6) << std::setprecision(1) << (overhead_ms * 100.0 / total_run_ms) << " %     -\n"
+            << "----------------------------------------------------------------------------------------\n"
+            << " Total Pipeline Time     : " << std::setw(8) << std::setprecision(1) << total_run_ms << " ms   "
+            << std::setw(6) << std::setprecision(2) << (total_run_ms / 1000.0) << " s    "
+            << " 100.0 %     RTF: " << std::setprecision(2) << rtf << " (Realtime < 1.0)\n"
+            << "========================================================================================\n";
 
   std::ofstream out_f("history.txt");
   for (unsigned int step = 0; step < MAX_SEQ_LEN; ++step) {
