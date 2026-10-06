@@ -66,6 +66,7 @@ if quick_ai_use_tokenizer_for_deps
     causallm_causal_conv1d_dep,
     causallm_custom_multiply_dep,
     causallm_multimodal_scatter_dep,
+    causallm_nhwc_to_nchw_dep,
   ]
 endif
 
