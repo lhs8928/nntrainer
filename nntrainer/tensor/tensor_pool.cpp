@@ -41,8 +41,10 @@ Tensor *TensorPool::request(const std::string &name, const TensorDim &dim,
   // path); PER_CHANNEL_AFFINE would make scale_size()==width() and the inline
   // scale slot oversized/misinterpreted. Weights keep PER_CHANNEL. This is the
   // TensorPool QScheme fix noted in YOLOv7's W8A8_DESIGN.md §3.1.
+  const bool is_weight = (lifespan == TensorLifespan::FORWARD_INFER_LIFESPAN ||
+                          lifespan == TensorLifespan::MAX_LIFESPAN);
   const QScheme qs =
-    (dim.getDataType() == ml::train::TensorDim::DataType::QINT8)
+    (dim.getDataType() == ml::train::TensorDim::DataType::QINT8 && !is_weight)
       ? QScheme::PER_TENSOR_AFFINE
       : QScheme::PER_CHANNEL_AFFINE;
   return registerRequestSpec(
