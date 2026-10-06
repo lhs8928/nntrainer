@@ -341,6 +341,12 @@ int main(int argc, char **argv) {
   }
 
   size_t num_chunks = chunks.size();
+  constexpr size_t FRAMES_PER_CHUNK = 589;
+  constexpr double STEP_SEC = 1.0;
+  constexpr double FRAME_STEP_SEC = 0.016875;
+
+  size_t last_chunk_start_frame = static_cast<size_t>(std::round((num_chunks - 1) * STEP_SEC / FRAME_STEP_SEC));
+  size_t total_frames = last_chunk_start_frame + FRAMES_PER_CHUNK;
 
   auto t_seg_start = std::chrono::high_resolution_clock::now();
   if (debug_mode) {
@@ -352,20 +358,15 @@ int main(int argc, char **argv) {
       segmentations[c] = seg_model.forwardChunk(chunks[c].data(), c, nullptr);
     }
 
-    constexpr size_t TOTAL_FRAMES = 949;
-    constexpr size_t FRAMES_PER_CHUNK = 589;
-    constexpr double STEP_SEC = 1.0;
-    constexpr double FRAME_STEP_SEC = 0.016875;
-
-    speaker_counting.assign(TOTAL_FRAMES, 0);
-    std::vector<float> frame_sums(TOTAL_FRAMES, 0.0f);
-    std::vector<float> frame_weights(TOTAL_FRAMES, 0.0f);
+    speaker_counting.assign(total_frames, 0);
+    std::vector<float> frame_sums(total_frames, 0.0f);
+    std::vector<float> frame_weights(total_frames, 0.0f);
 
     for (size_t c = 0; c < num_chunks; ++c) {
       size_t chunk_start_frame = static_cast<size_t>(std::round(c * STEP_SEC / FRAME_STEP_SEC));
       for (size_t f = 0; f < FRAMES_PER_CHUNK; ++f) {
         size_t global_frame = chunk_start_frame + f;
-        if (global_frame >= TOTAL_FRAMES) break;
+        if (global_frame >= total_frames) break;
 
         float spk_sum = segmentations[c][f * 3 + 0]
                       + segmentations[c][f * 3 + 1]
@@ -375,7 +376,7 @@ int main(int argc, char **argv) {
       }
     }
 
-    for (size_t f = 0; f < TOTAL_FRAMES; ++f) {
+    for (size_t f = 0; f < total_frames; ++f) {
       if (frame_weights[f] > 0.0f) {
         speaker_counting[f] = static_cast<uint8_t>(std::rint(frame_sums[f] / frame_weights[f]));
       } else {
@@ -449,7 +450,7 @@ int main(int argc, char **argv) {
   // 7. PLDA & Clustering & Diarization Timeline
   std::cout << "[Pipeline] Performing PLDA transformation & timeline reconstruction...\n";
   auto t_cluster_start = std::chrono::high_resolution_clock::now();
-  auto segments = plda_vbx.diarize(all_embeddings, segmentations, speaker_counting);
+  auto segments = plda_vbx.diarize(all_embeddings, segmentations, speaker_counting, total_frames);
   auto t_cluster_end = std::chrono::high_resolution_clock::now();
 
   auto t_e2e_end = std::chrono::high_resolution_clock::now();
