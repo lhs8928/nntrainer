@@ -50,6 +50,8 @@ Applications/quick_ai/res/gemma4/test/*
 !Applications/quick_ai/res/gemma4/test/generate_gemma4_reference.py
 !Applications/quick_ai/res/qwen3/
 Applications/quick_ai/res/qwen3/*
+!Applications/quick_ai/res/qwen3/qwen3-asr-1.7b/
+!Applications/quick_ai/res/qwen3/qwen3-asr-1.7b/**
 !Applications/quick_ai/res/qwen3/test/
 Applications/quick_ai/res/qwen3/test/*
 !Applications/quick_ai/res/qwen3/test/generate_qwen3_moe_reference.py
@@ -109,3 +111,12 @@ json.hpp
 # YOLOv11 local build artifacts (NDK build outputs / PyTorch checkpoints, not source)
 Applications/CausalLM/models/YOLOv11/jni/
 yolo11*.pt
+
+# Qwen3-ASR local test artifacts and models
+*.bin
+*.safetensors
+*.wav
+*.txt
+dist_rpi5/
+tools/sysroot_arm64/
+Applications/quick_ai/tokenizers_c_win/target/
