@@ -523,24 +523,29 @@ void __ggml_q4_0_4x8_q8_0_GEMM(const unsigned int M, const unsigned int N,
     __ggml_quantize_row_q8_0(A, (void *)QA.data(), K);
     auto qa_data = QA.data();
 
-    unsigned int chunk_size = 16;
-    unsigned int loop = (N + chunk_size - 1) / chunk_size;
+    const unsigned int n_threads = tm.getComputeThreadCount();
+    const unsigned int thread_num = n_threads == 0 ? 1 : n_threads;
 
-    tm.parallel_for(0, loop, [=](size_t idx) {
-      unsigned int M_step_start = chunk_size * idx;
-      unsigned int M_step_end = std::min(chunk_size * (idx + 1), (size_t)N);
+    tm.parallel_for(0, static_cast<size_t>(thread_num), [=](size_t tid) {
+      unsigned int c_start = (tid * N) / thread_num;
+      c_start = (c_start / 4) * 4;
+      unsigned int c_end = ((tid + 1) == thread_num) ? N : (((tid + 1) * N) / thread_num);
+      c_end = (c_end / 4) * 4;
+      if (tid + 1 == thread_num) c_end = N;
+
+      if (c_start >= c_end) return;
 
 #if defined(__ARM_NEON)
-      nntr_gemv_q4_0_4x8_q8_0_fp16(K, (_FP16 *)(C + M_step_start), N,
-                                   (void *)((char *)B + M_step_start * B_step),
-                                   qa_data, M, M_step_end - M_step_start);
+      nntr_gemv_q4_0_4x8_q8_0_fp16(K, (_FP16 *)(C + c_start), N,
+                                   (void *)((char *)B + c_start * B_step),
+                                   qa_data, M, c_end - c_start);
 #else
-      unsigned int n_cols = M_step_end - M_step_start;
+      unsigned int n_cols = c_end - c_start;
       std::vector<float> out(n_cols);
       nntr_gemv_q4_0_4x8_q8_0(K, out.data(), N,
-                               (void *)((char *)B + M_step_start * B_step),
+                               (void *)((char *)B + c_start * B_step),
                                qa_data, M, n_cols);
-      __copy_f16_from_f32(out.data(), C + M_step_start, n_cols);
+      __copy_f16_from_f32(out.data(), C + c_start, n_cols);
 #endif
     });
     return;
