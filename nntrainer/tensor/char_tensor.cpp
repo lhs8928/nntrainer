@@ -620,7 +620,10 @@ size_t CharTensor::scale_size() const {
     return 1;
     break;
   case QScheme::PER_CHANNEL_AFFINE:
-    return (dim.rank() > 2) ? batch() : width();
+    if (dim.rank() > 2) {
+      return batch();
+    }
+    return (dim.getFormat() == Tformat::NHWC) ? channel() : width();
     break;
   default:
     break;
