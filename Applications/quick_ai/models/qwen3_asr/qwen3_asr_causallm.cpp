@@ -45,8 +45,9 @@ static unsigned int get_feat_extract_output_lengths(unsigned int input_lengths) 
 std::pair<Tensor, Tensor> Qwen3ASRTransformer::constructModel() {
   std::cout << "[Qwen3-ASR] Constructing Qwen3ASRSubsampler sub-model graph ("
             << "conv_dtype: " << conv_layer_dtype 
+            << ", fc_dtype: " << subsampler_fc_layer_dtype
             << ", subsampler_tensor_type: " << subsampler_model_tensor_type << ")..." << std::endl;
-  subsampler.constructModel(conv_layer_dtype, subsampler_model_tensor_type);
+  subsampler.constructModel(conv_layer_dtype, subsampler_model_tensor_type, subsampler_fc_layer_dtype);
 
   // input0: text token IDs [batch, 1, 1, seq_len] always in FP32
   Tensor input0 = Tensor(nntrainer::TensorDim(1, 1, 1, static_cast<unsigned int>(INIT_SEQ_LEN), nntrainer::TensorDim::Format::NCHW, nntrainer::TensorDim::DataType::FP32), "input0");
@@ -105,13 +106,13 @@ Tensor Qwen3ASRTransformer::createAudioEncoder(Tensor audio_input) {
     h = createAudioAttentionBlock(i, h, downsampled_len);
   }
 
-  // 9. ln_post: LayerNorm
+  // 9. ln_post: LayerNorm (governed by model_tensor_type activation dtype)
   LayerHandle ln_post(createLayer(
     "layer_normalization",
     {withKey("name", "audio_tower_ln_post"),
      withKey("axis", "3"),
      withKey("epsilon", "1e-5"),
-     withKey("weight_dtype", "FP16")}));
+     withKey("weight_dtype", act_dtype)}));
   h = ln_post(h);
 
   // 10. Projections
@@ -145,7 +146,7 @@ Tensor Qwen3ASRTransformer::createAudioAttentionBlock(const int layer_id, Tensor
     {withKey("name", prefix + "attention_norm"),
      withKey("axis", "3"),
      withKey("epsilon", "1e-5"),
-     withKey("weight_dtype", "FP16")}));
+     withKey("weight_dtype", act_dtype)}));
   Tensor normed = norm(input);
 
   LayerHandle q_proj(createLayer(
@@ -197,7 +198,7 @@ Tensor Qwen3ASRTransformer::createAudioAttentionBlock(const int layer_id, Tensor
     {withKey("name", prefix + "ffn_norm"),
      withKey("axis", "3"),
      withKey("epsilon", "1e-5"),
-     withKey("weight_dtype", "FP16")}));
+     withKey("weight_dtype", act_dtype)}));
   Tensor ffn_normed = ffn_norm(residual);
 
   LayerHandle ffn_up(createLayer(
