@@ -261,6 +261,39 @@ void FullyConnectedLayer::forwarding(RunLayerContext &context, bool training) {
       return;
   }
 
+  if (weight.getDataType() == Tdatatype::QINT8) {
+    static std::mutex fc_qint8_mtx;
+    static std::unordered_map<const void *, std::vector<float>> fc_qint8_cache;
+    const void *kptr = weight.getData();
+    const float *deq_ptr = nullptr;
+    const size_t total_elements = weight.size();
+    {
+      std::lock_guard<std::mutex> lk(fc_qint8_mtx);
+      auto it = fc_qint8_cache.find(kptr);
+      if (it == fc_qint8_cache.end()) {
+        std::vector<float> buf(total_elements);
+        const int8_t *qdata = weight.getData<int8_t>();
+        const float *scales = (const float *)weight.getScale();
+        const bool is_per_channel = (weight.q_scheme() == QScheme::PER_CHANNEL_AFFINE);
+        const size_t N = (weight.getDim().getFormat() == Tformat::NHWC) ? weight.getDim().channel() : weight.getDim().width();
+        const size_t K = (N > 0) ? (total_elements / N) : 1;
+        for (size_t k = 0; k < K; ++k) {
+          for (size_t o = 0; o < N; ++o) {
+            float sc = (is_per_channel && scales) ? scales[o] : (scales ? scales[0] : 1.0f);
+            buf[k * N + o] = (float)qdata[k * N + o] * sc;
+          }
+        }
+        it = fc_qint8_cache.emplace(kptr, std::move(buf)).first;
+      }
+      deq_ptr = it->second.data();
+    }
+    TensorDim fdim = weight.getDim();
+    fdim.setDataType(input_.getDataType());
+    Tensor weight_deq = Tensor::Map<float>(const_cast<float *>(deq_ptr), total_elements * sizeof(float), fdim);
+    input_.dot(weight_deq, hidden_, false, false);
+    return;
+  }
+
   ///@todo This dequantization action should be moved to tensor.dot()
   if (quantizer != nullptr) {
     Tensor weight_ = quantizer->dequantize(weight, input_.getDataType());
