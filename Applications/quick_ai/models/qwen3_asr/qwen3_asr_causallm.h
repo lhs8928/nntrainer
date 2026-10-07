@@ -31,16 +31,18 @@ public:
     }
 
     // Dynamic data type configuration with fallbacks
-    audio_tower_weight_dtype = nntr_cfg.value("audio_tower_weight_dtype", "FP16");
+    audio_tower_weight_dtype = nntr_cfg.value("audio_tower_weight_dtype", FC_LAYER_DTYPE);
 
     if (nntr_cfg.contains("subsampler") && nntr_cfg["subsampler"].is_object()) {
       const auto &sub_cfg = nntr_cfg["subsampler"];
       conv_layer_dtype = sub_cfg.value("conv_layer_dtype", "FP32");
       subsampler_model_tensor_type = sub_cfg.value("model_tensor_type", "FP32-FP32");
+      subsampler_fc_layer_dtype = sub_cfg.value("fc_layer_dtype", "FP32");
       subsampler_model_file_name = sub_cfg.value("model_file_name", "");
     } else {
       conv_layer_dtype = nntr_cfg.value("conv_layer_dtype", "FP32");
       subsampler_model_tensor_type = nntr_cfg.value("subsampler_model_tensor_type", "FP32-FP32");
+      subsampler_fc_layer_dtype = nntr_cfg.value("subsampler_fc_layer_dtype", "FP32");
       subsampler_model_file_name = nntr_cfg.value("subsampler_model_file_name", "");
     }
 
@@ -59,6 +61,7 @@ protected:
   unsigned int audio_seq_len;
   std::string audio_tower_weight_dtype;
   std::string conv_layer_dtype;
+  std::string subsampler_fc_layer_dtype;
   std::string subsampler_model_tensor_type;
   std::string subsampler_model_file_name;
   std::string act_dtype;

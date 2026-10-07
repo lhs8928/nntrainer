@@ -13,21 +13,20 @@
   "max_position_embeddings": 4096,
   "tokenizer_file": "tokenizer.json",
   "is_causal": true,
-  "tie_word_embeddings": false,
   "num_to_generate": 128,
-  "embedding_dtype": "FP16",
-  "fc_layer_dtype": "FP16",
-  "audio_tower_weight_dtype": "FP16",
+  "embedding_dtype": "Q4_0",
+  "fc_layer_dtype": "Q4_0",
+  "lmhead_dtype": "Q4_0",
   "subsampler": {
-    "model_file_name": "nntr_qwen3_asr_1.7b_fp16_subsampler.bin",
+    "model_file_name": "nntr_qwen3_asr_1.7b_subsampler_mtt_fp32-fp32_conv_qint8_fc_fp32.bin",
     "model_tensor_type": "FP32-FP32",
-    "conv_layer_dtype": "FP32"
+    "conv_layer_dtype": "QINT8",
+    "fc_layer_dtype": "FP32"
   },
-  "lmhead_dtype": "FP16",
   "rms_norm_eps": 1e-06,
   "rope_theta": 1000000,
   "model_type": "causallm",
-  "model_tensor_type": "FP16-FP16",
+  "model_tensor_type": "Q4_0-FP16",
   "system_prompt": {
     "head_prompt": "",
     "tail_prompt": ""
@@ -36,6 +35,6 @@
   "sample_input": "",
   "audio_file": "asr_en.wav",
   "use_q_k_norm": true,
-  "model_file_name": "nntr_qwen3_asr_1.7b_fp16.bin",
+  "model_file_name": "nntr_qwen3_asr_1.7b_mtt_q4_0-fp16_emb_q4_0_fc_q4_0_lm_q4_0.safetensors",
   "audio_seq_len": 66
 }
