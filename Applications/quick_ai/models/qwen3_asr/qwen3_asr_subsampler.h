@@ -32,7 +32,8 @@ public:
 
   void initialize(const std::string &model_tensor_type = "FP16-FP16");
   void constructModel(const std::string &conv_dtype = "FP32",
-                      const std::string &subsampler_tensor_type = "FP32-FP32");
+                      const std::string &subsampler_tensor_type = "FP32-FP32",
+                      const std::string &subsampler_fc_dtype = "");
   void load_weight(const std::string &weight_path);
   std::vector<float *> inference(float *input_data);
 

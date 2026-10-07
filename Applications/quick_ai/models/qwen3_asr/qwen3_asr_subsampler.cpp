@@ -19,7 +19,8 @@
 namespace quick_ai {
 
 void Qwen3ASRSubsampler::constructModel(const std::string &conv_dtype,
-                                        const std::string &subsampler_tensor_type) {
+                                        const std::string &subsampler_tensor_type,
+                                        const std::string &subsampler_fc_dtype) {
   if (model_constructed) return;
 
   model = ml::train::createModel(ml::train::ModelType::NEURAL_NET);
@@ -34,6 +35,7 @@ void Qwen3ASRSubsampler::constructModel(const std::string &conv_dtype,
   size_t dash = subsampler_tensor_type.find('-');
   std::string subsampler_weight_dtype = (dash != std::string::npos) ? subsampler_tensor_type.substr(0, dash) : subsampler_tensor_type;
   std::string subsampler_act_dtype = (dash != std::string::npos) ? subsampler_tensor_type.substr(dash + 1) : subsampler_tensor_type;
+  std::string fc_dtype = subsampler_fc_dtype.empty() ? subsampler_weight_dtype : subsampler_fc_dtype;
 
   // Input: [1, 1, 128, 100] in NHWC
   ml::train::TensorDim::DataType in_dtype = (subsampler_act_dtype == "FP16")
@@ -124,7 +126,7 @@ void Qwen3ASRSubsampler::constructModel(const std::string &conv_dtype,
     nntrainer::withKey("name", "audio_tower_conv_out"),
     nntrainer::withKey("unit", "1024"),
     nntrainer::withKey("disable_bias", "true"),
-    nntrainer::withKey("weight_dtype", subsampler_weight_dtype)
+    nntrainer::withKey("weight_dtype", fc_dtype)
   }));
   h = conv_out(h);
 
