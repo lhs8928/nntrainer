@@ -85,6 +85,39 @@ getStemTapWeight(const float *w, unsigned int out_ch, unsigned int in_ch,
   return cache.emplace((const void *)w, std::move(t)).first->second;
 }
 
+// ---- NHWC FP32 conv: [out][kh][kw][in] weight cache -------------------------
+// The generic path builds an im2col matrix in (in, kh, kw) column order, which
+// for an NHWC activation is a per-element strided gather, then transposes the
+// [out_ch, OH*OW] GEMM result back to NHWC. With the filter permuted once to
+// (kh, kw, in) order, the im2col row of one output pixel is kh*kw contiguous
+// in_ch-element runs (memcpy) and the GEMM writes the NHWC output directly.
+// QINT8 (per-out-channel scale) filters are dequantized here, once.
+// `w` is the [out][in][kh][kw] filter; scale == nullptr for FP32 filters.
+static const std::vector<float> &
+getNhwcConvWeight(const void *key, const float *w_fp32, const int8_t *w_q8,
+                  const float *scale, unsigned int out_ch, unsigned int in_ch,
+                  unsigned int kh, unsigned int kw) {
+  static std::mutex mtx;
+  static std::unordered_map<const void *, std::vector<float>> cache;
+  std::lock_guard<std::mutex> lk(mtx);
+  auto it = cache.find(key);
+  if (it != cache.end())
+    return it->second;
+  const size_t crs = (size_t)in_ch * kh * kw;
+  std::vector<float> t((size_t)out_ch * crs);
+  for (unsigned int o = 0; o < out_ch; ++o) {
+    const float sc = (w_q8 && scale) ? scale[o] : 1.f;
+    for (unsigned int c = 0; c < in_ch; ++c)
+      for (unsigned int y = 0; y < kh; ++y)
+        for (unsigned int x = 0; x < kw; ++x) {
+          const size_t src = (((size_t)o * in_ch + c) * kh + y) * kw + x;
+          t[(size_t)o * crs + ((size_t)y * kw + x) * in_ch + c] =
+            w_q8 ? (float)w_q8[src] * sc : w_fp32[src];
+        }
+  }
+  return cache.emplace(key, std::move(t)).first->second;
+}
+
 // ---- Depthwise int8 (channel-wise symmetric) weight cache -----------------
 // W8A8 depthwise: the weight file never stores depthwise filters quantized
 // (grouped convs are incompatible with the Q8_0/matmul GEMM strategy -- see
@@ -1676,7 +1709,24 @@ void Conv2DLayer::forwarding(RunLayerContext &context, bool training) {
     Tensor *q8act_scratch =
       has_q8act_scratch ? &context.getTensor(wt_idx[ConvParams::q8act_scratch])
                         : nullptr;
-    if (col_scratch != nullptr) {
+    // NHWC FP32 conv fast path (see getNhwcConvWeight): im2col writes every
+    // element (padding taps included), so the col scratch needs no zeroing.
+    static const bool nhwc_fast_enabled = [] {
+      const char *e = std::getenv("NNTR_CONV_NHWC_FAST");
+      return !(e && std::string(e) == "0");
+    }();
+    const bool nhwc_fast =
+      nhwc_fast_enabled && !weight_is_quant &&
+      (filter_kernel.getDataType() == nntrainer::Tdatatype::FP32 ||
+       filter_kernel.getDataType() == nntrainer::Tdatatype::QINT8) &&
+      input_.getDataType() == nntrainer::Tdatatype::FP32 &&
+      hidden_.getDataType() == nntrainer::Tdatatype::FP32 &&
+      in_dim.getFormat() == ml::train::TensorDim::Format::NHWC &&
+      out_dim.getFormat() == ml::train::TensorDim::Format::NHWC &&
+      dilation[0].get() == 1 && dilation[1].get() == 1 && !is_1x1_s1 &&
+      col_scratch != nullptr && !perch_mode &&
+      std::getenv("NNTR_W8A8") == nullptr;
+    if (col_scratch != nullptr && !nhwc_fast) {
       col_scratch->setZero();
     }
 
@@ -2381,6 +2431,120 @@ void Conv2DLayer::forwarding(RunLayerContext &context, bool training) {
           din.setDataType(nntrainer::Tdatatype::FP32);
           in_sub = Tensor::Map<float>(deq_in_buf.data(),
                                       deq_in_buf.size() * sizeof(float), din);
+        }
+
+        if (nhwc_fast) {
+          const unsigned int Cin = in_dim.channel();
+          const unsigned int Cout = filter_size;
+          const unsigned int kh_ = kernel_size[0].get();
+          const unsigned int kw_ = kernel_size[1].get();
+          const size_t crs = (size_t)Cin * kh_ * kw_;
+          const bool is_q8f =
+            filter_kernel.getDataType() == nntrainer::Tdatatype::QINT8;
+#if defined(__ARM_NEON)
+          // Tiny reduction depth (stem-like conv, e.g. in_ch=1 -> CRS=9): the
+          // im2col + sgemm route is dominated by packing/dispatch overhead
+          // (13 ms for 28 MFLOP). A tap-direct loop keeps 16 output channels in
+          // four NEON accumulators per pixel and broadcast-FMAs each (tap,
+          // channel) scalar against a contiguous out-channel weight vector.
+          if (!is_q8f && crs <= 32 && Cout % 16 == 0) {
+            const std::vector<float> &TW = getStemTapWeight(
+              filter_kernel.getData<float>(), Cout, Cin, kh_, kw_);
+            const float *twp = TW.data();
+            const int Hi = in_dim.height(), Wi = in_dim.width();
+            const int Ho = out_dim.height(), Wo = out_dim.width();
+            const int sh = stride[0].get(), sw = stride[1].get();
+            const int ptop = padding[0], pleft = padding[2];
+            const float *inp = in_sub.getData<float>();
+            float *outp = out.getData<float>();
+            ThreadManager::Global().parallel_for(
+              0, (size_t)Ho, [=](size_t ohs) {
+                const int oh = (int)ohs;
+                const int h0 = oh * sh - ptop;
+                for (int ow = 0; ow < Wo; ++ow) {
+                  float *op = outp + ((size_t)oh * Wo + ow) * Cout;
+                  const int w0 = ow * sw - pleft;
+                  for (unsigned int cb = 0; cb < Cout; cb += 16) {
+                    float32x4_t a0 = vdupq_n_f32(0.f), a1 = a0, a2 = a0,
+                                a3 = a0;
+                    for (unsigned int y = 0; y < kh_; ++y) {
+                      const int ih = h0 + (int)y;
+                      if (ih < 0 || ih >= Hi)
+                        continue;
+                      for (unsigned int x = 0; x < kw_; ++x) {
+                        const int iw = w0 + (int)x;
+                        if (iw < 0 || iw >= Wi)
+                          continue;
+                        const float *px = inp + ((size_t)ih * Wi + iw) * Cin;
+                        const float *wt =
+                          twp + (((size_t)y * kw_ + x) * Cin) * Cout + cb;
+                        for (unsigned int c = 0; c < Cin; ++c) {
+                          const float xv = px[c];
+                          const float *wv = wt + (size_t)c * Cout;
+                          a0 = vfmaq_n_f32(a0, vld1q_f32(wv + 0), xv);
+                          a1 = vfmaq_n_f32(a1, vld1q_f32(wv + 4), xv);
+                          a2 = vfmaq_n_f32(a2, vld1q_f32(wv + 8), xv);
+                          a3 = vfmaq_n_f32(a3, vld1q_f32(wv + 12), xv);
+                        }
+                      }
+                    }
+                    vst1q_f32(op + cb + 0, a0);
+                    vst1q_f32(op + cb + 4, a1);
+                    vst1q_f32(op + cb + 8, a2);
+                    vst1q_f32(op + cb + 12, a3);
+                  }
+                }
+              });
+            continue;
+          }
+#endif
+          const std::vector<float> &W2 = getNhwcConvWeight(
+            filter_kernel.getData(),
+            is_q8f ? nullptr : filter_kernel.getData<float>(),
+            is_q8f ? filter_kernel.getData<int8_t>() : nullptr,
+            is_q8f ? (const float *)filter_kernel.getScale() : nullptr, Cout,
+            Cin, kh_, kw_);
+          const int Hi = in_dim.height(), Wi = in_dim.width();
+          const int Ho = out_dim.height(), Wo = out_dim.width();
+          const int sh = stride[0].get(), sw = stride[1].get();
+          const int ptop = padding[0], pleft = padding[2];
+          const float *inp = in_sub.getData<float>();
+          float *colp = col_scratch->getBatchSlice(b, 1).getData<float>();
+          auto &tmc = ThreadManager::Global();
+          const auto tf0 = std::chrono::steady_clock::now();
+          tmc.parallel_for(0, (size_t)Ho, [=](size_t ohs) {
+            const int oh = (int)ohs;
+            for (int ow = 0; ow < Wo; ++ow) {
+              float *dst = colp + ((size_t)oh * Wo + ow) * crs;
+              for (unsigned int y = 0; y < kh_; ++y) {
+                const int ih = oh * sh - ptop + (int)y;
+                for (unsigned int x = 0; x < kw_; ++x, dst += Cin) {
+                  const int iw = ow * sw - pleft + (int)x;
+                  if (ih < 0 || ih >= Hi || iw < 0 || iw >= Wi)
+                    std::memset(dst, 0, (size_t)Cin * sizeof(float));
+                  else
+                    std::memcpy(dst, inp + ((size_t)ih * Wi + iw) * Cin,
+                                (size_t)Cin * sizeof(float));
+                }
+              }
+            }
+          });
+          const auto tf1 = std::chrono::steady_clock::now();
+          // out[OH*OW, Cout] = col[OH*OW, CRS] . W2[Cout, CRS]^T
+          nntrainer::sgemm(0 /*row major*/, false, true, owoh, Cout,
+                           (unsigned int)crs, 1.0f, colp, (unsigned int)crs,
+                           W2.data(), (unsigned int)crs, 0.0f,
+                           out.getData<float>(), Cout);
+          if (std::getenv("NNTR_CONV_TIME")) {
+            const auto tf2 = std::chrono::steady_clock::now();
+            std::cerr
+              << "[CONVFAST] " << context.getName() << " im2col "
+              << std::chrono::duration<double, std::milli>(tf1 - tf0).count()
+              << " ms, sgemm "
+              << std::chrono::duration<double, std::milli>(tf2 - tf1).count()
+              << " ms\n";
+          }
+          continue;
         }
 
         if (weight_is_quant) {
