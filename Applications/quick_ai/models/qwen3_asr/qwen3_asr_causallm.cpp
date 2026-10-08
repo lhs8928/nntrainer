@@ -17,6 +17,7 @@
 #include <engine.h>
 #include <multimodal_scatter.h>
 #include <reshaped_rms_norm.h>
+#include <mha_core.h>
 #include <tie_word_embedding.h>
 #include <swiglu.h>
 #include <nhwc_to_nchw.h>
@@ -316,6 +317,21 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
   }
 
   auto t_run_start = std::chrono::high_resolution_clock::now();
+  // The model object can be reused for many segments. Per-run state to reset:
+  //  - the previous transcription text,
+  //  - the audio tower attention layers' internal cache_index: their
+  //    forwarding() advances it (and setKVCachePosition() deliberately skips
+  //    them), so a second run would start past the end of their cache.
+  for (auto &o : output_list)
+    o.clear();
+  model->forEachLayer(
+    [](ml::train::Layer &l, nntrainer::RunLayerContext &, void *) {
+      if (l.getType() == quick_ai::MHACoreLayer::type &&
+          l.getName().rfind("audio_tower_", 0) == 0) {
+        l.setProperty({"cache_index=0"});
+      }
+    },
+    nullptr);
   double mel_time_ms = 0.0;
   double audio_duration_sec = 0.0;
 
@@ -338,7 +354,12 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
     auto t_mel_start = std::chrono::high_resolution_clock::now();
     std::vector<float> mel_features;
     quick_ai::AudioPreprocessor preprocessor;
-    if (!audio_path.empty()) {
+    if (!audio_pcm.empty()) {
+      // in-memory segment (streaming / segment mode)
+      std::vector<float> pcm = audio_pcm;
+      audio_duration_sec = static_cast<double>(pcm.size()) / 16000.0;
+      mel_features = preprocessor.computeMelSpectrogram(pcm);
+    } else if (!audio_path.empty()) {
       std::cout << "[Qwen3-ASR] Loading and preprocessing audio WAV: " << audio_path << std::endl;
       std::vector<float> pcm = preprocessor.loadWav(audio_path);
       audio_duration_sec = static_cast<double>(pcm.size()) / 16000.0;
@@ -564,6 +585,7 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
     transcription = transcription.substr(asr_pos + 10);
   }
 
+  last_transcription = transcription;
   std::cout << "\n[Qwen3-ASR] Output: " << transcription << std::endl;
   std::cout << "[Qwen3-ASR] Prefill: " << init_len << " tokens in " << prefill_ms << " ms ("
             << prefill_tps << " TPS)" << std::endl;
