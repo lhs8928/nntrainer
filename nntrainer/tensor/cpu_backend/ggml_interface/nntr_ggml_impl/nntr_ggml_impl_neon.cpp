@@ -152,6 +152,129 @@ void nntr_gemv_q4_0_4x8_q8_0_fp16(int n, __fp16 *__restrict s, size_t bs,
 }
 #endif // ENABLE_FP16
 
+/**
+ * @brief Q4_0(4x8) x Q8_0(4x8) GEMM for CPUs with SDOT but without i8mm
+ * (e.g. Cortex-A76 / Raspberry Pi 5).
+ *
+ * One 16-byte load of the activation block holds rows (2p, 2p+1) for 8 k's,
+ * which pairs with the weight registers [colX | colY]. Swapping the 64-bit
+ * halves of the weight registers (computed once per block and shared by all
+ * rows) yields the other diagonal, so no per-row 64-bit broadcast is needed.
+ * Each lane of P / Q holds one (col, row) dot product, which are unscrambled
+ * before the per-block scale is applied. Results are bit-identical to the
+ * previous per-row implementation. Processes RG * 4 rows per pass; the
+ * remaining row groups use RG = 1.
+ */
+namespace {
+template <typename OutT> struct q4_0_4x8_store;
+template <> struct q4_0_4x8_store<float> {
+  static inline void store(float *dst, float32x4_t v) { vst1q_f32(dst, v); }
+};
+#ifdef ENABLE_FP16
+template <> struct q4_0_4x8_store<_FP16> {
+  static inline void store(_FP16 *dst, float32x4_t v) {
+    vst1_f16((__fp16 *)dst, vcvt_f16_f32(v));
+  }
+};
+#endif
+
+template <int LANE>
+static inline float32x4_t q4_0_4x8_scale_lane(float32x4_t bdf,
+                                              float32x4_t adf) {
+  return vmulq_laneq_f32(bdf, adf, LANE);
+}
+
+template <typename OutT, int RG>
+static inline void q4_0_4x8_dotprod_tile(int nb, const uint8_t *b,
+                                         const uint8_t *a, OutT *s, size_t bs) {
+  constexpr size_t kBlkQ4x4 = 72;  // sizeof(block_q4_0x4)
+  constexpr size_t kBlkQ8x4 = 136; // sizeof(block_q8_0x4)
+
+  float32x4_t acc[RG * 4];
+  for (int i = 0; i < RG * 4; i++)
+    acc[i] = vdupq_n_f32(0.f);
+
+  const size_t a_row_stride = (size_t)nb * kBlkQ8x4;
+  const uint32x4_t mask = {~0u, 0u, ~0u, 0u};
+  const int8x16_t hi_mask = vdupq_n_s8((int8_t)0xf0);
+
+  for (int blk = 0; blk < nb; blk++) {
+    const uint8_t *bp = b + (size_t)blk * kBlkQ4x4;
+    // 1/16 compensates the nibble << 4 applied below
+    float32x4_t bdf =
+      vmulq_n_f32(vcvt_f32_f16(vld1_f16((const __fp16 *)bp)), 1.0f / 16.0f);
+    const int8_t *q = (const int8_t *)(bp + 8);
+    int8x16_t b0 = vld1q_s8(q), b1 = vld1q_s8(q + 16);
+    int8x16_t b2 = vld1q_s8(q + 32), b3 = vld1q_s8(q + 48);
+    // B0[i] = [col0|col1], B1[i] = [col2|col3] for k = 0-7, 8-15, 16-23, 24-31
+    const int8x16_t B0[4] = {vshlq_n_s8(b0, 4), vshlq_n_s8(b2, 4),
+                             vandq_s8(b0, hi_mask), vandq_s8(b2, hi_mask)};
+    const int8x16_t B1[4] = {vshlq_n_s8(b1, 4), vshlq_n_s8(b3, 4),
+                             vandq_s8(b1, hi_mask), vandq_s8(b3, hi_mask)};
+
+    for (int g = 0; g < RG; g++) {
+      const uint8_t *ap = a + g * a_row_stride + (size_t)blk * kBlkQ8x4;
+      float32x4_t adf = vcvt_f32_f16(vld1_f16((const __fp16 *)ap));
+      const int8_t *aq = (const int8_t *)(ap + 8);
+#pragma GCC unroll 2
+      for (int p = 0; p < 2; p++) {
+        int32x4_t X0 = vdupq_n_s32(0), X1 = X0, Y0 = X0, Y1 = X0;
+#pragma GCC unroll 4
+        for (int i = 0; i < 4; i++) {
+          int8x16_t av = vld1q_s8(aq + 32 * i + 16 * p); // [row 2p | row 2p+1]
+          int8x16_t as = vextq_s8(av, av, 8);            // [row 2p+1 | row 2p]
+          X0 = vdotq_s32_compat(X0, B0[i], av);
+          X1 = vdotq_s32_compat(X1, B1[i], av);
+          Y0 = vdotq_s32_compat(Y0, B0[i], as);
+          Y1 = vdotq_s32_compat(Y1, B1[i], as);
+        }
+        int32x4_t P = vpaddq_s32(X0, X1); // [c0r0, c1r1, c2r0, c3r1]
+        int32x4_t Q = vpaddq_s32(Y0, Y1); // [c0r1, c1r0, c2r1, c3r0]
+        int32x4_t even = vbslq_s32(mask, P, Q);
+        int32x4_t odd = vbslq_s32(mask, Q, P);
+        float32x4_t se, so;
+        if (p == 0) {
+          se = q4_0_4x8_scale_lane<0>(bdf, adf);
+          so = q4_0_4x8_scale_lane<1>(bdf, adf);
+        } else {
+          se = q4_0_4x8_scale_lane<2>(bdf, adf);
+          so = q4_0_4x8_scale_lane<3>(bdf, adf);
+        }
+        acc[g * 4 + 2 * p] =
+          vfmaq_f32(acc[g * 4 + 2 * p], vcvtq_f32_s32(even), se);
+        acc[g * 4 + 2 * p + 1] =
+          vfmaq_f32(acc[g * 4 + 2 * p + 1], vcvtq_f32_s32(odd), so);
+      }
+    }
+  }
+  for (int i = 0; i < RG * 4; i++)
+    q4_0_4x8_store<OutT>::store(s + (size_t)i * bs, acc[i]);
+}
+} // namespace
+
+template <typename OutT>
+static void nntr_gemm_q4_0_4x8_q8_0_dotprod(int n, OutT *s, size_t bs,
+                                            const void *vx, const void *vy,
+                                            int nr, int nc) {
+  constexpr size_t kBlkQ4x4 = 72;
+  constexpr size_t kBlkQ8x4 = 136;
+  const int nb = n / 32;
+  const uint8_t *b_base = (const uint8_t *)vx;
+  const uint8_t *a_base = (const uint8_t *)vy;
+  const size_t b_cs = (size_t)nb * kBlkQ4x4, a_rs = (size_t)nb * kBlkQ8x4;
+
+  for (int c = 0; c < nc; c += 4) {
+    const uint8_t *b = b_base + (size_t)(c / 4) * b_cs;
+    int r = 0;
+    for (; r + 8 <= nr; r += 8)
+      q4_0_4x8_dotprod_tile<OutT, 2>(nb, b, a_base + (size_t)(r / 4) * a_rs,
+                                     s + (size_t)r * bs + c, bs);
+    for (; r < nr; r += 4)
+      q4_0_4x8_dotprod_tile<OutT, 1>(nb, b, a_base + (size_t)(r / 4) * a_rs,
+                                     s + (size_t)r * bs + c, bs);
+  }
+}
+
 void nntr_gemm_q4_0_4x8_q8_0(int n, float *__restrict s, size_t bs,
                              const void *__restrict vx,
                              const void *__restrict vy, int nr, int nc) {
@@ -566,73 +689,7 @@ void nntr_gemm_q4_0_4x8_q8_0(int n, float *__restrict s, size_t bs,
                          "x24", "x25", "x26", "x27", "x28");
   return;
 #else
-  for (int c = 0; c < nc; c += ncols_interleaved) {
-    const block_q4_0x4 *b_col_base = (const block_q4_0x4 *)vx + (c / ncols_interleaved) * nb;
-    for (int r = 0; r < nr; r += 4) {
-      const block_q8_0x4 *a_row_base = (const block_q8_0x4 *)vy + (r / 4) * nb;
-
-      float32x4_t acc[4] = {vdupq_n_f32(0.0f), vdupq_n_f32(0.0f), vdupq_n_f32(0.0f), vdupq_n_f32(0.0f)};
-
-      const block_q4_0x4 *b_ptr = b_col_base;
-      const block_q8_0x4 *a_ptr = a_row_base;
-
-      for (int b = 0; b < nb; b++) {
-        int8x16_t b0 = vld1q_s8((const int8_t *)b_ptr->qs);
-        int8x16_t b1 = vld1q_s8((const int8_t *)b_ptr->qs + 16);
-        int8x16_t b2 = vld1q_s8((const int8_t *)b_ptr->qs + 32);
-        int8x16_t b3 = vld1q_s8((const int8_t *)b_ptr->qs + 48);
-        float16x4_t bd = vld1_f16((const __fp16 *)b_ptr->d);
-
-        int8x16_t b0_shl = b0 << 4;
-        int8x16_t b1_shl = b1 << 4;
-        int8x16_t b2_shl = b2 << 4;
-        int8x16_t b3_shl = b3 << 4;
-
-        int8x16_t b0_and = b0 & 0xf0U;
-        int8x16_t b1_and = b1 & 0xf0U;
-        int8x16_t b2_and = b2 & 0xf0U;
-        int8x16_t b3_and = b3 & 0xf0U;
-
-        for (int m = 0; m < 4; ++m) {
-          int8x8_t a0_raw = vld1_s8(&a_ptr->qs[m * 8]);
-          int8x8_t a1_raw = vld1_s8(&a_ptr->qs[32 + m * 8]);
-          int8x8_t a2_raw = vld1_s8(&a_ptr->qs[64 + m * 8]);
-          int8x8_t a3_raw = vld1_s8(&a_ptr->qs[96 + m * 8]);
-
-          int8x16_t a0 = vcombine_s8(a0_raw, a0_raw);
-          int8x16_t a1 = vcombine_s8(a1_raw, a1_raw);
-          int8x16_t a2 = vcombine_s8(a2_raw, a2_raw);
-          int8x16_t a3 = vcombine_s8(a3_raw, a3_raw);
-          float16x4_t ad = vdup_n_f16(((const __fp16 *)a_ptr->d)[m]);
-
-          int32x4_t ret0 = vdupq_n_s32(0);
-          int32x4_t ret1 = vdupq_n_s32(0);
-
-          ret0 = vdotq_s32_compat(ret0, b0_shl, a0);
-          ret1 = vdotq_s32_compat(ret1, b1_shl, a0);
-          ret0 = vdotq_s32_compat(ret0, b2_shl, a1);
-          ret1 = vdotq_s32_compat(ret1, b3_shl, a1);
-
-          ret0 = vdotq_s32_compat(ret0, b0_and, a2);
-          ret1 = vdotq_s32_compat(ret1, b1_and, a2);
-          ret0 = vdotq_s32_compat(ret0, b2_and, a3);
-          ret1 = vdotq_s32_compat(ret1, b3_and, a3);
-
-          int32x4_t ret = vpaddq_s32(ret0, ret1);
-
-          acc[m] = vfmaq_f32(acc[m], vcvtq_n_f32_s32(ret, 4),
-                             vmulq_f32(vcvt_f32_f16(ad), vcvt_f32_f16(bd)));
-        }
-
-        a_ptr++;
-        b_ptr++;
-      }
-
-      for (int m = 0; m < 4; ++m) {
-        vst1q_f32(&s[(r + m) * bs + c], acc[m]);
-      }
-    }
-  }
+  nntr_gemm_q4_0_4x8_q8_0_dotprod<float>(n, s, bs, vx, vy, nr, nc);
 #endif
 }
 
@@ -1076,73 +1133,7 @@ void nntr_gemm_q4_0_4x8_q8_0_fp16(int n, _FP16 *__restrict s, size_t bs,
                          "x24", "x25", "x26", "x27", "x28");
   return;
 #else
-  for (int c = 0; c < nc; c += ncols_interleaved) {
-    const block_q4_0x4 *b_col_base = (const block_q4_0x4 *)vx + (c / ncols_interleaved) * nb;
-    for (int r = 0; r < nr; r += 4) {
-      const block_q8_0x4 *a_row_base = (const block_q8_0x4 *)vy + (r / 4) * nb;
-
-      float32x4_t acc[4] = {vdupq_n_f32(0.0f), vdupq_n_f32(0.0f), vdupq_n_f32(0.0f), vdupq_n_f32(0.0f)};
-
-      const block_q4_0x4 *b_ptr = b_col_base;
-      const block_q8_0x4 *a_ptr = a_row_base;
-
-      for (int b = 0; b < nb; b++) {
-        int8x16_t b0 = vld1q_s8((const int8_t *)b_ptr->qs);
-        int8x16_t b1 = vld1q_s8((const int8_t *)b_ptr->qs + 16);
-        int8x16_t b2 = vld1q_s8((const int8_t *)b_ptr->qs + 32);
-        int8x16_t b3 = vld1q_s8((const int8_t *)b_ptr->qs + 48);
-        float16x4_t bd = vld1_f16((const __fp16 *)b_ptr->d);
-
-        int8x16_t b0_shl = b0 << 4;
-        int8x16_t b1_shl = b1 << 4;
-        int8x16_t b2_shl = b2 << 4;
-        int8x16_t b3_shl = b3 << 4;
-
-        int8x16_t b0_and = b0 & 0xf0U;
-        int8x16_t b1_and = b1 & 0xf0U;
-        int8x16_t b2_and = b2 & 0xf0U;
-        int8x16_t b3_and = b3 & 0xf0U;
-
-        for (int m = 0; m < 4; ++m) {
-          int8x8_t a0_raw = vld1_s8(&a_ptr->qs[m * 8]);
-          int8x8_t a1_raw = vld1_s8(&a_ptr->qs[32 + m * 8]);
-          int8x8_t a2_raw = vld1_s8(&a_ptr->qs[64 + m * 8]);
-          int8x8_t a3_raw = vld1_s8(&a_ptr->qs[96 + m * 8]);
-
-          int8x16_t a0 = vcombine_s8(a0_raw, a0_raw);
-          int8x16_t a1 = vcombine_s8(a1_raw, a1_raw);
-          int8x16_t a2 = vcombine_s8(a2_raw, a2_raw);
-          int8x16_t a3 = vcombine_s8(a3_raw, a3_raw);
-          float16x4_t ad = vdup_n_f16(((const __fp16 *)a_ptr->d)[m]);
-
-          int32x4_t ret0 = vdupq_n_s32(0);
-          int32x4_t ret1 = vdupq_n_s32(0);
-
-          ret0 = vdotq_s32_compat(ret0, b0_shl, a0);
-          ret1 = vdotq_s32_compat(ret1, b1_shl, a0);
-          ret0 = vdotq_s32_compat(ret0, b2_shl, a1);
-          ret1 = vdotq_s32_compat(ret1, b3_shl, a1);
-
-          ret0 = vdotq_s32_compat(ret0, b0_and, a2);
-          ret1 = vdotq_s32_compat(ret1, b1_and, a2);
-          ret0 = vdotq_s32_compat(ret0, b2_and, a3);
-          ret1 = vdotq_s32_compat(ret1, b3_and, a3);
-
-          int32x4_t ret = vpaddq_s32(ret0, ret1);
-
-          acc[m] = vfmaq_f32(acc[m], vcvtq_n_f32_s32(ret, 4),
-                             vmulq_f32(vcvt_f32_f16(ad), vcvt_f32_f16(bd)));
-        }
-
-        a_ptr++;
-        b_ptr++;
-      }
-
-      for (int m = 0; m < 4; ++m) {
-        vst1_f16((__fp16 *)&s[(r + m) * bs + c], vcvt_f16_f32(acc[m]));
-      }
-    }
-  }
+  nntr_gemm_q4_0_4x8_q8_0_dotprod<_FP16>(n, s, bs, vx, vy, nr, nc);
 #endif
 }
 #endif // ENABLE_FP16
