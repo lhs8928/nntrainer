@@ -10,6 +10,8 @@
 
 #ifndef __QWEN3_ASR_CAUSAL_LM_H__
 #define __QWEN3_ASR_CAUSAL_LM_H__
+#include <string>
+#include <vector>
 
 #include <causal_lm.h>
 #include "qwen3_asr_subsampler.h"
@@ -100,11 +102,27 @@ public:
 
   void setAudioPath(const std::string &path) { audio_path = path; }
 
+  /**
+   * @brief Use in-memory 16 kHz mono PCM (float, [-1, 1]) as the next run()'s
+   * audio instead of loading audio_path. Its length must equal the length the
+   * model was built for (audio_seq_len mel frames * 160 samples). Used by the
+   * segment / streaming mode to reuse one resident model for many segments.
+   */
+  void setAudioPcm(std::vector<float> pcm) { audio_pcm = std::move(pcm); }
+
+  /** @brief transcription (without the language tag) of the last run() */
+  const std::string &getLastTranscription() const { return last_transcription; }
+
+  /** @brief number of mel frames (10 ms each) the model was built for */
+  unsigned int getAudioSeqLen() const { return audio_seq_len; }
+
   ml::train::Model* getModel() { return model.get(); }
 
 
 private:
   std::string audio_path;
+  std::vector<float> audio_pcm;
+  std::string last_transcription;
 
 };
 
