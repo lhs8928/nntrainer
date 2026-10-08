@@ -33,6 +33,13 @@
 
 #include "ced/ced_transformer.h"
 #include "qwen3_asr_causallm.h"
+#include "audio_stream.h"
+#include <atomic>
+#include <condition_variable>
+#include <csignal>
+#include <deque>
+#include <mutex>
+#include <thread>
 #include "audio_preprocessor.h"
 #if !defined(_WIN32)
 #include <sys/resource.h>
@@ -193,6 +200,149 @@ std::string resolve_architecture(std::string model_type,
   return architecture;
 }
 
+
+namespace {
+
+std::atomic<bool> g_stream_stop{false};
+void onStreamSignal(int) { g_stream_stop.store(true); }
+
+/** @brief mute std::cout while alive (the model prints a long report per run) */
+struct CoutMute {
+  std::streambuf *old;
+  explicit CoutMute(bool on) : old(on ? std::cout.rdbuf(nullptr) : nullptr),
+                               on_(on) {}
+  ~CoutMute() {
+    if (on_) {
+      std::cout.rdbuf(old);
+      std::cout.clear();
+      std::cout.width(0);
+    }
+  }
+  bool on_;
+};
+
+/**
+ * @brief Segment-mode live loop: a capture thread reads PCM from `src` and cuts
+ *        it into segments (pause-aware), the calling thread runs the resident
+ *        model on every segment and prints its text.
+ */
+void runStreamMode(quick_ai::Qwen3ASRCausalLM &asr, quick_ai::PcmSource &src,
+                   float seg_min_sec, float silence_rms,
+                   const std::string &input_text, bool do_sample,
+                   const std::string &head, const std::string &tail,
+                   bool verbose, unsigned int max_waiting) {
+  using clk = std::chrono::steady_clock;
+  struct Item {
+    std::vector<float> pcm;
+    size_t start;
+    clk::time_point ready;
+  };
+  const size_t max_len = static_cast<size_t>(asr.getAudioSeqLen()) * 160;
+  const size_t min_len = static_cast<size_t>(seg_min_sec * 16000.0f);
+  std::mutex mtx;
+  std::condition_variable cv;
+  std::deque<Item> q;
+  bool done = false;
+  size_t max_backlog = 0, n_dropped = 0;
+  const auto t_begin = clk::now();
+
+  std::thread capture([&] {
+    quick_ai::Segmenter seg(min_len, max_len);
+    std::vector<float> buf(1600);
+    size_t n;
+    auto enqueue = [&](std::vector<float> &&s, size_t st) {
+      std::lock_guard<std::mutex> lk(mtx);
+      while (max_waiting > 0 && q.size() >= max_waiting) {
+        // too slow for real time: drop the oldest waiting segment
+        const Item &old = q.front();
+        // cerr: std::cout may be muted while the model is running
+        std::cerr << "[Stream] WARNING: dropped segment "
+                  << old.start / 16000.0 << "s-"
+                  << (old.start + old.pcm.size()) / 16000.0
+                  << "s (processing is slower than real time)" << std::endl;
+        ++n_dropped;
+        q.pop_front();
+      }
+      q.push_back({std::move(s), st, clk::now()});
+      max_backlog = std::max(max_backlog, q.size());
+      cv.notify_one();
+    };
+    std::vector<float> s;
+    size_t st = 0;
+    while (!g_stream_stop.load() &&
+           (n = src.read(buf.data(), buf.size())) > 0) {
+      seg.push(buf.data(), n);
+      while (seg.pop(s, st))
+        enqueue(std::move(s), st);
+    }
+    if (seg.flush(s, st) && s.size() >= 4800) // ignore < 0.3 s tails
+      enqueue(std::move(s), st);
+    std::lock_guard<std::mutex> lk(mtx);
+    done = true;
+    cv.notify_one();
+  });
+
+  std::signal(SIGINT, onStreamSignal);
+  std::signal(SIGTERM, onStreamSignal);
+  std::cout << "[Stream] segment length " << seg_min_sec << "-"
+            << max_len / 16000.0 << " s, silence threshold " << silence_rms
+            << " (RMS). Speak now; Ctrl-C to stop." << std::endl;
+
+  double audio_s = 0.0, proc_s = 0.0, max_delay_s = 0.0;
+  size_t n_seg = 0, n_skipped = 0;
+  while (true) {
+    Item it;
+    {
+      std::unique_lock<std::mutex> lk(mtx);
+      cv.wait(lk, [&] { return !q.empty() || done; });
+      if (q.empty())
+        break;
+      it = std::move(q.front());
+      q.pop_front();
+    }
+    const double t0 = it.start / 16000.0;
+    const double t1 = t0 + it.pcm.size() / 16000.0;
+    audio_s += it.pcm.size() / 16000.0;
+    ++n_seg;
+    const float peak = quick_ai::segmentPeakRms(it.pcm);
+    if (peak < silence_rms) {
+      ++n_skipped;
+      if (verbose)
+        std::cout << "[" << std::fixed << std::setprecision(1) << t0 << "s-"
+                  << t1 << "s] (silence, skipped)" << std::endl;
+      continue;
+    }
+    it.pcm.resize(max_len, 0.0f); // pad to the fixed model length with silence
+    asr.setAudioPcm(std::move(it.pcm));
+    const auto p0 = clk::now();
+    {
+      CoutMute mute(!verbose);
+      asr.run(input_text, do_sample, head, tail);
+    }
+    const auto p1 = clk::now();
+    const double ms = std::chrono::duration<double, std::milli>(p1 - p0).count();
+    const double delay_s =
+      std::chrono::duration<double>(p1 - it.ready).count();
+    proc_s += ms / 1000.0;
+    max_delay_s = std::max(max_delay_s, delay_s);
+    std::cout << "[" << std::fixed << std::setprecision(1) << t0 << "s-" << t1
+              << "s] " << asr.getLastTranscription() << "   (proc "
+              << std::setprecision(1) << ms / 1000.0 << " s, text ready "
+              << delay_s << " s after the segment ended)" << std::endl;
+  }
+  capture.join();
+  const double wall = std::chrono::duration<double>(clk::now() - t_begin).count();
+  std::cout << "[Stream] done: " << std::setprecision(1) << audio_s
+            << " s of audio in " << n_seg << " segment(s) (" << n_skipped
+            << " silent, " << n_dropped << " dropped), processing " << proc_s << " s (RTF "
+            << std::setprecision(2) << (audio_s > 0 ? proc_s / audio_s : 0.0)
+            << "), max text delay " << std::setprecision(1) << max_delay_s
+            << " s, max queue backlog " << max_backlog << ", wall " << wall
+            << " s" << std::endl;
+}
+
+} // namespace
+
 /**
  * @brief Entry point for loading, initializing, and running a CausalLM model.
  */
@@ -209,6 +359,66 @@ int main(int argc, char *argv[]) {
       break;
     }
   }
+
+  // Parse and consume --segment-sec <S>: process the --audio file in
+  // consecutive S-second segments with ONE resident model (segment mode).
+  float segment_sec = 0.0f;
+  float segment_min_sec = 0.0f;
+  float silence_rms = 0.005f;
+  std::string stream_file, mic_device;
+  // --language <Name>: force the output language (e.g. Korean, English) by
+  // appending "language <Name><asr_text>" to the prompt, so the model does not
+  // spend ~5 decode tokens (~0.5 s) per run on the language tag.
+  std::string forced_language;
+  // --max-backlog N: if the model falls behind real time and more than N
+  // segments are waiting, drop the oldest ones (bounded latency) and say so.
+  unsigned int max_backlog_opt = 2;
+  float stream_speed = 1.0f; // --stream-speed X: replay --stream-file X times faster (stress test)
+  bool stream_mic = false, stream_stdin = false, stream_verbose = false;
+  auto take_opt = [&](const char *name, bool has_value, std::string &val) {
+    for (int i = 1; i < argc; ++i) {
+      if (std::strcmp(argv[i], name) == 0 && (!has_value || i + 1 < argc)) {
+        const int n = has_value ? 2 : 1;
+        if (has_value)
+          val = argv[i + 1];
+        for (int j = i; j < argc - n; ++j)
+          argv[j] = argv[j + n];
+        argc -= n;
+        return true;
+      }
+    }
+    return false;
+  };
+  {
+    std::string v;
+    if (take_opt("--segment-sec", true, v))
+      segment_sec = std::stof(v);
+    if (take_opt("--segment-min-sec", true, v))
+      segment_min_sec = std::stof(v);
+    if (take_opt("--silence-rms", true, v))
+      silence_rms = std::stof(v);
+    if (take_opt("--stream-file", true, v))
+      stream_file = v;
+    if (take_opt("--mic-device", true, v))
+      mic_device = v;
+    if (take_opt("--mic", false, v))
+      stream_mic = true;
+    if (take_opt("--stdin-pcm", false, v))
+      stream_stdin = true;
+    if (take_opt("--stream-verbose", false, v))
+      stream_verbose = true;
+    if (take_opt("--language", true, v))
+      forced_language = v;
+    if (take_opt("--stream-speed", true, v))
+      stream_speed = std::stof(v);
+    if (take_opt("--max-backlog", true, v))
+      max_backlog_opt = static_cast<unsigned int>(std::stoul(v));
+  }
+  const bool stream_mode = !stream_file.empty() || stream_mic || stream_stdin;
+  if (stream_mode && segment_sec <= 0.0f)
+    segment_sec = 10.0f;
+  if (stream_mode && segment_min_sec <= 0.0f)
+    segment_min_sec = 0.9f * segment_sec;
 
   auto start_time = std::chrono::high_resolution_clock::now();
 
@@ -269,17 +479,25 @@ int main(int argc, char *argv[]) {
     }
     json nntr_cfg = quick_ai::LoadJsonFile(model_path + "/nntr_config.json");
 
-    if (!audio_path.empty()) {
+    if (!audio_path.empty() || stream_mode) {
       quick_ai::AudioPreprocessor preprocessor;
-      auto pcm = preprocessor.loadWav(audio_path);
+      std::vector<float> pcm;
+      if (!audio_path.empty())
+        pcm = preprocessor.loadWav(audio_path);
       unsigned int audio_frames = pcm.size() / 160;
       constexpr unsigned int MAX_AUDIO_FRAMES = 1200 * 100; // 20 minutes (1200s * 100fps)
       if (audio_frames > MAX_AUDIO_FRAMES) {
         audio_frames = MAX_AUDIO_FRAMES;
       }
+      if (segment_sec > 0.0f) {
+        // segment mode: the model is built once for exactly one segment
+        audio_frames = static_cast<unsigned int>(segment_sec * 100.0f + 0.5f);
+      }
       nntr_cfg["audio_seq_len"] = audio_frames;
       unsigned int audio_seq_len = get_feat_extract_output_lengths(audio_frames);
       unsigned int base_seq_len = nntr_cfg.value("init_seq_len", 15);
+      if (!forced_language.empty())
+        base_seq_len += 8; // room for the "language X<asr_text>" prompt tokens
       unsigned int num_to_generate = nntr_cfg.value("num_to_generate", 5);
       nntr_cfg["init_seq_len"] = base_seq_len + audio_seq_len;
       nntr_cfg["max_seq_len"] = base_seq_len + audio_seq_len + num_to_generate;
@@ -350,17 +568,23 @@ int main(int argc, char *argv[]) {
       std::cerr << std::endl;
       return EXIT_FAILURE;
     }
-    if (architecture == "Qwen3ASRForConditionalGeneration" && !audio_path.empty()) {
+    if (architecture == "Qwen3ASRForConditionalGeneration" &&
+        (!audio_path.empty() || stream_mode)) {
       auto *asr_model = dynamic_cast<quick_ai::Qwen3ASRCausalLM*>(model.get());
       if (asr_model) {
         asr_model->setAudioPath(audio_path);
         
         quick_ai::AudioPreprocessor preprocessor;
-        auto pcm = preprocessor.loadWav(audio_path);
+        std::vector<float> pcm;
+        if (!audio_path.empty())
+          pcm = preprocessor.loadWav(audio_path);
         unsigned int audio_frames = pcm.size() / 160;
         constexpr unsigned int MAX_AUDIO_FRAMES = 1200 * 100; // 20 minutes (1200s * 100fps)
         if (audio_frames > MAX_AUDIO_FRAMES) {
           audio_frames = MAX_AUDIO_FRAMES;
+        }
+        if (segment_sec > 0.0f) {
+          audio_frames = static_cast<unsigned int>(segment_sec * 100.0f + 0.5f);
         }
         unsigned int audio_seq_len = get_feat_extract_output_lengths(audio_frames);
         
@@ -370,6 +594,8 @@ int main(int argc, char *argv[]) {
         }
         input_text = "<|im_start|>system\n<|im_end|>\n<|im_start|>user\n<|audio_start|>" + 
                      pad_tokens + "<|audio_end|>" + input_text + "<|im_end|>\n<|im_start|>assistant\n";
+        if (!forced_language.empty())
+          input_text += "language " + forced_language + "<asr_text>";
         
         system_head_prompt.clear();
         system_tail_prompt.clear();
@@ -385,12 +611,69 @@ int main(int argc, char *argv[]) {
 #ifdef PROFILE
     start_peak_tracker();
 #endif
+    auto *asr_seg_model =
+      dynamic_cast<quick_ai::Qwen3ASRCausalLM *>(model.get());
+    if (stream_mode && asr_seg_model != nullptr) {
+      std::unique_ptr<quick_ai::PcmSource> source;
+      if (!stream_file.empty()) {
+        quick_ai::AudioPreprocessor sp;
+        source = std::make_unique<quick_ai::WavRealtimeSource>(
+          sp.loadWav(stream_file), stream_speed);
+      } else if (stream_mic) {
+        const std::string dev = mic_device.empty() ? "default" : mic_device;
+        source = std::make_unique<quick_ai::PipeSource>(
+          "arecord -q -D " + dev + " -f S16_LE -r 16000 -c 1 -t raw");
+      } else {
+        source = std::make_unique<quick_ai::PipeSource>("");
+      }
+      runStreamMode(*asr_seg_model, *source, segment_min_sec, silence_rms,
+                    input_text, do_sample, system_head_prompt,
+                    system_tail_prompt, stream_verbose, max_backlog_opt);
+    } else if (segment_sec > 0.0f && asr_seg_model != nullptr &&
+               !audio_path.empty()) {
+      // ---- segment mode: one resident model, many segments ----------------
+      quick_ai::AudioPreprocessor seg_pre;
+      std::vector<float> all = seg_pre.loadWav(audio_path);
+      const size_t seg_samples =
+        static_cast<size_t>(asr_seg_model->getAudioSeqLen()) * 160;
+      const size_t num_segs = (all.size() + seg_samples - 1) / seg_samples;
+      std::cout << "[Segment] " << all.size() / 16000.0 << " s of audio, "
+                << num_segs << " segment(s) of " << seg_samples / 16000.0
+                << " s" << std::endl;
+      double total_proc_ms = 0.0;
+      std::string full_text;
+      for (size_t k = 0; k < num_segs; ++k) {
+        const size_t b = k * seg_samples;
+        const size_t e = std::min(all.size(), b + seg_samples);
+        std::vector<float> seg(all.begin() + b, all.begin() + e);
+        seg.resize(seg_samples, 0.0f); // pad the last segment with silence
+        asr_seg_model->setAudioPcm(std::move(seg));
+        auto t0 = std::chrono::high_resolution_clock::now();
+        model->run(input_text, do_sample, system_head_prompt,
+                   system_tail_prompt);
+        double ms = std::chrono::duration<double, std::milli>(
+                      std::chrono::high_resolution_clock::now() - t0)
+                      .count();
+        total_proc_ms += ms;
+        const std::string &txt = asr_seg_model->getLastTranscription();
+        std::cout << "[SEG " << k << "] " << b / 16000.0 << "s-" << e / 16000.0
+                  << "s processed in " << ms << " ms: " << txt << std::endl;
+        if (!full_text.empty() && !txt.empty())
+          full_text += " ";
+        full_text += txt;
+      }
+      std::cout << "[Segment] total processing " << total_proc_ms
+                << " ms for " << all.size() / 16000.0 << " s of audio (RTF "
+                << total_proc_ms / 1000.0 / (all.size() / 16000.0) << ")\n"
+                << "[Segment] FULL TEXT: " << full_text << std::endl;
+    } else {
 #if defined(_WIN32)
     model->run(input_text.c_str(), do_sample, system_head_prompt.c_str(),
                system_tail_prompt.c_str());
 #else
     model->run(input_text, do_sample, system_head_prompt, system_tail_prompt);
 #endif
+    }
 #ifdef PROFILE
     stop_and_print_peak();
 #endif
