@@ -572,7 +572,8 @@ void __ggml_q4_0_4x8_q8_0_GEMM(const unsigned int M, const unsigned int N,
     __ggml_quantize_row_q8_0(A, (void *)QA.data(), K);
     auto qa_data = QA.data();
 
-    const unsigned int n_threads = tm.getComputeThreadCount();
+    // Decode GEMV is DRAM-bandwidth bound: fewer threads are faster.
+    const unsigned int n_threads = tm.getMemBoundThreadCount();
     const unsigned int thread_num = n_threads == 0 ? 1 : n_threads;
 
     tm.parallel_for(0, static_cast<size_t>(thread_num), [=](size_t tid) {

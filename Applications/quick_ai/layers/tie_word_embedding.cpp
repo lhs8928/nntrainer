@@ -474,7 +474,8 @@ void TieWordEmbedding::incremental_forwarding_lmhead(
       float *logits = hidden_step.getData<float>();
 
       auto &tm = nntrainer::ThreadManager::Global();
-      const unsigned int compute_thread_num = tm.getComputeThreadCount();
+      // lm_head GEMV streams the whole embedding table: DRAM-bound.
+      const unsigned int compute_thread_num = tm.getMemBoundThreadCount();
       const unsigned int thread_num =
         compute_thread_num == 0 ? 1 : compute_thread_num;
 
