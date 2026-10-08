@@ -189,6 +189,27 @@ public:
   }
 
   /**
+   * @brief number of threads to use for memory-bandwidth-bound work such as
+   * the M=1 (token decode) weight GEMV.
+   * @details Streaming the weights is limited by DRAM bandwidth, not by
+   * compute: on Raspberry Pi 5 (4x Cortex-A76) two threads already saturate
+   * the bus and four threads are slower (barrier cost + DRAM contention).
+   * Default 2; override with NNTR_MEMBOUND_THREADS. Always clamped to
+   * [1, getComputeThreadCount()].
+   */
+  uint32_t getMemBoundThreadCount() const {
+    static const uint32_t n = []() -> uint32_t {
+      const char *e = std::getenv("NNTR_MEMBOUND_THREADS");
+      if (!e)
+        return 2;
+      uint32_t v = static_cast<uint32_t>(std::strtoul(e, nullptr, 10));
+      return v < 1 ? 1 : v;
+    }();
+    const uint32_t total = getComputeThreadCount();
+    return n < total ? n : total;
+  }
+
+  /**
    * @brief set config with given parameter
    * @warning It should be called before first call of thread manager.
    */
