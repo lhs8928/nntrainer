@@ -13,7 +13,9 @@
  */
 
 #include <algorithm>
+#include <cmath>
 #include <numeric>
+#include <vector>
 
 #include <base_properties.h>
 #include <cpu_backend.h>
@@ -24,7 +26,138 @@
 #include <node_exporter.h>
 #include <util_func.h>
 
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
+
 namespace nntrainer {
+
+namespace {
+/**
+ * @brief Fused two-pass LayerNorm of one row in FP32:
+ *        y = (x - mean) / sqrt(mean((x - mean)^2) + eps) * gamma + beta
+ *        (same math as the generic average/subtract/pow/multiply chain, one
+ *        pass over memory instead of ~6 tensor ops with temporaries).
+ */
+inline void layerNormRowF32(const float *x, float *y, const float *g,
+                            const float *b, unsigned int W, float eps) {
+  unsigned int i = 0;
+  float sum = 0.f;
+#if defined(__ARM_NEON)
+  float32x4_t acc = vdupq_n_f32(0.f);
+  for (; i + 4 <= W; i += 4)
+    acc = vaddq_f32(acc, vld1q_f32(x + i));
+  sum = vaddvq_f32(acc);
+#endif
+  for (; i < W; ++i)
+    sum += x[i];
+  const float mean = sum / (float)W;
+
+  i = 0;
+  float sq = 0.f;
+#if defined(__ARM_NEON)
+  const float32x4_t vm = vdupq_n_f32(mean);
+  float32x4_t vacc = vdupq_n_f32(0.f);
+  for (; i + 4 <= W; i += 4) {
+    float32x4_t d = vsubq_f32(vld1q_f32(x + i), vm);
+    vacc = vfmaq_f32(vacc, d, d);
+  }
+  sq = vaddvq_f32(vacc);
+#endif
+  for (; i < W; ++i) {
+    const float d = x[i] - mean;
+    sq += d * d;
+  }
+  const float inv = 1.0f / std::sqrt(sq / (float)W + eps);
+
+  i = 0;
+#if defined(__ARM_NEON)
+  const float32x4_t vinv = vdupq_n_f32(inv);
+  for (; i + 4 <= W; i += 4) {
+    float32x4_t d = vmulq_f32(vsubq_f32(vld1q_f32(x + i), vm), vinv);
+    vst1q_f32(y + i, vfmaq_f32(vld1q_f32(b + i), d, vld1q_f32(g + i)));
+  }
+#endif
+  for (; i < W; ++i)
+    y[i] = (x[i] - mean) * inv * g[i] + b[i];
+}
+
+/**
+ * @brief Fused width-axis LayerNorm for FP32 (or FP16) activations with
+ *        FP32/FP16 gamma/beta. Replaces the average / subtract / pow /
+ *        average / multiply / multiply / add tensor-op chain (each a full pass
+ *        over a temporary).
+ * @return true if handled, false if the caller must use the generic path
+ */
+bool fusedLayerNorm(const Tensor &input, Tensor &output, const Tensor &gamma,
+                    const Tensor &beta, bool width_only, unsigned int from,
+                    unsigned int to, float epsilon) {
+  const TensorDim input_dim = input.getDim();
+  const auto in_t = input.getDataType();
+  const auto gb_t_ok = [](ml::train::TensorDim::DataType t) {
+    return t == ml::train::TensorDim::DataType::FP32
+#ifdef ENABLE_FP16
+           || t == ml::train::TensorDim::DataType::FP16
+#endif
+      ;
+  };
+  const bool in_ok = in_t == output.getDataType() && gb_t_ok(in_t);
+  if (!(width_only && in_ok && gb_t_ok(gamma.getDataType()) &&
+        gb_t_ok(beta.getDataType()) && gamma.size() == input_dim.width() &&
+        beta.size() == input_dim.width()))
+    return false;
+
+  const unsigned int W = input_dim.width();
+  const unsigned int row_dim_v = input_dim.height();
+  const unsigned int row_begin = (to > from && to <= row_dim_v) ? from : 0u;
+  const unsigned int row_end = (to > from && to <= row_dim_v) ? to : row_dim_v;
+
+  std::vector<float> gf(W), bf(W), xf, yf;
+  auto to_f32 = [W](const Tensor &t, std::vector<float> &dst) {
+    if (t.getDataType() == ml::train::TensorDim::DataType::FP32) {
+      std::copy(t.getData<float>(), t.getData<float>() + W, dst.begin());
+    }
+#ifdef ENABLE_FP16
+    else {
+      const _FP16 *p = t.getData<_FP16>();
+      for (unsigned int i = 0; i < W; ++i)
+        dst[i] = (float)p[i];
+    }
+#endif
+  };
+  to_f32(gamma, gf);
+  to_f32(beta, bf);
+  const bool is_fp32 = in_t == ml::train::TensorDim::DataType::FP32;
+  if (!is_fp32) {
+    xf.resize(W);
+    yf.resize(W);
+  }
+  for (unsigned int b = 0; b < input_dim.batch(); ++b) {
+    for (unsigned int c = 0; c < input_dim.channel(); ++c) {
+      for (unsigned int r = row_begin; r < row_end; ++r) {
+        if (is_fp32) {
+          layerNormRowF32(input.getAddress<float>(b, c, r, 0),
+                          output.getAddress<float>(b, c, r, 0), gf.data(),
+                          bf.data(), W, epsilon);
+        }
+#ifdef ENABLE_FP16
+        else {
+          const _FP16 *src = input.getAddress<_FP16>(b, c, r, 0);
+          _FP16 *dst = output.getAddress<_FP16>(b, c, r, 0);
+          for (unsigned int i = 0; i < W; ++i)
+            xf[i] = (float)src[i];
+          layerNormRowF32(xf.data(), yf.data(), gf.data(), bf.data(), W,
+                          epsilon);
+          for (unsigned int i = 0; i < W; ++i)
+            dst[i] = (_FP16)yf[i];
+        }
+#endif
+      }
+    }
+  }
+  return true;
+}
+} // namespace
 
 static constexpr size_t SINGLE_INOUT_IDX = 0;
 
@@ -144,6 +277,13 @@ void LayerNormalizationLayer::forwarding(RunLayerContext &context,
   Tensor &variance = context.getTensor(wt_idx[LNParams::variance]);
   Tensor &inv_std_dev = context.getTensor(wt_idx[LNParams::inv_std_dev]);
 
+  if (!training && fusedLayerNorm(input, output, gamma, beta,
+                                  normalize_axes.size() == 1 &&
+                                    normalize_axes[0] ==
+                                      ml::train::TensorDim::getNumDim() - 1,
+                                  0, 0, epsilon))
+    return;
+
   Tensor &temp_full_size = output;
   Tensor &temp_norm_size = inv_std_dev;
 
@@ -200,6 +340,13 @@ void LayerNormalizationLayer::incremental_forwarding(RunLayerContext &context,
   output_step_dim.height(to - from);
   normalize_step_dim.height(is_height_normalize ? to - from : 1);
   remain_step_dim.height(is_height_normalize ? 1 : to - from);
+
+  if (fusedLayerNorm(input, output, gamma, beta,
+                     normalize_axes.size() == 1 &&
+                       normalize_axes[0] ==
+                         ml::train::TensorDim::getNumDim() - 1,
+                     from, to, epsilon))
+    return;
 
   Tensor &temp_full_size = output;
   Tensor &temp_norm_size = inv_std_dev;
