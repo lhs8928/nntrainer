@@ -440,6 +440,54 @@ static inline double gprofNow() {
     .count();
 }
 
+#ifdef NNTR_HAS_Q4_0_ROWS4_GEMM
+/**
+ * @brief Quantize 4 FP16 rows to the "rows4" Q8_0 layout used by
+ *        nntr_gemm_q4_0_4x8_q8_0_rows4_fp16: per 32-element block
+ *        d[4] (fp16) followed by qs[4][32] (row-major). Same per-row scale and
+ *        rounding as __ggml_quantize_mat_q8_0_4x8; only the byte placement
+ *        differs, written with 8-byte vector stores instead of lane stores.
+ */
+static void __ggml_quantize_mat_q8_0_rows4(const _FP16 *__restrict x,
+                                           void *__restrict vy, int64_t k) {
+  assert(QK8_0 == 32);
+  assert(k % QK8_0 == 0);
+  const int nb = k / QK8_0;
+  block_q8_0x4 *__restrict y = (block_q8_0x4 *)vy;
+
+  for (int i = 0; i < nb; i++) {
+    for (int row = 0; row < 4; row++) {
+      float16x8_t srcv[4];
+      float16x8_t asrcv[4];
+      float16x8_t amaxv[2];
+      for (int j = 0; j < 4; j++)
+        srcv[j] = vld1q_f16(x + row * k + i * 32 + 8 * j);
+      for (int j = 0; j < 4; j++)
+        asrcv[j] = vabsq_f16(srcv[j]);
+      for (int j = 0; j < 2; j++)
+        amaxv[j] = vmaxq_f16(asrcv[2 * j], asrcv[2 * j + 1]);
+      amaxv[0] = vmaxq_f16(amaxv[0], amaxv[1]);
+      const float amax = vmaxvq_f16(amaxv[0]);
+      const float d = amax / ((1 << 7) - 1);
+      const float id = d ? 1.0f / d : 0.0f;
+      y[i].d[row] = nntr_compute_fp32_to_fp16(d);
+      for (int j = 0; j < 4; j++) {
+        const int16x8_t vi = __q8_0_scale_f16x8(srcv[j], id);
+        vst1_s8(&y[i].qs[row * 32 + 8 * j], vmovn_s16(vi));
+      }
+    }
+  }
+}
+#endif
+
+#ifdef NNTR_HAS_Q4_0_ROWS4_GEMM
+#define Q4_0_PREFILL_QUANT __ggml_quantize_mat_q8_0_rows4
+#define Q4_0_PREFILL_GEMM nntr_gemm_q4_0_4x8_q8_0_rows4_fp16
+#else
+#define Q4_0_PREFILL_QUANT __ggml_quantize_mat_q8_0_4x8
+#define Q4_0_PREFILL_GEMM nntr_gemm_q4_0_4x8_q8_0_fp16
+#endif
+
 static inline void __ggml_q4_0_4x8_q8_0_GEMM_BSTP(
   const unsigned int M, const unsigned int N, const unsigned int K,
   const _FP16 *A, const unsigned int lda, const void *B, const unsigned int ldb,
@@ -463,8 +511,7 @@ static inline void __ggml_q4_0_4x8_q8_0_GEMM_BSTP(
   double gp1 = gprof ? gprofNow() : 0;
 
   tm.parallel_for(0, static_cast<size_t>(M4), [=, &QA](size_t i) {
-    __ggml_quantize_mat_q8_0_4x8(A + 4 * i * K, QA.data() + i * qa_4_rows_size,
-                                 K);
+    Q4_0_PREFILL_QUANT(A + 4 * i * K, QA.data() + i * qa_4_rows_size, K);
   });
   double gp2 = gprof ? gprofNow() : 0;
   // Leftover 1..3 rows: zero-pad to one 4-row group so they go through the
@@ -473,8 +520,7 @@ static inline void __ggml_q4_0_4x8_q8_0_GEMM_BSTP(
   if (leftover_rows > 0) {
     std::vector<_FP16> pad((size_t)4 * K, (_FP16)0);
     std::copy(A + (size_t)M4 * 4 * K, A + (size_t)M * K, pad.begin());
-    __ggml_quantize_mat_q8_0_4x8(pad.data(), QA.data() + M4 * qa_4_rows_size,
-                                 K);
+    Q4_0_PREFILL_QUANT(pad.data(), QA.data() + M4 * qa_4_rows_size, K);
   }
 
   unsigned int row_chunk_size = 16;
@@ -495,10 +541,10 @@ static inline void __ggml_q4_0_4x8_q8_0_GEMM_BSTP(
     unsigned int c_end = std::min(col_chunk_size * (c + 1), N);
 
 #if defined(__ARM_NEON)
-    nntr_gemm_q4_0_4x8_q8_0_fp16(K, (_FP16 *)(C16 + r_start * N + c_start), ldc,
-                                 (void *)((char *)B + c_start * B_step),
-                                 (void *)(QA.data() + r_start * A_step),
-                                 r_end - r_start, c_end - c_start);
+    Q4_0_PREFILL_GEMM(K, (_FP16 *)(C16 + r_start * N + c_start), ldc,
+                      (void *)((char *)B + c_start * B_step),
+                      (void *)(QA.data() + r_start * A_step), r_end - r_start,
+                      c_end - c_start);
 #else
     unsigned int t_rows = r_end - r_start;
     unsigned int t_cols = c_end - c_start;
@@ -523,9 +569,9 @@ static inline void __ggml_q4_0_4x8_q8_0_GEMM_BSTP(
       unsigned int c_start = chunk_size * idx;
       unsigned int c_end = std::min(chunk_size * (idx + 1), (size_t)N);
 #if defined(__ARM_NEON)
-      nntr_gemm_q4_0_4x8_q8_0_fp16(K, tail16.data() + c_start, N,
-                                   (void *)((char *)B + c_start * B_step),
-                                   (void *)tail_qa, 4, c_end - c_start);
+      Q4_0_PREFILL_GEMM(K, tail16.data() + c_start, N,
+                        (void *)((char *)B + c_start * B_step), (void *)tail_qa,
+                        4, c_end - c_start);
 #else
       unsigned int t_cols = c_end - c_start;
       std::vector<float> tile(4 * t_cols);
