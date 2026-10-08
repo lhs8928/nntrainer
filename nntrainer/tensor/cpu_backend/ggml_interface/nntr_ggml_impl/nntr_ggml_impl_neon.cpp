@@ -1138,6 +1138,116 @@ void nntr_gemm_q4_0_4x8_q8_0_fp16(int n, _FP16 *__restrict s, size_t bs,
 }
 #endif // ENABLE_FP16
 
+#if defined(__ARM_FEATURE_DOTPROD) && !defined(__ARM_FEATURE_MATMUL_INT8) &&   \
+  defined(ENABLE_FP16)
+namespace {
+template <int LANE>
+static inline float32x4_t q4_0_rows4_scale_lane(float32x4_t bdf,
+                                                float32x4_t adf) {
+  return vmulq_laneq_f32(bdf, adf, LANE);
+}
+
+/**
+ * @brief RG * 4 rows x 4 cols tile of the rows4 SDOT GEMM (see header).
+ *
+ * The 4x8 weight block holds 8-byte chunks [c0|c1], [c2|c3] per k half; uzp
+ * regroups them into four 16-byte vectors V[g] whose 32-bit lanes are the
+ * columns for k bytes 4g..4g+3, so each by-element SDOT lane is one output
+ * column. Per (row, block): 8 SDOT, one fixed-point convert (the /16 that
+ * compensates the nibble << 4), one scale multiply and one FMA. Integer
+ * sums and float ops match the 4x8 kernels, so results are bit-identical.
+ */
+template <int RG>
+static inline void q4_0_rows4_tile(int nb, const uint8_t *b, const uint8_t *a,
+                                   _FP16 *s, size_t bs) {
+  constexpr size_t kBlkQ4x4 = 72;  // sizeof(block_q4_0x4)
+  constexpr size_t kBlkQ8x4 = 136; // sizeof(block_q8_0x4)
+  float32x4_t acc[RG * 4];
+  for (int i = 0; i < RG * 4; i++)
+    acc[i] = vdupq_n_f32(0.f);
+  const size_t a_rs = (size_t)nb * kBlkQ8x4;
+  const int8x16_t hi_mask = vdupq_n_s8((int8_t)0xf0);
+
+  for (int blk = 0; blk < nb; blk++) {
+    const uint8_t *bp = b + (size_t)blk * kBlkQ4x4;
+    const float32x4_t bdf = vcvt_f32_f16(vld1_f16((const __fp16 *)bp));
+    const int8_t *q = (const int8_t *)(bp + 8);
+    const int32x4_t b0 = vreinterpretq_s32_s8(vld1q_s8(q));
+    const int32x4_t b1 = vreinterpretq_s32_s8(vld1q_s8(q + 16));
+    const int32x4_t b2 = vreinterpretq_s32_s8(vld1q_s8(q + 32));
+    const int32x4_t b3 = vreinterpretq_s32_s8(vld1q_s8(q + 48));
+    const int8x16_t V[4] = {vreinterpretq_s8_s32(vuzp1q_s32(b0, b1)),
+                            vreinterpretq_s8_s32(vuzp2q_s32(b0, b1)),
+                            vreinterpretq_s8_s32(vuzp1q_s32(b2, b3)),
+                            vreinterpretq_s8_s32(vuzp2q_s32(b2, b3))};
+    int8x16_t lo[4], hi[4];
+#pragma GCC unroll 4
+    for (int g = 0; g < 4; g++) {
+      lo[g] = vshlq_n_s8(V[g], 4);
+      hi[g] = vandq_s8(V[g], hi_mask);
+    }
+    for (int g4 = 0; g4 < RG; g4++) {
+      const uint8_t *ap = a + g4 * a_rs + (size_t)blk * kBlkQ8x4;
+      const float32x4_t adf = vcvt_f32_f16(vld1_f16((const __fp16 *)ap));
+      const int8_t *aq = (const int8_t *)(ap + 8);
+#pragma GCC unroll 4
+      for (int m = 0; m < 4; m++) {
+        const int8x16_t alo = vld1q_s8(aq + m * 32);
+        const int8x16_t ahi = vld1q_s8(aq + m * 32 + 16);
+        int32x4_t r = vdupq_n_s32(0);
+        r = vdotq_laneq_s32(r, lo[0], alo, 0);
+        r = vdotq_laneq_s32(r, lo[1], alo, 1);
+        r = vdotq_laneq_s32(r, lo[2], alo, 2);
+        r = vdotq_laneq_s32(r, lo[3], alo, 3);
+        r = vdotq_laneq_s32(r, hi[0], ahi, 0);
+        r = vdotq_laneq_s32(r, hi[1], ahi, 1);
+        r = vdotq_laneq_s32(r, hi[2], ahi, 2);
+        r = vdotq_laneq_s32(r, hi[3], ahi, 3);
+        float32x4_t sc;
+        if (m == 0)
+          sc = q4_0_rows4_scale_lane<0>(bdf, adf);
+        else if (m == 1)
+          sc = q4_0_rows4_scale_lane<1>(bdf, adf);
+        else if (m == 2)
+          sc = q4_0_rows4_scale_lane<2>(bdf, adf);
+        else
+          sc = q4_0_rows4_scale_lane<3>(bdf, adf);
+        acc[g4 * 4 + m] = vfmaq_f32(acc[g4 * 4 + m], vcvtq_n_f32_s32(r, 4), sc);
+      }
+    }
+  }
+  for (int i = 0; i < RG * 4; i++)
+    vst1_f16((__fp16 *)(s + (size_t)i * bs), vcvt_f16_f32(acc[i]));
+}
+} // namespace
+
+void nntr_gemm_q4_0_4x8_q8_0_rows4_fp16(int n, _FP16 *__restrict s, size_t bs,
+                                        const void *__restrict vx,
+                                        const void *__restrict vy, int nr,
+                                        int nc) {
+  constexpr size_t kBlkQ4x4 = 72;
+  constexpr size_t kBlkQ8x4 = 136;
+  assert(n % 32 == 0);
+  assert(nr % 4 == 0);
+  assert(nc % 4 == 0);
+  const int nb = n / 32;
+  const uint8_t *b_base = (const uint8_t *)vx;
+  const uint8_t *a_base = (const uint8_t *)vy;
+  const size_t b_cs = (size_t)nb * kBlkQ4x4, a_rs = (size_t)nb * kBlkQ8x4;
+
+  for (int c = 0; c < nc; c += 4) {
+    const uint8_t *b = b_base + (size_t)(c / 4) * b_cs;
+    int r = 0;
+    for (; r + 8 <= nr; r += 8)
+      q4_0_rows4_tile<2>(nb, b, a_base + (size_t)(r / 4) * a_rs,
+                         s + (size_t)r * bs + c, bs);
+    for (; r < nr; r += 4)
+      q4_0_rows4_tile<1>(nb, b, a_base + (size_t)(r / 4) * a_rs,
+                         s + (size_t)r * bs + c, bs);
+  }
+}
+#endif // rows4 SDOT GEMM
+
 void nntr_gemm_q4_0_8x8_q8_0(int n, float *__restrict s, size_t bs,
                              const void *__restrict vx,
                              const void *__restrict vy, int nr, int nc) {

@@ -42,6 +42,24 @@ void nntr_gemm_q4_0_4x8_q8_0_fp16(int n, NNTR_GGML_FP16 *__restrict s,
                                   size_t bs, const void *__restrict vx,
                                   const void *__restrict vy, int nr, int nc);
 
+#if defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD) &&                   \
+  !defined(__ARM_FEATURE_MATMUL_INT8)
+/**
+ * @brief Q4_0 (4x8 interleaved) x Q8_0 "rows4" activation GEMM, FP16 output,
+ *        for SDOT-only CPUs (no i8mm, e.g. Cortex-A76 / Raspberry Pi 5).
+ *
+ * The activation block is block_q8_0x4-sized (136 B: d[4] fp16, then qs[4][32]
+ * row-major, i.e. qs[m * 32 + k]) so that a 16-byte load holds four 4-byte k
+ * groups and the by-element SDOT broadcasts them for free. Produce it with
+ * the matching quantizer in ggml_interface_fp16.cpp. Requires nr % 4 == 0.
+ */
+#define NNTR_HAS_Q4_0_ROWS4_GEMM 1
+void nntr_gemm_q4_0_4x8_q8_0_rows4_fp16(int n, NNTR_GGML_FP16 *__restrict s,
+                                        size_t bs, const void *__restrict vx,
+                                        const void *__restrict vy, int nr,
+                                        int nc);
+#endif
+
 /**
  * @brief Compute Q8_0 weights by Q8_0 activations GEMM, FP16 output (SMMLA)
  */
