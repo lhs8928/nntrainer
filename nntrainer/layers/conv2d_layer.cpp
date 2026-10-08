@@ -118,6 +118,123 @@ getNhwcConvWeight(const void *key, const float *w_fp32, const int8_t *w_q8,
   return cache.emplace(key, std::move(t)).first->second;
 }
 
+// ---- NHWC conv int8 (SDOT) path
+// ---------------------------------------------- For a per-out-channel QINT8
+// filter with an FP32 NHWC activation the FP32 im2col + sgemm route runs at
+// only ~70-80 GFLOPS on a 4x Cortex-A76. This path keeps the int8 filter,
+// quantizes the activation on the fly while gathering the taps (Q8_0 style: one
+// scale per 32 consecutive channels of a tap) and accumulates in int32 with
+// by-element SDOT (no i8mm needed).
+//   out[m][n] = wscale[n] * sum_blk ad[m][blk] * sum_k qa[m][k] * qw[n][k]
+// Weight pack: [n4][blk][g(8)][col(4)][4 bytes] (cols = 4 output channels,
+// g = 4-byte k group inside a 32-wide block, taps ordered (kh, kw, in)).
+// Activation pack per 4-row group: qs[4][crs] row-major, scales[nb][4] fp32.
+#if defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+#define NNTR_CONV_I8_SDOT 1
+struct ConvI8Weight {
+  std::vector<int8_t> w4;
+  std::vector<float> scale;
+};
+
+static const ConvI8Weight &getConvI8Weight(const void *key, const int8_t *q8,
+                                           const float *scale,
+                                           unsigned int out_ch,
+                                           unsigned int in_ch, unsigned int kh,
+                                           unsigned int kw) {
+  static std::mutex mtx;
+  static std::unordered_map<const void *, ConvI8Weight> cache;
+  std::lock_guard<std::mutex> lk(mtx);
+  auto it = cache.find(key);
+  if (it != cache.end())
+    return it->second;
+  const size_t crs = (size_t)in_ch * kh * kw;
+  const size_t nb = crs / 32;
+  ConvI8Weight w;
+  w.w4.assign((size_t)out_ch * crs, 0);
+  w.scale.resize(out_ch);
+  for (unsigned int o = 0; o < out_ch; ++o) {
+    w.scale[o] = scale ? scale[o] : 1.f;
+    const size_t n4 = o / 4, col = o % 4;
+    for (unsigned int c = 0; c < in_ch; ++c)
+      for (unsigned int y = 0; y < kh; ++y)
+        for (unsigned int x = 0; x < kw; ++x) {
+          const size_t kk = ((size_t)y * kw + x) * in_ch + c;
+          const size_t blk = kk / 32, kin = kk % 32;
+          w.w4[((n4 * nb + blk) * 8 + kin / 4) * 16 + col * 4 + kin % 4] =
+            q8[(((size_t)o * in_ch + c) * kh + y) * kw + x];
+        }
+  }
+  return cache.emplace(key, std::move(w)).first->second;
+}
+
+/** quantize 32 floats -> int8 (Q8_0: scale = amax / 127, round to nearest even)
+ */
+static inline float convQuantBlock32(const float *x, int8_t *q) {
+  float32x4_t v[8];
+  for (int i = 0; i < 8; ++i)
+    v[i] = vld1q_f32(x + 4 * i);
+  float32x4_t m = vabsq_f32(v[0]);
+  for (int i = 1; i < 8; ++i)
+    m = vmaxq_f32(m, vabsq_f32(v[i]));
+  const float amax = vmaxvq_f32(m);
+  const float d = amax / 127.f;
+  const float id = d ? 1.f / d : 0.f;
+  for (int i = 0; i < 4; ++i) {
+    const int32x4_t a = vcvtnq_s32_f32(vmulq_n_f32(v[2 * i], id));
+    const int32x4_t b = vcvtnq_s32_f32(vmulq_n_f32(v[2 * i + 1], id));
+    vst1_s8(q + 8 * i, vmovn_s16(vcombine_s16(vmovn_s32(a), vmovn_s32(b))));
+  }
+  return d;
+}
+
+/** RG*4 rows x 4 cols tile over the full K (nb blocks of 32). */
+template <int RG>
+static inline void convI8Tile(size_t nb, size_t crs, const int8_t *qa,
+                              const float *as, const int8_t *w4,
+                              const float *wscale, float *out, size_t ldc) {
+  float32x4_t acc[RG * 4];
+  for (int i = 0; i < RG * 4; ++i)
+    acc[i] = vdupq_n_f32(0.f);
+  for (size_t blk = 0; blk < nb; ++blk) {
+    const int8_t *wp = w4 + blk * 128;
+    int8x16_t W[8];
+    for (int g = 0; g < 8; ++g)
+      W[g] = vld1q_s8(wp + 16 * g);
+    for (int g4 = 0; g4 < RG; ++g4) {
+      const float32x4_t ad = vld1q_f32(as + ((size_t)g4 * nb + blk) * 4);
+      const int8_t *aq = qa + (size_t)g4 * 4 * crs + blk * 32;
+#pragma GCC unroll 4
+      for (int m = 0; m < 4; ++m) {
+        const int8x16_t alo = vld1q_s8(aq + (size_t)m * crs);
+        const int8x16_t ahi = vld1q_s8(aq + (size_t)m * crs + 16);
+        int32x4_t r = vdupq_n_s32(0);
+        r = vdotq_laneq_s32(r, W[0], alo, 0);
+        r = vdotq_laneq_s32(r, W[1], alo, 1);
+        r = vdotq_laneq_s32(r, W[2], alo, 2);
+        r = vdotq_laneq_s32(r, W[3], alo, 3);
+        r = vdotq_laneq_s32(r, W[4], ahi, 0);
+        r = vdotq_laneq_s32(r, W[5], ahi, 1);
+        r = vdotq_laneq_s32(r, W[6], ahi, 2);
+        r = vdotq_laneq_s32(r, W[7], ahi, 3);
+        const float32x4_t f = vcvtq_f32_s32(r);
+        float32x4_t &a = acc[g4 * 4 + m];
+        if (m == 0)
+          a = vfmaq_laneq_f32(a, f, ad, 0);
+        else if (m == 1)
+          a = vfmaq_laneq_f32(a, f, ad, 1);
+        else if (m == 2)
+          a = vfmaq_laneq_f32(a, f, ad, 2);
+        else
+          a = vfmaq_laneq_f32(a, f, ad, 3);
+      }
+    }
+  }
+  const float32x4_t ws = vld1q_f32(wscale);
+  for (int i = 0; i < RG * 4; ++i)
+    vst1q_f32(out + (size_t)i * ldc, vmulq_f32(acc[i], ws));
+}
+#endif // __ARM_NEON && __ARM_FEATURE_DOTPROD
+
 // ---- Depthwise int8 (channel-wise symmetric) weight cache -----------------
 // W8A8 depthwise: the weight file never stores depthwise filters quantized
 // (grouped convs are incompatible with the Q8_0/matmul GEMM strategy -- see
@@ -2495,6 +2612,97 @@ void Conv2DLayer::forwarding(RunLayerContext &context, bool training) {
                   }
                 }
               });
+            continue;
+          }
+#endif
+#ifdef NNTR_CONV_I8_SDOT
+          static const bool conv_i8_enabled = [] {
+            const char *e = std::getenv("NNTR_CONV_INT8");
+            return !(e && std::string(e) == "0");
+          }();
+          if (conv_i8_enabled && is_q8f && Cin % 32 == 0 && Cout % 4 == 0 &&
+              owoh % 4 == 0) {
+            const ConvI8Weight &W8 = getConvI8Weight(
+              filter_kernel.getData(), filter_kernel.getData<int8_t>(),
+              (const float *)filter_kernel.getScale(), Cout, Cin, kh_, kw_);
+            const int Hi = in_dim.height(), Wi = in_dim.width();
+            const int Ho = out_dim.height(), Wo = out_dim.width();
+            const int sh = stride[0].get(), sw = stride[1].get();
+            const int ptop = padding[0], pleft = padding[2];
+            const float *inp = in_sub.getData<float>();
+            const size_t nbk = crs / 32;
+            const size_t rows = owoh;
+            static thread_local std::vector<int8_t> qa_buf;
+            static thread_local std::vector<float> as_buf;
+            qa_buf.resize(rows * crs);
+            as_buf.resize(rows * nbk);
+            int8_t *qa = qa_buf.data();
+            float *as = as_buf.data();
+            auto &tmi = ThreadManager::Global();
+            const auto ti0 = std::chrono::steady_clock::now();
+            // gather + quantize, parallel over output rows (oh)
+            tmi.parallel_for(0, (size_t)Ho, [=](size_t ohs) {
+              const int oh = (int)ohs;
+              for (int ow = 0; ow < Wo; ++ow) {
+                const size_t p = (size_t)oh * Wo + ow;
+                int8_t *qrow = qa + (p / 4) * 4 * crs + (p % 4) * crs;
+                float *srow = as + (p / 4) * nbk * 4 + (p % 4);
+                size_t blk = 0;
+                for (unsigned int y = 0; y < kh_; ++y) {
+                  const int ih = oh * sh - ptop + (int)y;
+                  for (unsigned int x = 0; x < kw_; ++x) {
+                    const int iw = ow * sw - pleft + (int)x;
+                    const bool in_range =
+                      !(ih < 0 || ih >= Hi || iw < 0 || iw >= Wi);
+                    const float *px =
+                      in_range ? inp + ((size_t)ih * Wi + iw) * Cin : nullptr;
+                    for (unsigned int c = 0; c < Cin; c += 32, ++blk) {
+                      if (px) {
+                        srow[blk * 4] =
+                          convQuantBlock32(px + c, qrow + blk * 32);
+                      } else {
+                        std::memset(qrow + blk * 32, 0, 32);
+                        srow[blk * 4] = 0.f;
+                      }
+                    }
+                  }
+                }
+              }
+            });
+            const auto ti1 = std::chrono::steady_clock::now();
+            float *outp = out.getData<float>();
+            const size_t row_chunk = 16, col_chunk = 16;
+            const size_t rtiles = (rows + row_chunk - 1) / row_chunk;
+            const size_t ctiles = (Cout + col_chunk - 1) / col_chunk;
+            const int8_t *w4 = W8.w4.data();
+            const float *wsc = W8.scale.data();
+            tmi.parallel_for(0, rtiles * ctiles, [=](size_t t) {
+              const size_t r0 = (t / ctiles) * row_chunk;
+              const size_t r1 = std::min(r0 + row_chunk, rows);
+              const size_t c0 = (t % ctiles) * col_chunk;
+              const size_t c1 = std::min(c0 + col_chunk, (size_t)Cout);
+              for (size_t c = c0; c < c1; c += 4) {
+                const int8_t *wc = w4 + (c / 4) * nbk * 128;
+                size_t r = r0;
+                for (; r + 8 <= r1; r += 8)
+                  convI8Tile<2>(nbk, crs, qa + (r / 4) * 4 * crs,
+                                as + (r / 4) * nbk * 4, wc, wsc + c,
+                                outp + r * Cout + c, Cout);
+                for (; r < r1; r += 4)
+                  convI8Tile<1>(nbk, crs, qa + (r / 4) * 4 * crs,
+                                as + (r / 4) * nbk * 4, wc, wsc + c,
+                                outp + r * Cout + c, Cout);
+              }
+            });
+            if (std::getenv("NNTR_CONV_TIME")) {
+              const auto ti2 = std::chrono::steady_clock::now();
+              std::cerr
+                << "[CONVI8] " << context.getName() << " quant "
+                << std::chrono::duration<double, std::milli>(ti1 - ti0).count()
+                << " ms, gemm "
+                << std::chrono::duration<double, std::milli>(ti2 - ti1).count()
+                << " ms\n";
+            }
             continue;
           }
 #endif
