@@ -514,6 +514,7 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
   float *logits = output[0];
 
   // 6. Autoregressive Generation Loop
+  std::vector<std::vector<int>> gen_ids(BATCH_SIZE);
   unsigned int generation_cnt = 0;
   auto start_gen = std::chrono::high_resolution_clock::now();
 
@@ -533,7 +534,10 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
     for (unsigned int b = 0; b < BATCH_SIZE; ++b) {
       ids_history[b * MAX_SEQ_LEN + step] = next_token;
       input_sample[b * MAX_SEQ_LEN + step] = static_cast<float>(next_token);
-      output_list[b] += tokenizer->Decode({static_cast<int>(next_token)});
+      // Decoding token by token breaks multi-byte characters (Korean etc. are
+      // split over several byte-level tokens and come out as U+FFFD), so
+      // collect the ids and decode the whole sequence after the loop.
+      gen_ids[b].push_back(static_cast<int>(next_token));
     }
 
     generation_cnt++;
@@ -549,6 +553,9 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
 
   auto end_gen = std::chrono::high_resolution_clock::now();
   auto gen_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_gen - start_gen).count();
+
+  for (unsigned int b = 0; b < BATCH_SIZE; ++b)
+    output_list[b] = tokenizer->Decode(gen_ids[b]);
 
   // Extract recognized speech text (strip special token prefix if present)
   std::string transcription = output_list.empty() ? "" : output_list[0];
