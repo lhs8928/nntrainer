@@ -24,14 +24,15 @@
 #endif
 #include <algorithm>
 #include <assert.h>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
-#include <vector>
 #include <math.h>
 #include <stdint.h>
 #include <thread_manager.h>
+#include <vector>
 
 #if defined(__ARM_NEON)
 #if defined(ARMV7) && ARMV7
@@ -414,6 +415,31 @@ void __ggml_gemm_q6_K(const unsigned int M, const unsigned int N,
   }
 }
 
+// Optional profiling: per-phase timing of the Q4_0 prefill GEMM
+// (NNTR_PROFILE_GEMM=1)
+struct GemmPhaseProf {
+  double alloc_ms = 0, quant_ms = 0, gemm_ms = 0, tail_ms = 0;
+  unsigned long calls = 0;
+  double gops = 0;
+  ~GemmPhaseProf() {
+    if (!calls)
+      return;
+    printf("[GPROF] calls=%lu alloc=%.1f quant=%.1f gemm=%.1f tail=%.1f ms "
+           "(gemm %.1f GOPS)\n",
+           calls, alloc_ms, quant_ms, gemm_ms, tail_ms,
+           gops / (gemm_ms / 1e3) / 1e9);
+  }
+};
+static GemmPhaseProf &gemmPhaseProf() {
+  static GemmPhaseProf p;
+  return p;
+}
+static inline double gprofNow() {
+  return std::chrono::duration<double, std::milli>(
+           std::chrono::steady_clock::now().time_since_epoch())
+    .count();
+}
+
 static inline void __ggml_q4_0_4x8_q8_0_GEMM_BSTP(
   const unsigned int M, const unsigned int N, const unsigned int K,
   const _FP16 *A, const unsigned int lda, const void *B, const unsigned int ldb,
@@ -430,17 +456,25 @@ static inline void __ggml_q4_0_4x8_q8_0_GEMM_BSTP(
   unsigned int M4 = ((M - M % 4) / 4);
   int B_step = sizeof(block_q4_0) * (K / QK4_0);
 
+  static const bool gprof = std::getenv("NNTR_PROFILE_GEMM") != nullptr;
+  double gp0 = gprof ? gprofNow() : 0;
   unsigned int qa_size = qa_4_rows_size * (((M >> 2) << 2) / 4 + 1);
   std::vector<char> QA = std::vector<char>(qa_size);
+  double gp1 = gprof ? gprofNow() : 0;
 
   tm.parallel_for(0, static_cast<size_t>(M4), [=, &QA](size_t i) {
     __ggml_quantize_mat_q8_0_4x8(A + 4 * i * K, QA.data() + i * qa_4_rows_size,
                                  K);
   });
-  for (unsigned int i = M4 * 4; i < M; i++) {
-    __ggml_quantize_row_q8_0(
-      (_FP16 *)A + i * K,
-      (QA.data() + (M4 * qa_4_rows_size) + (i - M4 * 4) * qa_row_size), K);
+  double gp2 = gprof ? gprofNow() : 0;
+  // Leftover 1..3 rows: zero-pad to one 4-row group so they go through the
+  // same GEMM kernel (one weight pass) instead of one GEMV pass per row.
+  const unsigned int leftover_rows = M - M4 * 4;
+  if (leftover_rows > 0) {
+    std::vector<_FP16> pad((size_t)4 * K, (_FP16)0);
+    std::copy(A + (size_t)M4 * 4 * K, A + (size_t)M * K, pad.begin());
+    __ggml_quantize_mat_q8_0_4x8(pad.data(), QA.data() + M4 * qa_4_rows_size,
+                                 K);
   }
 
   unsigned int row_chunk_size = 16;
@@ -479,27 +513,42 @@ static inline void __ggml_q4_0_4x8_q8_0_GEMM_BSTP(
 #endif
   });
 
-  // Leftover 1..3 rows still go through the FP32-output GEMV kernel into a
-  // small per-(M%4) scratch, then we cast just that tail back into C16.
-  unsigned int leftover_rows = M - M4 * 4;
+  double gp3 = gprof ? gprofNow() : 0;
   if (leftover_rows > 0) {
-    std::vector<float> tail32(leftover_rows * (size_t)N);
+    std::vector<_FP16> tail16((size_t)4 * N);
+    const char *tail_qa = QA.data() + (size_t)M4 * qa_4_rows_size;
     unsigned int chunk_size = 16;
     unsigned int loop = (N + chunk_size - 1) / chunk_size;
-    for (unsigned int pb = M4 * 4; pb < M; pb++) {
-      tm.parallel_for(0, loop, [=, &tail32](size_t idx) {
-        unsigned int M_step_start = chunk_size * idx;
-        unsigned int M_step_end = std::min(chunk_size * (idx + 1), (size_t)N);
-
-        nntr_gemv_q4_0_4x8_q8_0(
-          K, (float *)(tail32.data() + (pb - M4 * 4) * N) + M_step_start, N,
-          (void *)((char *)B + M_step_start * B_step),
-          QA.data() + (M4 * qa_4_rows_size) + (pb - M4 * 4) * qa_row_size, 1,
-          M_step_end - M_step_start);
-      });
-    }
-    __copy_f16_from_f32(tail32.data(), C16 + (size_t)M4 * 4 * N,
-                        (size_t)leftover_rows * N);
+    tm.parallel_for(0, loop, [=, &tail16](size_t idx) {
+      unsigned int c_start = chunk_size * idx;
+      unsigned int c_end = std::min(chunk_size * (idx + 1), (size_t)N);
+#if defined(__ARM_NEON)
+      nntr_gemm_q4_0_4x8_q8_0_fp16(K, tail16.data() + c_start, N,
+                                   (void *)((char *)B + c_start * B_step),
+                                   (void *)tail_qa, 4, c_end - c_start);
+#else
+      unsigned int t_cols = c_end - c_start;
+      std::vector<float> tile(4 * t_cols);
+      nntr_gemm_q4_0_4x8_q8_0(K, tile.data(), t_cols,
+                              (void *)((char *)B + c_start * B_step),
+                              (void *)tail_qa, 4, t_cols);
+      for (unsigned int ii = 0; ii < 4; ++ii)
+        __copy_f16_from_f32(&tile[ii * t_cols],
+                            tail16.data() + ii * N + c_start, t_cols);
+#endif
+    });
+    std::copy(tail16.begin(), tail16.begin() + (size_t)leftover_rows * N,
+              C16 + (size_t)M4 * 4 * N);
+  }
+  if (gprof) {
+    double gp4 = gprofNow();
+    auto &gp = gemmPhaseProf();
+    gp.calls++;
+    gp.alloc_ms += gp1 - gp0;
+    gp.quant_ms += gp2 - gp1;
+    gp.gemm_ms += gp3 - gp2;
+    gp.tail_ms += gp4 - gp3;
+    gp.gops += 2.0 * M4 * 4 * N * K;
   }
 }
 
