@@ -11,6 +11,7 @@
  */
 
 #include "plda_vbx.h"
+#include "online_speaker_tracker.h"
 #include <iostream>
 #include <cmath>
 #include <cstring>
@@ -94,11 +95,13 @@ static inline void normalize256(float *vec) {
   }
 }
 
-std::vector<SpeakerSegment> PldaVBx::diarize(
+static std::vector<SpeakerSegment> diarizeInternal(
     const std::vector<float> &embeddings,
     const std::vector<std::vector<float>> &segmentations,
     const std::vector<uint8_t> &speaker_counting,
-    size_t total_frames) {
+    size_t total_frames,
+    double window_offset_sec,
+    OnlineSpeakerTracker *tracker) {
 
   size_t num_chunks = segmentations.size();
   if (num_chunks == 0) return {};
@@ -312,16 +315,26 @@ std::vector<SpeakerSegment> PldaVBx::diarize(
     }
   }
 
-  // 6. Extract continuous speech segments with sub-second timestamps
+  // 6. Map local clusters to persistent global speaker profiles if tracker is provided
+  std::vector<int> global_mapping(num_clusters);
+  for (size_t k = 0; k < num_clusters; ++k) {
+    global_mapping[k] = static_cast<int>(k);
+  }
+  if (tracker) {
+    global_mapping = tracker->matchClusters(centroids, window_offset_sec);
+  }
+
+  // 7. Extract continuous speech segments with sub-second timestamps
   std::vector<SpeakerSegment> segments;
 
   for (size_t k = 0; k < num_clusters; ++k) {
     bool is_active = false;
     float start_time = 0.0f;
-    std::string label = "SPEAKER_" + (k < 10 ? std::string("0") : "") + std::to_string(k);
+    int gid = global_mapping[k];
+    std::string label = "SPEAKER_" + (gid < 10 ? std::string("0") : "") + std::to_string(gid);
 
     for (size_t t = 0; t < total_frames; ++t) {
-      float ts = t * static_cast<float>(FRAME_STEP_SEC) + 0.03096875f;
+      float ts = t * static_cast<float>(FRAME_STEP_SEC) + 0.03096875f + static_cast<float>(window_offset_sec);
       if (!is_active && diarization[t][k] > 0.5f) {
         is_active = true;
         start_time = ts;
@@ -334,7 +347,7 @@ std::vector<SpeakerSegment> PldaVBx::diarize(
       }
     }
     if (is_active) {
-      float end_time = (total_frames - 1) * static_cast<float>(FRAME_STEP_SEC) + 0.03096875f;
+      float end_time = (total_frames - 1) * static_cast<float>(FRAME_STEP_SEC) + 0.03096875f + static_cast<float>(window_offset_sec);
       if (end_time - start_time > 0.05f) {
         segments.push_back({label, start_time, end_time, end_time - start_time});
       }
@@ -350,6 +363,24 @@ std::vector<SpeakerSegment> PldaVBx::diarize(
   });
 
   return segments;
+}
+
+std::vector<SpeakerSegment> PldaVBx::diarize(
+    const std::vector<float> &embeddings,
+    const std::vector<std::vector<float>> &segmentations,
+    const std::vector<uint8_t> &speaker_counting,
+    size_t total_frames) {
+  return diarizeInternal(embeddings, segmentations, speaker_counting, total_frames, 0.0, nullptr);
+}
+
+std::vector<SpeakerSegment> PldaVBx::diarizeStreaming(
+    const std::vector<float> &embeddings,
+    const std::vector<std::vector<float>> &segmentations,
+    const std::vector<uint8_t> &speaker_counting,
+    size_t total_frames,
+    double window_offset_sec,
+    OnlineSpeakerTracker &tracker) {
+  return diarizeInternal(embeddings, segmentations, speaker_counting, total_frames, window_offset_sec, &tracker);
 }
 
 } // namespace speaker_diarization
