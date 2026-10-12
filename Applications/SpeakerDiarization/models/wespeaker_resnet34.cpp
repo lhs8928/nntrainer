@@ -45,8 +45,36 @@ static inline void matmul_fallback(size_t M, size_t N, size_t K, const float *A,
 
 namespace speaker_diarization {
 
-static inline float relu(float x) {
-  return std::max(0.0f, x);
+static inline void add_residual_relu_fast(float *out, const float *res, size_t count) {
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
+  const float32x4_t vzero = vdupq_n_f32(0.0f);
+  size_t i = 0;
+  for (; i + 16 <= count; i += 16) {
+    float32x4_t o0 = vaddq_f32(vld1q_f32(out + i + 0), vld1q_f32(res + i + 0));
+    float32x4_t o1 = vaddq_f32(vld1q_f32(out + i + 4), vld1q_f32(res + i + 4));
+    float32x4_t o2 = vaddq_f32(vld1q_f32(out + i + 8), vld1q_f32(res + i + 8));
+    float32x4_t o3 = vaddq_f32(vld1q_f32(out + i + 12), vld1q_f32(res + i + 12));
+
+    vst1q_f32(out + i + 0, vmaxq_f32(o0, vzero));
+    vst1q_f32(out + i + 4, vmaxq_f32(o1, vzero));
+    vst1q_f32(out + i + 8, vmaxq_f32(o2, vzero));
+    vst1q_f32(out + i + 12, vmaxq_f32(o3, vzero));
+  }
+  for (; i + 4 <= count; i += 4) {
+    float32x4_t o = vaddq_f32(vld1q_f32(out + i), vld1q_f32(res + i));
+    vst1q_f32(out + i, vmaxq_f32(o, vzero));
+  }
+  for (; i < count; ++i) {
+    float val = out[i] + res[i];
+    out[i] = (val > 0.0f) ? val : 0.0f;
+  }
+#else
+  #pragma omp parallel for schedule(static)
+  for (size_t i = 0; i < count; ++i) {
+    float val = out[i] + res[i];
+    out[i] = (val > 0.0f) ? val : 0.0f;
+  }
+#endif
 }
 
 static inline std::vector<int8_t> transpose_KN_to_NK(const int8_t *src, size_t K, size_t N) {
@@ -471,14 +499,30 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
         int32_t acc[4][4];
         dotI8Tile4x4(a_tile, K, cur_rows, w_tile, K, cur_cols, K, acc);
 
-        for (size_t c = 0; c < cur_cols; ++c) {
-          size_t out_n = n + c;
-          float eff_scale = act_scale * scales[out_n];
-          float b = bias ? bias[out_n] : 0.0f;
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
+        if (cur_cols == 4) {
+          float32x4_t vscale = vmulq_n_f32(vld1q_f32(scales + n), act_scale);
+          float32x4_t vbias = bias ? vld1q_f32(bias + n) : vdupq_n_f32(0.0f);
+          const float32x4_t vzero = vdupq_n_f32(0.0f);
 
           for (size_t r = 0; r < cur_rows; ++r) {
-            float val = static_cast<float>(acc[r][c]) * eff_scale + b;
-            out[(m + r) * N + out_n] = apply_relu ? std::max(0.0f, val) : val;
+            float32x4_t vval = vcvtq_f32_s32(vld1q_s32(&acc[r][0]));
+            vval = vmlaq_f32(vbias, vval, vscale);
+            if (apply_relu) vval = vmaxq_f32(vval, vzero);
+            vst1q_f32(out + (m + r) * N + n, vval);
+          }
+        } else
+#endif
+        {
+          for (size_t c = 0; c < cur_cols; ++c) {
+            size_t out_n = n + c;
+            float eff_scale = act_scale * scales[out_n];
+            float b = bias ? bias[out_n] : 0.0f;
+
+            for (size_t r = 0; r < cur_rows; ++r) {
+              float val = static_cast<float>(acc[r][c]) * eff_scale + b;
+              out[(m + r) * N + out_n] = apply_relu ? std::max(0.0f, val) : val;
+            }
           }
         }
       }
@@ -573,17 +617,9 @@ void WeSpeakerResNet34::runBasicBlock(const float *in, float *out, size_t in_h, 
               block.downsample_conv_w, block.downsample_w_i8_trans.data(),
               block.downsample_conv_s, block.downsample_conv_b, block.downsample_act_scale,
               /*apply_relu=*/false);
-    #pragma omp parallel for schedule(static)
-    for (size_t i = 0; i < total_out; ++i) {
-      float val = out[i] + ds_out[i];
-      out[i] = (val > 0.0f) ? val : 0.0f;
-    }
+    add_residual_relu_fast(out, ds_out.data(), total_out);
   } else {
-    #pragma omp parallel for schedule(static)
-    for (size_t i = 0; i < total_out; ++i) {
-      float val = out[i] + in[i];
-      out[i] = (val > 0.0f) ? val : 0.0f;
-    }
+    add_residual_relu_fast(out, in, total_out);
   }
 }
 
