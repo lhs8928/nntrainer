@@ -27,6 +27,8 @@
 #include <iostream>
 #include <chrono>
 #include <algorithm>
+#include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -556,6 +558,37 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
 
   for (unsigned int step = init_len; step < MAX_SEQ_LEN; ++step) {
     unsigned int next_token = applyTKP(logits, NUM_VOCAB, TEMPERATURE, TOP_K, TOP_P, rng);
+
+    // Debug aid: NNTR_DEBUG_TOPK=<k> prints the k most likely tokens (softmax
+    // probability) at every generation step, e.g. to see how close the
+    // end-of-text token was when a transcription stops early.
+    if (const char *dk = std::getenv("NNTR_DEBUG_TOPK")) {
+      const unsigned int k = std::max(1u, static_cast<unsigned int>(std::atoi(dk)));
+      float mx = logits[0];
+      for (unsigned int v = 1; v < NUM_VOCAB; ++v)
+        mx = std::max(mx, logits[v]);
+      double z = 0.0;
+      for (unsigned int v = 0; v < NUM_VOCAB; ++v)
+        z += std::exp(static_cast<double>(logits[v] - mx));
+      std::vector<unsigned int> idx(NUM_VOCAB);
+      for (unsigned int v = 0; v < NUM_VOCAB; ++v)
+        idx[v] = v;
+      std::partial_sort(idx.begin(), idx.begin() + k, idx.end(),
+                        [&](unsigned int a, unsigned int b) {
+                          return logits[a] > logits[b];
+                        });
+      std::cerr << "[TOPK] step " << (step - init_len) << " chosen " << next_token << " :";
+      for (unsigned int i = 0; i < k; ++i) {
+        const unsigned int t = idx[i];
+        std::string piece = tokenizer->Decode({static_cast<int>(t)});
+        for (auto &ch : piece)
+          if (ch == '\n')
+            ch = ' ';
+        std::cerr << "  " << t << "(" << piece << ") "
+                  << std::exp(static_cast<double>(logits[t] - mx)) / z;
+      }
+      std::cerr << std::endl;
+    }
 
     // clean up prefill/last step outputs
     for (auto out : output) {
