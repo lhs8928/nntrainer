@@ -291,7 +291,7 @@ static inline void quantize_f32_to_i8(const float *src, int8_t *dst, size_t coun
 #endif
 }
 
-// NHWC im2col with direct INT8 one-shot quantization (Zero intermediate float buffer)
+// NHWC im2col with direct single-pass INT8 quantization (Zero float buffer)
 static inline void im2col_nhwc_i8(const float *data_im, size_t in_c,
                                  size_t in_h, size_t in_w, size_t k_h, size_t k_w,
                                  size_t pad, size_t stride, float inv_scale, int8_t *data_col_i8) {
@@ -429,20 +429,23 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
   size_t N = out_c;
   size_t K = in_c * k_h * k_w;
 
-  // Native W8A8 Quantized GEMM with direct one-shot INT8 im2col (Zero float buffer)
+  // Native W8A8 Quantized GEMM with Seungbaek Hong's YOLOv7 Indirect Conv architecture
   if (weights_i8_trans && scales && act_scale > 0.0f) {
-    thread_local static std::vector<int8_t> a_i8;
-    if (a_i8.size() < M * K) {
-      a_i8.resize(M * K);
-    }
+    // 1. Quantize input feature map once in-place: [in_h, in_w, in_c]
+    thread_local static std::vector<int8_t> in_i8;
+    size_t in_size = in_h * in_w * in_c;
+    if (in_i8.size() < in_size) in_i8.resize(in_size);
     float inv_act_scale = 1.0f / act_scale;
+    quantize_f32_to_i8(in, in_i8.data(), in_size, inv_act_scale);
+
+    const int8_t *a_gemm_i8 = in_i8.data();
+    thread_local static std::vector<int8_t> a_i8;
 
     if (k_h == 1 && k_w == 1 && stride == 1 && pad == 0) {
-      #pragma omp parallel for schedule(static)
-      for (size_t m = 0; m < M; ++m) {
-        quantize_f32_to_i8(in + m * in_c, a_i8.data() + m * in_c, in_c, inv_act_scale);
-      }
+      if (a_i8.size() < M * in_c) a_i8.resize(M * in_c);
+      quantize_f32_to_i8(in, a_i8.data(), M * in_c, inv_act_scale);
     } else if (k_h == 1 && k_w == 1 && stride > 1 && pad == 0) {
+      if (a_i8.size() < M * in_c) a_i8.resize(M * in_c);
       #pragma omp parallel for schedule(static)
       for (size_t oh = 0; oh < out_h; ++oh) {
         const float *in_row = in + (oh * stride) * in_w * in_c;
@@ -452,6 +455,7 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
         }
       }
     } else {
+      if (a_i8.size() < M * K) a_i8.resize(M * K);
       im2col_nhwc_i8(in, in_c, in_h, in_w, k_h, k_w, pad, stride, inv_act_scale, a_i8.data());
     }
 
