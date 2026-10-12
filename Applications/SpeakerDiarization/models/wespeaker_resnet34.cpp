@@ -4,7 +4,7 @@
  *
  * @file   wespeaker_resnet34.cpp
  * @date   29 September 2026
- * @brief  WeSpeaker ResNet34 Speaker Embedding Model in NNTrainer (Fused Conv+BN NHWC)
+ * @brief  WeSpeaker ResNet34 Speaker Embedding Model in NNTrainer (Native W8A8 & W4 Quantized)
  * @see    https://github.com/nntrainer/nntrainer
  * @author Hyeonseok Lee <hs89.lee@samsung.com>
  * @bug    No known bugs except for NYI items
@@ -15,6 +15,11 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+
+#if (defined(__ARM_FEATURE_DOTPROD) && __ARM_FEATURE_DOTPROD) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+#endif
+
 #if defined(USE_BLAS)
 #include <cblas_interface.h>
 #define RUN_SGEMM(M, N, K, A, B, C) nntrainer::__cblas_sgemm(0, false, false, M, N, K, 1.0f, A, K, B, N, 0.0f, C, N)
@@ -44,6 +49,17 @@ static inline float relu(float x) {
   return std::max(0.0f, x);
 }
 
+static inline std::vector<int8_t> transpose_KN_to_NK(const int8_t *src, size_t K, size_t N) {
+  if (!src) return {};
+  std::vector<int8_t> dst(N * K);
+  for (size_t k = 0; k < K; ++k) {
+    for (size_t n = 0; n < N; ++n) {
+      dst[n * K + k] = src[k * N + n];
+    }
+  }
+  return dst;
+}
+
 // NHWC im2col: gathers input patches into Col[out_h * out_w, k_h * k_w * in_c]
 static inline void im2col_nhwc(const float *data_im, size_t in_c,
                               size_t in_h, size_t in_w, size_t k_h, size_t k_w,
@@ -52,7 +68,7 @@ static inline void im2col_nhwc(const float *data_im, size_t in_c,
   size_t out_w = (in_w + 2 * pad - k_w) / stride + 1;
   size_t K = k_h * k_w * in_c;
 
-  // Fast path for standard 3x3 stride-1 pad-1 convolution: merges 3 horizontal taps into a single contiguous memcpy
+  // Fast path for standard 3x3 stride-1 pad-1 convolution
   if (k_h == 3 && k_w == 3 && stride == 1 && pad == 1) {
     #pragma omp parallel for schedule(static)
     for (size_t oh = 0; oh < out_h; ++oh) {
@@ -109,7 +125,9 @@ static inline void im2col_nhwc(const float *data_im, size_t in_c,
 
 void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size_t out_c,
                                  size_t in_h, size_t in_w, size_t k_h, size_t k_w,
-                                 size_t stride, size_t pad, const float *weights, const float *bias,
+                                 size_t stride, size_t pad,
+                                 const float *weights_fp32, const int8_t *weights_i8_trans,
+                                 const float *scales, const float *bias, float act_scale,
                                  bool apply_relu) {
   size_t out_h = (in_h + 2 * pad - k_h) / stride + 1;
   size_t out_w = (in_w + 2 * pad - k_w) / stride + 1;
@@ -117,8 +135,11 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
   size_t N = out_c;
   size_t K = in_c * k_h * k_w;
 
+  thread_local static std::vector<float> col_data;
+  const float *a_gemm = in;
+
   if (k_h == 1 && k_w == 1 && stride == 1 && pad == 0) {
-    RUN_SGEMM(M, N, K, in, weights, out);
+    a_gemm = in;
   } else if (k_h == 1 && k_w == 1 && stride > 1 && pad == 0) {
     thread_local static std::vector<float> subsampled;
     if (subsampled.size() < M * in_c) {
@@ -132,17 +153,72 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
         std::memcpy(sub_row + ow * in_c, in_row + (ow * stride) * in_c, in_c * sizeof(float));
       }
     }
-    RUN_SGEMM(M, N, K, subsampled.data(), weights, out);
+    a_gemm = subsampled.data();
   } else {
-    thread_local static std::vector<float> col_data;
     if (col_data.size() < M * K) {
       col_data.resize(M * K);
     }
     im2col_nhwc(in, in_c, in_h, in_w, k_h, k_w, pad, stride, col_data.data());
-    RUN_SGEMM(M, N, K, col_data.data(), weights, out);
+    a_gemm = col_data.data();
   }
 
-  // Fused Bias addition and optional ReLU in a single pass in L1 cache
+  // Native W8A8 Quantized GEMM with contiguous pre-transposed weights and NEON sdot
+  if (weights_i8_trans && scales && act_scale > 0.0f) {
+    thread_local static std::vector<int8_t> a_i8;
+    if (a_i8.size() < M * K) {
+      a_i8.resize(M * K);
+    }
+
+    float inv_act_scale = 1.0f / act_scale;
+    #pragma omp parallel for schedule(static)
+    for (size_t i = 0; i < M * K; ++i) {
+      float q = std::round(a_gemm[i] * inv_act_scale);
+      a_i8[i] = static_cast<int8_t>(std::clamp(q, -128.0f, 127.0f));
+    }
+
+    #pragma omp parallel for schedule(static)
+    for (size_t m = 0; m < M; ++m) {
+      const int8_t *a_row = a_i8.data() + m * K;
+      float *out_row = out + m * N;
+
+      for (size_t n = 0; n < N; ++n) {
+        const int8_t *w_col = weights_i8_trans + n * K;
+        int32_t acc = 0;
+        size_t k = 0;
+
+#if (defined(__ARM_FEATURE_DOTPROD) && __ARM_FEATURE_DOTPROD)
+        int32x4_t vacc0 = vdupq_n_s32(0);
+        for (; k + 16 <= K; k += 16) {
+          int8x16_t a_vec = vld1q_s8(a_row + k);
+          int8x16_t b_vec = vld1q_s8(w_col + k);
+          vacc0 = vdotq_s32(vacc0, a_vec, b_vec);
+        }
+        acc = vaddvq_s32(vacc0);
+#elif (defined(__ARM_NEON) || defined(__ARM_NEON__))
+        int32x4_t vacc0 = vdupq_n_s32(0);
+        for (; k + 16 <= K; k += 16) {
+          int8x16_t a_vec = vld1q_s8(a_row + k);
+          int8x16_t b_vec = vld1q_s8(w_col + k);
+          vacc0 = vpadalq_s16(vacc0, vmull_s8(vget_low_s8(a_vec), vget_low_s8(b_vec)));
+          vacc0 = vpadalq_s16(vacc0, vmull_s8(vget_high_s8(a_vec), vget_high_s8(b_vec)));
+        }
+        acc = vaddvq_s32(vacc0);
+#endif
+        for (; k < K; ++k) {
+          acc += static_cast<int32_t>(a_row[k]) * static_cast<int32_t>(w_col[k]);
+        }
+
+        float eff_scale = act_scale * scales[n];
+        float val = static_cast<float>(acc) * eff_scale + (bias ? bias[n] : 0.0f);
+        out_row[n] = apply_relu ? std::max(0.0f, val) : val;
+      }
+    }
+    return;
+  }
+
+  // Fallback: FP32 BLAS GEMM
+  RUN_SGEMM(M, N, K, a_gemm, weights_fp32, out);
+
   if (bias) {
     #pragma omp parallel for schedule(static)
     for (size_t m = 0; m < M; ++m) {
@@ -179,19 +255,26 @@ void WeSpeakerResNet34::runBasicBlock(const float *in, float *out, size_t in_h, 
 
   if (conv1_out.size() < total_out) conv1_out.resize(total_out);
 
-  // 1. conv1 + bias1 + relu (Fused in a single pass!)
+  // 1. conv1 + bias1 + relu (Fused W8A8)
   runConv2d(in, conv1_out.data(), block.in_channels, block.out_channels,
-            in_h, in_w, 3, 3, block.stride, 1, block.conv1_w, block.conv1_b, /*apply_relu=*/true);
+            in_h, in_w, 3, 3, block.stride, 1,
+            block.conv1_w, block.conv1_w_i8_trans.data(), block.conv1_s, block.conv1_b, block.conv1_act_scale,
+            /*apply_relu=*/true);
 
-  // 2. conv2 + bias2 (Fused, no relu before residual addition)
+  // 2. conv2 + bias2 (Fused W8A8, no relu before residual addition)
   runConv2d(conv1_out.data(), out, block.out_channels, block.out_channels,
-            out_h, out_w, 3, 3, 1, 1, block.conv2_w, block.conv2_b, /*apply_relu=*/false);
+            out_h, out_w, 3, 3, 1, 1,
+            block.conv2_w, block.conv2_w_i8_trans.data(), block.conv2_s, block.conv2_b, block.conv2_act_scale,
+            /*apply_relu=*/false);
 
   // 3. Shortcut / Residual addition + final ReLU
   if (block.downsample) {
     if (ds_out.size() < total_out) ds_out.resize(total_out);
     runConv2d(in, ds_out.data(), block.in_channels, block.out_channels,
-              in_h, in_w, 1, 1, block.stride, 0, block.downsample_conv_w, block.downsample_conv_b, /*apply_relu=*/false);
+              in_h, in_w, 1, 1, block.stride, 0,
+              block.downsample_conv_w, block.downsample_w_i8_trans.data(),
+              block.downsample_conv_s, block.downsample_conv_b, block.downsample_act_scale,
+              /*apply_relu=*/false);
     #pragma omp parallel for schedule(static)
     for (size_t i = 0; i < total_out; ++i) {
       float val = out[i] + ds_out[i];
@@ -208,17 +291,41 @@ void WeSpeakerResNet34::runBasicBlock(const float *in, float *out, size_t in_h, 
 
 bool WeSpeakerResNet34::init(const WeightLoader &loader) {
   conv1_w_ = loader.getTensor("resnet.conv1.weight");
+  conv1_w_i8_ = loader.getTensorI8("resnet.conv1.weight_i8");
+  if (conv1_w_i8_) {
+    conv1_w_i8_trans_ = transpose_KN_to_NK(conv1_w_i8_, 3 * 3 * 1, 32);
+  }
+  conv1_s_ = loader.getTensor("resnet.conv1.scale");
   conv1_b_ = loader.getTensor("resnet.conv1.bias");
+  const float *c1_act = loader.getTensor("resnet.conv1.act_scale");
+  if (c1_act) conv1_act_scale_ = *c1_act;
 
   auto load_stage = [&](const std::string &stage_name, size_t num_blocks,
                         size_t in_c, size_t out_c, size_t init_stride) {
     std::vector<BasicBlockWeights> blocks(num_blocks);
     for (size_t b = 0; b < num_blocks; ++b) {
       std::string pfx = "resnet." + stage_name + "." + std::to_string(b);
+      size_t b_in = (b == 0) ? in_c : out_c;
+
       blocks[b].conv1_w = loader.getTensor(pfx + ".conv1.weight");
+      blocks[b].conv1_w_i8 = loader.getTensorI8(pfx + ".conv1.weight_i8");
+      if (blocks[b].conv1_w_i8) {
+        blocks[b].conv1_w_i8_trans = transpose_KN_to_NK(blocks[b].conv1_w_i8, 3 * 3 * b_in, out_c);
+      }
+      blocks[b].conv1_s = loader.getTensor(pfx + ".conv1.scale");
       blocks[b].conv1_b = loader.getTensor(pfx + ".conv1.bias");
+      const float *c1_act = loader.getTensor(pfx + ".conv1.act_scale");
+      if (c1_act) blocks[b].conv1_act_scale = *c1_act;
+
       blocks[b].conv2_w = loader.getTensor(pfx + ".conv2.weight");
+      blocks[b].conv2_w_i8 = loader.getTensorI8(pfx + ".conv2.weight_i8");
+      if (blocks[b].conv2_w_i8) {
+        blocks[b].conv2_w_i8_trans = transpose_KN_to_NK(blocks[b].conv2_w_i8, 3 * 3 * out_c, out_c);
+      }
+      blocks[b].conv2_s = loader.getTensor(pfx + ".conv2.scale");
       blocks[b].conv2_b = loader.getTensor(pfx + ".conv2.bias");
+      const float *c2_act = loader.getTensor(pfx + ".conv2.act_scale");
+      if (c2_act) blocks[b].conv2_act_scale = *c2_act;
 
       if (b == 0) {
         blocks[b].in_channels = in_c;
@@ -227,7 +334,14 @@ bool WeSpeakerResNet34::init(const WeightLoader &loader) {
         blocks[b].downsample = (in_c != out_c || init_stride != 1);
         if (blocks[b].downsample) {
           blocks[b].downsample_conv_w = loader.getTensor(pfx + ".shortcut.0.weight");
+          blocks[b].downsample_conv_w_i8 = loader.getTensorI8(pfx + ".shortcut.0.weight_i8");
+          if (blocks[b].downsample_conv_w_i8) {
+            blocks[b].downsample_w_i8_trans = transpose_KN_to_NK(blocks[b].downsample_conv_w_i8, 1 * 1 * in_c, out_c);
+          }
+          blocks[b].downsample_conv_s = loader.getTensor(pfx + ".shortcut.0.scale");
           blocks[b].downsample_conv_b = loader.getTensor(pfx + ".shortcut.0.bias");
+          const float *ds_act = loader.getTensor(pfx + ".shortcut.0.act_scale");
+          if (ds_act) blocks[b].downsample_act_scale = *ds_act;
         }
       } else {
         blocks[b].in_channels = out_c;
@@ -245,7 +359,11 @@ bool WeSpeakerResNet34::init(const WeightLoader &loader) {
   layer4_ = load_stage("layer4", 3, 128, 256, 2);
 
   seg_1_w_ = loader.getTensor("resnet.seg_1.weight");
+  seg_1_w_i4_ = loader.getTensorI8("resnet.seg_1.weight_i4");
+  seg_1_s_ = loader.getTensor("resnet.seg_1.scale");
   seg_1_b_ = loader.getTensor("resnet.seg_1.bias");
+  const float *s1_act = loader.getTensor("resnet.seg_1.act_scale");
+  if (s1_act) seg_1_act_scale_ = *s1_act;
 
   return (conv1_w_ && conv1_b_ && seg_1_w_ && seg_1_b_);
 }
@@ -254,9 +372,10 @@ void WeSpeakerResNet34::forwardBackbone(const float *fbank, float *out_feat,
                                        size_t chunk_idx, DebugTensorCallback debug_cb) {
   std::string pfx = "emb_chunk" + std::to_string(chunk_idx) + "_";
 
-  // 1. Stem Conv1 + Bias1 + ReLU (Fused): [80, 998, 1] -> [80, 998, 32]
+  // 1. Stem Conv1 + Bias1 + ReLU (Fused W8A8): [80, 998, 1] -> [80, 998, 32]
   std::vector<float> curr_feat(32 * 80 * 998);
-  runConv2d(fbank, curr_feat.data(), 1, 32, 80, 998, 3, 3, 1, 1, conv1_w_, conv1_b_, /*apply_relu=*/true);
+  runConv2d(fbank, curr_feat.data(), 1, 32, 80, 998, 3, 3, 1, 1,
+            conv1_w_, conv1_w_i8_trans_.data(), conv1_s_, conv1_b_, conv1_act_scale_, /*apply_relu=*/true);
   if (debug_cb) debug_cb(pfx + "resnet_conv1", curr_feat.data(), {1, 80, 998, 32});
 
   size_t curr_h = 80;
@@ -359,15 +478,32 @@ std::vector<float> WeSpeakerResNet34::forwardPool(const float *feat, const float
   }
   if (debug_cb) debug_cb(pfx + "resnet_pool_tstp", stats.data(), {1, 5120});
 
-  // seg_1: Linear(5120 -> 256)
+  // seg_1: Linear(5120 -> 256) W4 Quantized or FP32
   std::vector<float> embedding(256, 0.0f);
-  for (size_t oc = 0; oc < 256; ++oc) {
-    const float *w_row = seg_1_w_ + oc * 5120;
-    float acc = seg_1_b_[oc];
-    for (size_t ic = 0; ic < 5120; ++ic) {
-      acc += w_row[ic] * stats[ic];
+  if (seg_1_w_i4_ && seg_1_s_) {
+    // Native W4 computation: stats (float) * int4 * scale
+    #pragma omp parallel for schedule(static)
+    for (size_t oc = 0; oc < 256; ++oc) {
+      const int8_t *w_row_i4 = seg_1_w_i4_ + oc * 5120;
+      float acc = 0.0f;
+      #pragma omp simd reduction(+:acc)
+      for (size_t ic = 0; ic < 5120; ++ic) {
+        acc += static_cast<float>(w_row_i4[ic]) * stats[ic];
+      }
+      embedding[oc] = acc * seg_1_s_[oc] + seg_1_b_[oc];
     }
-    embedding[oc] = acc;
+  } else {
+    // FP32 baseline
+    #pragma omp parallel for schedule(static)
+    for (size_t oc = 0; oc < 256; ++oc) {
+      const float *w_row = seg_1_w_ + oc * 5120;
+      float acc = seg_1_b_[oc];
+      #pragma omp simd reduction(+:acc)
+      for (size_t ic = 0; ic < 5120; ++ic) {
+        acc += w_row[ic] * stats[ic];
+      }
+      embedding[oc] = acc;
+    }
   }
   if (debug_cb) debug_cb(pfx + "spk_embedding", embedding.data(), {1, 256});
 

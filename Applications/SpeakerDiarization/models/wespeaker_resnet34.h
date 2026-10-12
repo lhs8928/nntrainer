@@ -4,7 +4,7 @@
  *
  * @file   wespeaker_resnet34.h
  * @date   29 September 2026
- * @brief  WeSpeaker ResNet34 Speaker Embedding Model in NNTrainer (Fused Conv+BN NHWC)
+ * @brief  WeSpeaker ResNet34 Speaker Embedding Model in NNTrainer (Native W8A8 & W4 Quantized)
  * @see    https://github.com/nntrainer/nntrainer
  * @author Hyeonseok Lee <hs89.lee@samsung.com>
  * @bug    No known bugs except for NYI items
@@ -24,12 +24,27 @@ using DebugTensorCallback = std::function<void(const std::string &name, const fl
 
 struct BasicBlockWeights {
   const float *conv1_w = nullptr;
+  const int8_t *conv1_w_i8 = nullptr;
+  std::vector<int8_t> conv1_w_i8_trans;
+  const float *conv1_s = nullptr;
   const float *conv1_b = nullptr;
+  float conv1_act_scale = 1.0f;
+
   const float *conv2_w = nullptr;
+  const int8_t *conv2_w_i8 = nullptr;
+  std::vector<int8_t> conv2_w_i8_trans;
+  const float *conv2_s = nullptr;
   const float *conv2_b = nullptr;
+  float conv2_act_scale = 1.0f;
+
   bool downsample = false;
   const float *downsample_conv_w = nullptr;
+  const int8_t *downsample_conv_w_i8 = nullptr;
+  std::vector<int8_t> downsample_w_i8_trans;
+  const float *downsample_conv_s = nullptr;
   const float *downsample_conv_b = nullptr;
+  float downsample_act_scale = 1.0f;
+
   size_t in_channels = 0;
   size_t out_channels = 0;
   size_t stride = 1;
@@ -75,27 +90,32 @@ public:
                              size_t step_idx = 0, DebugTensorCallback debug_cb = nullptr);
 
 private:
-  // Stem Conv1: [3, 3, 1, 32] fused
+  // Stem Conv1: [3, 3, 1, 32]
   const float *conv1_w_ = nullptr;
+  const int8_t *conv1_w_i8_ = nullptr;
+  std::vector<int8_t> conv1_w_i8_trans_;
+  const float *conv1_s_ = nullptr;
   const float *conv1_b_ = nullptr;
+  float conv1_act_scale_ = 1.0f;
 
   // 4 stages of BasicBlocks:
-  // stage 1: 3 blocks (32 channels, stride 1)
-  // stage 2: 4 blocks (64 channels, initial stride 2)
-  // stage 3: 6 blocks (128 channels, initial stride 2)
-  // stage 4: 3 blocks (256 channels, initial stride 2)
   std::vector<BasicBlockWeights> layer1_;
   std::vector<BasicBlockWeights> layer2_;
   std::vector<BasicBlockWeights> layer3_;
   std::vector<BasicBlockWeights> layer4_;
 
-  // seg_1: Linear(5120 -> 256)
+  // seg_1: Linear(5120 -> 256, W4 quantized)
   const float *seg_1_w_ = nullptr; // [256, 5120]
+  const int8_t *seg_1_w_i4_ = nullptr; // [256, 5120] in [-8, 7]
+  const float *seg_1_s_ = nullptr; // [256]
   const float *seg_1_b_ = nullptr; // [256]
+  float seg_1_act_scale_ = 1.0f;
 
   void runConv2d(const float *in, float *out, size_t in_c, size_t out_c,
                  size_t in_h, size_t in_w, size_t k_h, size_t k_w,
-                 size_t stride, size_t pad, const float *weights, const float *bias,
+                 size_t stride, size_t pad,
+                 const float *weights_fp32, const int8_t *weights_i8_trans,
+                 const float *scales, const float *bias, float act_scale,
                  bool apply_relu = false);
 
   void runBasicBlock(const float *in, float *out, size_t in_h, size_t in_w,
