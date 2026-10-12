@@ -49,6 +49,14 @@ public:
   const float *getTensor(const std::string &name, std::vector<uint32_t> *dims = nullptr) const;
 
   /**
+   * @brief Get pointer to INT8 tensor data.
+   * @param name Name of tensor.
+   * @param dims Optional output vector to receive tensor dimensions.
+   * @return Pointer to int8_t data, or nullptr if not found.
+   */
+  const int8_t *getTensorI8(const std::string &name, std::vector<uint32_t> *dims = nullptr) const;
+
+  /**
    * @brief Check if a tensor exists.
    */
   bool hasTensor(const std::string &name) const;
