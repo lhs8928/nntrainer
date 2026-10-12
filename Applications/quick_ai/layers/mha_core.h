@@ -388,7 +388,8 @@ private:
   bool use_rope = true;
   float attn_logit_softcapping = 0.0f;
   bool is_causal;
-  unsigned int attn_window = 0; /**< block size for windowed non-causal attention, 0 = off */
+  unsigned int attn_window =
+    0; /**< block size for windowed non-causal attention, 0 = off */
   bool skip_prefill = false;
 
   enum INOUT_INDEX {

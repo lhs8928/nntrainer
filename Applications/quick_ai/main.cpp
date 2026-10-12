@@ -31,17 +31,17 @@
 #include <app_context.h>
 #include <factory.h>
 
+#include "audio_preprocessor.h"
+#include "audio_stream.h"
 #include "ced/ced_transformer.h"
 #include "qwen3_asr_causallm.h"
-#include "audio_stream.h"
 #include <atomic>
 #include <condition_variable>
-#include <functional>
 #include <csignal>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <thread>
-#include "audio_preprocessor.h"
 #if !defined(_WIN32)
 #include <sys/resource.h>
 #endif
@@ -201,17 +201,17 @@ std::string resolve_architecture(std::string model_type,
   return architecture;
 }
 
-
 namespace {
 
 std::atomic<bool> g_stream_stop{false};
 void onStreamSignal(int) { g_stream_stop.store(true); }
 
-/** @brief mute std::cout while alive (the model prints a long report per run) */
+/** @brief mute std::cout while alive (the model prints a long report per run)
+ */
 struct CoutMute {
   std::streambuf *old;
-  explicit CoutMute(bool on) : old(on ? std::cout.rdbuf(nullptr) : nullptr),
-                               on_(on) {}
+  explicit CoutMute(bool on) :
+    old(on ? std::cout.rdbuf(nullptr) : nullptr), on_(on) {}
   ~CoutMute() {
     if (on_) {
       std::cout.rdbuf(old);
@@ -227,13 +227,12 @@ struct CoutMute {
  *        it into segments (pause-aware), the calling thread runs the resident
  *        model on every segment and prints its text.
  */
-void runStreamMode(quick_ai::Qwen3ASRCausalLM &asr, quick_ai::PcmSource &src,
-                   float seg_min_sec, float silence_rms,
-                   const std::function<std::string(const std::string &)>
-                     &make_prompt,
-                   quick_ai::ContextCarry &ctx_carry, bool do_sample,
-                   const std::string &head, const std::string &tail,
-                   bool verbose, unsigned int max_waiting) {
+void runStreamMode(
+  quick_ai::Qwen3ASRCausalLM &asr, quick_ai::PcmSource &src, float seg_min_sec,
+  float silence_rms,
+  const std::function<std::string(const std::string &)> &make_prompt,
+  quick_ai::ContextCarry &ctx_carry, bool do_sample, const std::string &head,
+  const std::string &tail, bool verbose, unsigned int max_waiting) {
   using clk = std::chrono::steady_clock;
   struct Item {
     std::vector<float> pcm;
@@ -259,9 +258,8 @@ void runStreamMode(quick_ai::Qwen3ASRCausalLM &asr, quick_ai::PcmSource &src,
         // too slow for real time: drop the oldest waiting segment
         const Item &old = q.front();
         // cerr: std::cout may be muted while the model is running
-        std::cerr << "[Stream] WARNING: dropped segment "
-                  << old.start / 16000.0 << "s-"
-                  << (old.start + old.pcm.size()) / 16000.0
+        std::cerr << "[Stream] WARNING: dropped segment " << old.start / 16000.0
+                  << "s-" << (old.start + old.pcm.size()) / 16000.0
                   << "s (processing is slower than real time)" << std::endl;
         ++n_dropped;
         q.pop_front();
@@ -323,9 +321,9 @@ void runStreamMode(quick_ai::Qwen3ASRCausalLM &asr, quick_ai::PcmSource &src,
       asr.run(make_prompt(ctx_carry.get()), do_sample, head, tail);
     }
     const auto p1 = clk::now();
-    const double ms = std::chrono::duration<double, std::milli>(p1 - p0).count();
-    const double delay_s =
-      std::chrono::duration<double>(p1 - it.ready).count();
+    const double ms =
+      std::chrono::duration<double, std::milli>(p1 - p0).count();
+    const double delay_s = std::chrono::duration<double>(p1 - it.ready).count();
     proc_s += ms / 1000.0;
     max_delay_s = std::max(max_delay_s, delay_s);
     ctx_carry.add(asr.getLastTranscription());
@@ -335,14 +333,15 @@ void runStreamMode(quick_ai::Qwen3ASRCausalLM &asr, quick_ai::PcmSource &src,
               << delay_s << " s after the segment ended)" << std::endl;
   }
   capture.join();
-  const double wall = std::chrono::duration<double>(clk::now() - t_begin).count();
+  const double wall =
+    std::chrono::duration<double>(clk::now() - t_begin).count();
   std::cout << "[Stream] done: " << std::setprecision(1) << audio_s
             << " s of audio in " << n_seg << " segment(s) (" << n_skipped
-            << " silent, " << n_dropped << " dropped), processing " << proc_s << " s (RTF "
-            << std::setprecision(2) << (audio_s > 0 ? proc_s / audio_s : 0.0)
-            << "), max text delay " << std::setprecision(1) << max_delay_s
-            << " s, max queue backlog " << max_backlog << ", wall " << wall
-            << " s" << std::endl;
+            << " silent, " << n_dropped << " dropped), processing " << proc_s
+            << " s (RTF " << std::setprecision(2)
+            << (audio_s > 0 ? proc_s / audio_s : 0.0) << "), max text delay "
+            << std::setprecision(1) << max_delay_s << " s, max queue backlog "
+            << max_backlog << ", wall " << wall << " s" << std::endl;
 }
 
 } // namespace
@@ -380,7 +379,8 @@ int main(int argc, char *argv[]) {
   // --context-chars N: give the last N characters of the previous segments'
   // text to the next segment as context (system prompt). 0 = off.
   size_t context_chars = 0;
-  float stream_speed = 1.0f; // --stream-speed X: replay --stream-file X times faster (stress test)
+  float stream_speed =
+    1.0f; // --stream-speed X: replay --stream-file X times faster (stress test)
   bool stream_mic = false, stream_stdin = false, stream_verbose = false;
   auto take_opt = [&](const char *name, bool has_value, std::string &val) {
     for (int i = 1; i < argc; ++i) {
@@ -618,7 +618,7 @@ int main(int argc, char *argv[]) {
           return p;
         };
         input_text = make_prompt("");
-        
+
         system_head_prompt.clear();
         system_tail_prompt.clear();
       }
@@ -687,8 +687,8 @@ int main(int argc, char *argv[]) {
           full_text += " ";
         full_text += txt;
       }
-      std::cout << "[Segment] total processing " << total_proc_ms
-                << " ms for " << all.size() / 16000.0 << " s of audio (RTF "
+      std::cout << "[Segment] total processing " << total_proc_ms << " ms for "
+                << all.size() / 16000.0 << " s of audio (RTF "
                 << total_proc_ms / 1000.0 / (all.size() / 16000.0) << ")\n"
                 << "[Segment] FULL TEXT: " << full_text << std::endl;
     } else {

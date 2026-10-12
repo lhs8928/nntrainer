@@ -117,8 +117,7 @@ MHACoreLayer::MHACoreLayer() :
     props::UseRope(), props::MaxPositionEmbeddings(), props::UseSink(),
     props::RopeScalingType(), props::RopeScalingFactor(),
     props::RopePartialRotaryFactor(), props::RopeScalingMaxPositionEmbeddings(),
-    props::AttnLogitSoftcapping(), props::IsCausal(),
-    props::AttentionWindow()),
+    props::AttnLogitSoftcapping(), props::IsCausal(), props::AttentionWindow()),
   sm(nntrainer::ActivationType::ACT_SOFTMAX),
   epsilon(1e-3),
   cache_index(0),
@@ -797,10 +796,11 @@ void MHACoreLayer::one_batch_incremental_forwarding(
       k_dim.height(wl);
       ml::train::TensorDim v_dim = cache_value_dim;
       v_dim.height(wl);
-      nntrainer::Tensor k_w = cache_key.getSharedDataTensor(
-        k_dim,
-        batch * cache_key_dim.getFeatureLen() + (size_t)ws * cache_key_dim.width(),
-        true);
+      nntrainer::Tensor k_w =
+        cache_key.getSharedDataTensor(k_dim,
+                                      batch * cache_key_dim.getFeatureLen() +
+                                        (size_t)ws * cache_key_dim.width(),
+                                      true);
       nntrainer::Tensor v_w = cache_value.getSharedDataTensor(
         v_dim,
         batch * cache_value_dim.getFeatureLen() +

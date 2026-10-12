@@ -13,25 +13,25 @@
 #include <layer_node.h>
 #include <qwen3_asr_causallm.h>
 
-#include <app_context.h>
-#include <engine.h>
-#include <multimodal_scatter.h>
-#include <reshaped_rms_norm.h>
-#include <mha_core.h>
-#include <tie_word_embedding.h>
-#include <swiglu.h>
-#include <nhwc_to_nchw.h>
 #include "audio_preprocessor.h"
-#include <api/streamer.h>
-#include <performance_metrics.h>
-#include <iostream>
-#include <chrono>
 #include <algorithm>
+#include <api/streamer.h>
+#include <app_context.h>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <engine.h>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
+#include <mha_core.h>
+#include <multimodal_scatter.h>
+#include <nhwc_to_nchw.h>
+#include <performance_metrics.h>
+#include <reshaped_rms_norm.h>
+#include <swiglu.h>
+#include <tie_word_embedding.h>
 
 namespace quick_ai {
 
@@ -48,8 +48,8 @@ static unsigned int get_feat_extract_output_lengths(unsigned int input_lengths) 
 /**
  * @brief attention window (tokens) of the audio encoder, as in the reference
  * model: 13 tokens per 100 mel frames x n_window_infer / (2 * n_window) = 104.
- * NNTR_AUDIO_ATTN_WINDOW=<n> enables it (default 0 = full attention, old behaviour;
- * use 104 for the reference windows).
+ * NNTR_AUDIO_ATTN_WINDOW=<n> enables it (default 0 = full attention, old
+ * behaviour; use 104 for the reference windows).
  */
 static unsigned int audio_attn_window() {
   if (const char *e = std::getenv("NNTR_AUDIO_ATTN_WINDOW"))
@@ -189,12 +189,10 @@ Tensor Qwen3ASRTransformer::createAudioAttentionBlock(const int layer_id, Tensor
 
   LayerHandle attention(createLayer(
     "mha_core",
-    {withKey("name", prefix + "attention"),
-     withKey("num_heads", "16"),
+    {withKey("name", prefix + "attention"), withKey("num_heads", "16"),
      withKey("num_heads_kv", "16"),
      withKey("max_timestep", std::to_string(max_timestep)),
-     withKey("use_rope", "false"),
-     withKey("is_causal", "false"),
+     withKey("use_rope", "false"), withKey("is_causal", "false"),
      // the reference encoder attends inside windows of 13 * (800 / 100) = 104
      // tokens (~8 s of audio); use_env: NNTR_AUDIO_ATTN_WINDOW=0 disables
      withKey("attention_window", std::to_string(audio_attn_window()))}));
@@ -563,7 +561,8 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
     // probability) at every generation step, e.g. to see how close the
     // end-of-text token was when a transcription stops early.
     if (const char *dk = std::getenv("NNTR_DEBUG_TOPK")) {
-      const unsigned int k = std::max(1u, static_cast<unsigned int>(std::atoi(dk)));
+      const unsigned int k =
+        std::max(1u, static_cast<unsigned int>(std::atoi(dk)));
       float mx = logits[0];
       for (unsigned int v = 1; v < NUM_VOCAB; ++v)
         mx = std::max(mx, logits[v]);
@@ -573,11 +572,11 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
       std::vector<unsigned int> idx(NUM_VOCAB);
       for (unsigned int v = 0; v < NUM_VOCAB; ++v)
         idx[v] = v;
-      std::partial_sort(idx.begin(), idx.begin() + k, idx.end(),
-                        [&](unsigned int a, unsigned int b) {
-                          return logits[a] > logits[b];
-                        });
-      std::cerr << "[TOPK] step " << (step - init_len) << " chosen " << next_token << " :";
+      std::partial_sort(
+        idx.begin(), idx.begin() + k, idx.end(),
+        [&](unsigned int a, unsigned int b) { return logits[a] > logits[b]; });
+      std::cerr << "[TOPK] step " << (step - init_len) << " chosen "
+                << next_token << " :";
       for (unsigned int i = 0; i < k; ++i) {
         const unsigned int t = idx[i];
         std::string piece = tokenizer->Decode({static_cast<int>(t)});

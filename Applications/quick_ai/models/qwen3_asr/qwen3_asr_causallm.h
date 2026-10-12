@@ -123,7 +123,6 @@ private:
   std::string audio_path;
   std::vector<float> audio_pcm;
   std::string last_transcription;
-
 };
 
 } // namespace quick_ai
