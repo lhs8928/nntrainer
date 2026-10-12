@@ -150,6 +150,20 @@ public:
 };
 
 /**
+ * @brief AttentionWindow property: for non-causal attention, split the
+ * sequence into consecutive blocks of this many tokens and attend only inside a
+ * block (block-diagonal mask), e.g. the 104-token (~8 s) windows of the
+ * Qwen3-ASR audio encoder. 0 = attend over the whole sequence.
+ */
+class AttentionWindow : public nntrainer::Property<unsigned int> {
+public:
+  AttentionWindow(unsigned int value = 0) { set(value); };
+  static constexpr const char *key =
+    "attention_window";                      /**< unique key to access */
+  using prop_tag = nntrainer::uint_prop_tag; /**< property type */
+};
+
+/**
  * @brief RopeScalingType
  * - default
  * - yarn
@@ -345,7 +359,7 @@ private:
     props::MaxPositionEmbeddings, props::UseSink, props::RopeScalingType,
     props::RopeScalingFactor, props::RopePartialRotaryFactor,
     props::RopeScalingMaxPositionEmbeddings, props::AttnLogitSoftcapping,
-    props::IsCausal>
+    props::IsCausal, props::AttentionWindow>
     mha_core_props; /**< mha_core layer properties */
 
   /** softmax activation operation */
@@ -374,6 +388,7 @@ private:
   bool use_rope = true;
   float attn_logit_softcapping = 0.0f;
   bool is_causal;
+  unsigned int attn_window = 0; /**< block size for windowed non-causal attention, 0 = off */
   bool skip_prefill = false;
 
   enum INOUT_INDEX {
