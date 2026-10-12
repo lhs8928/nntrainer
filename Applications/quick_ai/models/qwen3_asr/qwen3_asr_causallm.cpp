@@ -43,6 +43,18 @@ static unsigned int get_feat_extract_output_lengths(unsigned int input_lengths) 
   return tail_tokens + (input_lengths / 100) * 13;
 }
 
+/**
+ * @brief attention window (tokens) of the audio encoder, as in the reference
+ * model: 13 tokens per 100 mel frames x n_window_infer / (2 * n_window) = 104.
+ * NNTR_AUDIO_ATTN_WINDOW=<n> enables it (default 0 = full attention, old behaviour;
+ * use 104 for the reference windows).
+ */
+static unsigned int audio_attn_window() {
+  if (const char *e = std::getenv("NNTR_AUDIO_ATTN_WINDOW"))
+    return static_cast<unsigned int>(std::strtoul(e, nullptr, 10));
+  return 0; // off by default: not yet validated against the reference
+}
+
 std::pair<Tensor, Tensor> Qwen3ASRTransformer::constructModel() {
   std::cout << "[Qwen3-ASR] Constructing Qwen3ASRSubsampler sub-model graph ("
             << "conv_dtype: " << conv_layer_dtype 
@@ -180,7 +192,10 @@ Tensor Qwen3ASRTransformer::createAudioAttentionBlock(const int layer_id, Tensor
      withKey("num_heads_kv", "16"),
      withKey("max_timestep", std::to_string(max_timestep)),
      withKey("use_rope", "false"),
-     withKey("is_causal", "false")}));
+     withKey("is_causal", "false"),
+     // the reference encoder attends inside windows of 13 * (800 / 100) = 104
+     // tokens (~8 s of audio); use_env: NNTR_AUDIO_ATTN_WINDOW=0 disables
+     withKey("attention_window", std::to_string(audio_attn_window()))}));
   Tensor context = attention({query, key, value});
 
   LayerHandle out_proj(createLayer(

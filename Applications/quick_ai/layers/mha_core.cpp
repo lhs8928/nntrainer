@@ -117,7 +117,8 @@ MHACoreLayer::MHACoreLayer() :
     props::UseRope(), props::MaxPositionEmbeddings(), props::UseSink(),
     props::RopeScalingType(), props::RopeScalingFactor(),
     props::RopePartialRotaryFactor(), props::RopeScalingMaxPositionEmbeddings(),
-    props::AttnLogitSoftcapping(), props::IsCausal()),
+    props::AttnLogitSoftcapping(), props::IsCausal(),
+    props::AttentionWindow()),
   sm(nntrainer::ActivationType::ACT_SOFTMAX),
   epsilon(1e-3),
   cache_index(0),
@@ -221,6 +222,7 @@ void MHACoreLayer::finalize(nntrainer::InitLayerContext &context) {
 
   /** Is Causal */
   is_causal = std::get<props::IsCausal>(mha_core_props).get();
+  attn_window = std::get<props::AttentionWindow>(mha_core_props).get();
 
   if (!std::get<nntrainer::props::SkipPrefill>(*layer_impl_props).empty())
     skip_prefill =
@@ -769,14 +771,58 @@ void MHACoreLayer::one_batch_incremental_forwarding(
   nntrainer::Tensor b_cached_value = cache_value.getSharedDataTensor(
     cached_value_dim, batch * cache_value_dim.getFeatureLen(), true);
 
+  unsigned int gqa_size = num_heads_Q / num_heads_KV;
+
+  if (!is_causal && attn_window > 0 && cache_from == 0 &&
+      step_size > attn_window) {
+    // Block-diagonal (windowed) non-causal attention: every block of
+    // attn_window tokens only attends to itself, like the Qwen3-ASR audio
+    // encoder (cu_seqlens windows). K/V of the whole sequence are already in
+    // the cache; run Q*K, softmax and *V per block on shifted views.
+    const unsigned int q_width = query_step.getDim().width();
+    const unsigned int o_width = attention_output_step.getDim().width();
+    for (unsigned int ws = 0; ws < step_size; ws += attn_window) {
+      const unsigned int wl = std::min(attn_window, step_size - ws);
+
+      ml::train::TensorDim q_dim = query_step.getDim();
+      q_dim.height(wl);
+      ml::train::TensorDim o_dim = attention_output_step.getDim();
+      o_dim.height(wl);
+      nntrainer::Tensor q_w =
+        query_step.getSharedDataTensor(q_dim, (size_t)ws * q_width, true);
+      nntrainer::Tensor o_w = attention_output_step.getSharedDataTensor(
+        o_dim, (size_t)ws * o_width, true);
+
+      ml::train::TensorDim k_dim = cache_key_dim;
+      k_dim.height(wl);
+      ml::train::TensorDim v_dim = cache_value_dim;
+      v_dim.height(wl);
+      nntrainer::Tensor k_w = cache_key.getSharedDataTensor(
+        k_dim,
+        batch * cache_key_dim.getFeatureLen() + (size_t)ws * cache_key_dim.width(),
+        true);
+      nntrainer::Tensor v_w = cache_value.getSharedDataTensor(
+        v_dim,
+        batch * cache_value_dim.getFeatureLen() +
+          (size_t)ws * cache_value_dim.width(),
+        true);
+
+      nntrainer::Tensor out_w(1, 1, wl * wl, num_heads_Q,
+                              query_step.getTensorType());
+      compute_kcaches(q_w, k_w, out_w, 0, wl, num_heads_Q, gqa_size, head_dim);
+      softmax_triangle(out_w, wl, num_heads_Q, 0);
+      compute_fp16vcache_transposed(out_w, v_w, o_w, 0, num_heads_KV, gqa_size,
+                                    head_dim, wl);
+    }
+    return;
+  }
+
   // out_ stores the output of Q * K
   nntrainer::Tensor out_(1, 1,
                          is_causal ? (calc_windowed_attn_index(cache_to) -
                                       calc_windowed_attn_index(cache_from))
                                    : (step_size * cache_to),
                          num_heads_Q, query_step.getTensorType());
-
-  unsigned int gqa_size = num_heads_Q / num_heads_KV;
 
   compute_kcaches(query_step, b_cached_key, out_, cache_from,
                   cache_to - cache_from, num_heads_Q, gqa_size, head_dim);
