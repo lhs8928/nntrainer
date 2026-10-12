@@ -148,9 +148,9 @@ We have architected, implemented, and empirically verified a **continuous, long-
 
 | Platform | Processed Audio | Streaming E2E Latency | Streaming RTF | Real-Time Factor | Peak Resident RSS |
 |---|:---:|:---:|:---:|:---:|:---:|
-| **Host Linux (x86_64)** | 30.0s | 14.63s | **0.3649x** | **2.74x Real-Time** | ~1100 MB |
+| **Host Linux (x86_64)** | 30.0s | 14.72s | **0.3679x** | **2.72x Real-Time** | ~1280 MB |
 | **Galaxy S25+ (SM-S936U)** | 30.0s | **10.97s** | **0.3154x** | **3.17x Real-Time** | **590.8 MB** |
-| **Raspberry Pi 5 (Cortex-A76)**| 30.0s | 33.03s | **1.0009x** | **1.00x Real-Time** | **610.7 MB** |
+| **Raspberry Pi 5 (Cortex-A76)**| 30.0s | **16.57s** | **0.4885x** | **2.05x Real-Time** | **319.5 MB** |
 
 - **Verification Confirmation**:
   - `SPEAKER_00` and `SPEAKER_01` maintained consistent identities across Window 0, Window 1, and the final flush window without any label swapping.
