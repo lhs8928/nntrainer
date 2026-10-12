@@ -66,7 +66,9 @@ LOCAL_SRC_FILES := main.cpp \
         ../models/audio_preprocessor.cpp \
         ../models/pyannet.cpp \
         ../models/wespeaker_resnet34.cpp \
-        ../models/plda_vbx.cpp
+        ../models/plda_vbx.cpp \
+        ../models/online_speaker_tracker.cpp \
+        ../models/audio_stream_buffer.cpp
 
 LOCAL_SHARED_LIBRARIES := nntrainer ccapi-nntrainer
 LOCAL_C_INCLUDES += $(NNTRAINER_INCLUDES)
