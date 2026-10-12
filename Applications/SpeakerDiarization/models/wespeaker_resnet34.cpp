@@ -152,6 +152,111 @@ static inline void dotI8Tile4(const int8_t *A, size_t lda, unsigned int rows,
 #endif
 }
 
+static inline void quantize_f32_to_i8(const float *src, int8_t *dst, size_t count, float inv_scale) {
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
+  const float32x4_t vscale = vdupq_n_f32(inv_scale);
+  size_t i = 0;
+  for (; i + 16 <= count; i += 16) {
+    float32x4_t f0 = vmulq_f32(vld1q_f32(src + i + 0), vscale);
+    float32x4_t f1 = vmulq_f32(vld1q_f32(src + i + 4), vscale);
+    float32x4_t f2 = vmulq_f32(vld1q_f32(src + i + 8), vscale);
+    float32x4_t f3 = vmulq_f32(vld1q_f32(src + i + 12), vscale);
+
+    int16x4_t h0 = vqmovn_s32(vcvtnq_s32_f32(f0));
+    int16x4_t h1 = vqmovn_s32(vcvtnq_s32_f32(f1));
+    int16x4_t h2 = vqmovn_s32(vcvtnq_s32_f32(f2));
+    int16x4_t h3 = vqmovn_s32(vcvtnq_s32_f32(f3));
+
+    int8x8_t b0 = vqmovn_s16(vcombine_s16(h0, h1));
+    int8x8_t b1 = vqmovn_s16(vcombine_s16(h2, h3));
+
+    vst1q_s8(dst + i, vcombine_s8(b0, b1));
+  }
+  for (; i + 8 <= count; i += 8) {
+    float32x4_t f0 = vmulq_f32(vld1q_f32(src + i + 0), vscale);
+    float32x4_t f1 = vmulq_f32(vld1q_f32(src + i + 4), vscale);
+
+    int16x4_t h0 = vqmovn_s32(vcvtnq_s32_f32(f0));
+    int16x4_t h1 = vqmovn_s32(vcvtnq_s32_f32(f1));
+
+    int8x8_t b0 = vqmovn_s16(vcombine_s16(h0, h1));
+    vst1_s8(dst + i, b0);
+  }
+  for (; i < count; ++i) {
+    float q = std::round(src[i] * inv_scale);
+    dst[i] = static_cast<int8_t>(std::clamp(q, -128.0f, 127.0f));
+  }
+#else
+  for (size_t i = 0; i < count; ++i) {
+    float q = std::round(src[i] * inv_scale);
+    dst[i] = static_cast<int8_t>(std::clamp(q, -128.0f, 127.0f));
+  }
+#endif
+}
+
+// NHWC im2col with direct INT8 one-shot quantization (Zero intermediate float buffer)
+static inline void im2col_nhwc_i8(const float *data_im, size_t in_c,
+                                 size_t in_h, size_t in_w, size_t k_h, size_t k_w,
+                                 size_t pad, size_t stride, float inv_scale, int8_t *data_col_i8) {
+  size_t out_h = (in_h + 2 * pad - k_h) / stride + 1;
+  size_t out_w = (in_w + 2 * pad - k_w) / stride + 1;
+  size_t K = k_h * k_w * in_c;
+
+  // Fast path for standard 3x3 stride-1 pad-1 convolution
+  if (k_h == 3 && k_w == 3 && stride == 1 && pad == 1) {
+    #pragma omp parallel for schedule(static)
+    for (size_t oh = 0; oh < out_h; ++oh) {
+      for (size_t ow = 0; ow < out_w; ++ow) {
+        int8_t *col_row = data_col_i8 + (oh * out_w + ow) * K;
+        for (size_t kh = 0; kh < 3; ++kh) {
+          int ih = static_cast<int>(oh + kh) - 1;
+          int8_t *dst_kh = col_row + kh * (3 * in_c);
+          if (ih >= 0 && ih < static_cast<int>(in_h)) {
+            if (ow >= 1 && ow + 1 < in_w) {
+              const float *src = data_im + (static_cast<size_t>(ih) * in_w + (ow - 1)) * in_c;
+              quantize_f32_to_i8(src, dst_kh, 3 * in_c, inv_scale);
+            } else {
+              for (size_t kw = 0; kw < 3; ++kw) {
+                int iw = static_cast<int>(ow + kw) - 1;
+                int8_t *dst = dst_kh + kw * in_c;
+                if (iw >= 0 && iw < static_cast<int>(in_w)) {
+                  const float *src = data_im + (static_cast<size_t>(ih) * in_w + static_cast<size_t>(iw)) * in_c;
+                  quantize_f32_to_i8(src, dst, in_c, inv_scale);
+                } else {
+                  std::memset(dst, 0, in_c);
+                }
+              }
+            }
+          } else {
+            std::memset(dst_kh, 0, 3 * in_c);
+          }
+        }
+      }
+    }
+    return;
+  }
+
+  #pragma omp parallel for schedule(static)
+  for (size_t oh = 0; oh < out_h; ++oh) {
+    for (size_t ow = 0; ow < out_w; ++ow) {
+      int8_t *col_row = data_col_i8 + (oh * out_w + ow) * K;
+      for (size_t kh = 0; kh < k_h; ++kh) {
+        int ih = static_cast<int>(oh * stride + kh) - static_cast<int>(pad);
+        for (size_t kw = 0; kw < k_w; ++kw) {
+          int iw = static_cast<int>(ow * stride + kw) - static_cast<int>(pad);
+          int8_t *dst = col_row + (kh * k_w + kw) * in_c;
+          if (ih >= 0 && ih < static_cast<int>(in_h) && iw >= 0 && iw < static_cast<int>(in_w)) {
+            const float *src = data_im + (static_cast<size_t>(ih) * in_w + static_cast<size_t>(iw)) * in_c;
+            quantize_f32_to_i8(src, dst, in_c, inv_scale);
+          } else {
+            std::memset(dst, 0, in_c);
+          }
+        }
+      }
+    }
+  }
+}
+
 // NHWC im2col: gathers input patches into Col[out_h * out_w, k_h * k_w * in_c]
 static inline void im2col_nhwc(const float *data_im, size_t in_c,
                               size_t in_h, size_t in_w, size_t k_h, size_t k_w,
@@ -227,6 +332,55 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
   size_t N = out_c;
   size_t K = in_c * k_h * k_w;
 
+  // Native W8A8 Quantized GEMM with direct one-shot INT8 im2col (Zero float buffer)
+  if (weights_i8_trans && scales && act_scale > 0.0f) {
+    thread_local static std::vector<int8_t> a_i8;
+    if (a_i8.size() < M * K) {
+      a_i8.resize(M * K);
+    }
+    float inv_act_scale = 1.0f / act_scale;
+
+    if (k_h == 1 && k_w == 1 && stride == 1 && pad == 0) {
+      #pragma omp parallel for schedule(static)
+      for (size_t m = 0; m < M; ++m) {
+        quantize_f32_to_i8(in + m * in_c, a_i8.data() + m * in_c, in_c, inv_act_scale);
+      }
+    } else if (k_h == 1 && k_w == 1 && stride > 1 && pad == 0) {
+      #pragma omp parallel for schedule(static)
+      for (size_t oh = 0; oh < out_h; ++oh) {
+        const float *in_row = in + (oh * stride) * in_w * in_c;
+        int8_t *sub_row = a_i8.data() + oh * out_w * in_c;
+        for (size_t ow = 0; ow < out_w; ++ow) {
+          quantize_f32_to_i8(in_row + (ow * stride) * in_c, sub_row + ow * in_c, in_c, inv_act_scale);
+        }
+      }
+    } else {
+      im2col_nhwc_i8(in, in_c, in_h, in_w, k_h, k_w, pad, stride, inv_act_scale, a_i8.data());
+    }
+
+    #pragma omp parallel for schedule(static)
+    for (size_t m = 0; m < M; m += 4) {
+      size_t cur_rows = std::min(static_cast<size_t>(4), M - m);
+      const int8_t *a_tile = a_i8.data() + m * K;
+
+      for (size_t n = 0; n < N; ++n) {
+        const int8_t *w_col = weights_i8_trans + n * K;
+        int32_t acc[4] = {0, 0, 0, 0};
+        dotI8Tile4(a_tile, K, cur_rows, w_col, K, acc);
+
+        float eff_scale = act_scale * scales[n];
+        float b = bias ? bias[n] : 0.0f;
+
+        for (size_t r = 0; r < cur_rows; ++r) {
+          float val = static_cast<float>(acc[r]) * eff_scale + b;
+          out[(m + r) * N + n] = apply_relu ? std::max(0.0f, val) : val;
+        }
+      }
+    }
+    return;
+  }
+
+  // Fallback: FP32 BLAS GEMM
   thread_local static std::vector<float> col_data;
   const float *a_gemm = in;
 
@@ -252,42 +406,6 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
     }
     im2col_nhwc(in, in_c, in_h, in_w, k_h, k_w, pad, stride, col_data.data());
     a_gemm = col_data.data();
-  }
-
-  // Native W8A8 Quantized GEMM with Seungbaek Hong's dotI8Tile4 micro-tiling
-  if (weights_i8_trans && scales && act_scale > 0.0f) {
-    thread_local static std::vector<int8_t> a_i8;
-    if (a_i8.size() < M * K) {
-      a_i8.resize(M * K);
-    }
-
-    float inv_act_scale = 1.0f / act_scale;
-    #pragma omp parallel for schedule(static)
-    for (size_t i = 0; i < M * K; ++i) {
-      float q = std::round(a_gemm[i] * inv_act_scale);
-      a_i8[i] = static_cast<int8_t>(std::clamp(q, -128.0f, 127.0f));
-    }
-
-    #pragma omp parallel for schedule(static)
-    for (size_t m = 0; m < M; m += 4) {
-      size_t cur_rows = std::min(static_cast<size_t>(4), M - m);
-      const int8_t *a_tile = a_i8.data() + m * K;
-
-      for (size_t n = 0; n < N; ++n) {
-        const int8_t *w_col = weights_i8_trans + n * K;
-        int32_t acc[4] = {0, 0, 0, 0};
-        dotI8Tile4(a_tile, K, cur_rows, w_col, K, acc);
-
-        float eff_scale = act_scale * scales[n];
-        float b = bias ? bias[n] : 0.0f;
-
-        for (size_t r = 0; r < cur_rows; ++r) {
-          float val = static_cast<float>(acc[r]) * eff_scale + b;
-          out[(m + r) * N + n] = apply_relu ? std::max(0.0f, val) : val;
-        }
-      }
-    }
-    return;
   }
 
   // Fallback: FP32 BLAS GEMM
