@@ -57,6 +57,24 @@ public:
     const std::vector<uint8_t> &speaker_counting,
     size_t total_frames = 0);
 
+  /**
+   * @brief Streaming diarization with cross-window global speaker tracking and time offsetting.
+   * @param embeddings Flat array of embeddings.
+   * @param segmentations Segmentation probabilities.
+   * @param speaker_counting Active speaker count per frame.
+   * @param total_frames Total frames in this window.
+   * @param window_offset_sec Offset timestamp in seconds for this window.
+   * @param tracker Reference to persistent OnlineSpeakerTracker.
+   * @return List of diarization speaker segments with consistent global speaker IDs.
+   */
+  std::vector<SpeakerSegment> diarizeStreaming(
+    const std::vector<float> &embeddings,
+    const std::vector<std::vector<float>> &segmentations,
+    const std::vector<uint8_t> &speaker_counting,
+    size_t total_frames,
+    double window_offset_sec,
+    class OnlineSpeakerTracker &tracker);
+
 private:
   // xvec_transform.npz
   const float *mean1_ = nullptr; // [256]
