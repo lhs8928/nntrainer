@@ -137,6 +137,20 @@ const float *WeightLoader::getTensor(const std::string &name, std::vector<uint32
   return reinterpret_cast<const float*>(data_base_ + it->second.offset);
 }
 
+const int8_t *WeightLoader::getTensorI8(const std::string &name, std::vector<uint32_t> *dims) const {
+  auto it = tensors_.find(name);
+  if (it == tensors_.end()) {
+    std::cerr << "[WeightLoader] Tensor not found: " << name << std::endl;
+    return nullptr;
+  }
+
+  if (dims) {
+    *dims = it->second.dims;
+  }
+
+  return reinterpret_cast<const int8_t*>(data_base_ + it->second.offset);
+}
+
 bool WeightLoader::hasTensor(const std::string &name) const {
   return tensors_.find(name) != tensors_.end();
 }
