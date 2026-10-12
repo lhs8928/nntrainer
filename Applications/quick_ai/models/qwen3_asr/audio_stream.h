@@ -96,6 +96,27 @@ private:
   size_t buf_start_ = 0; /**< stream index of buf_[0] */
 };
 
+/**
+ * @brief Keeps the tail of the text recognized so far, to be given to the next
+ *        segment as context (system prompt) so that a sentence cut at a
+ *        segment boundary continues naturally. Holds at most max_chars UTF-8
+ *        characters and starts at a word boundary when possible.
+ */
+class ContextCarry {
+public:
+  explicit ContextCarry(size_t max_chars = 0) : max_chars_(max_chars) {}
+  bool enabled() const { return max_chars_ > 0; }
+  size_t maxChars() const { return max_chars_; }
+  /** @brief append the text of a finished segment */
+  void add(const std::string &text);
+  /** @brief current context string (empty if disabled / nothing yet) */
+  const std::string &get() const { return text_; }
+
+private:
+  size_t max_chars_;
+  std::string text_;
+};
+
 /** @brief peak of the 100 ms frame RMS values of a segment (linear, 0..1) */
 float segmentPeakRms(const std::vector<float> &x);
 

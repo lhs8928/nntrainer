@@ -36,6 +36,7 @@
 #include "audio_stream.h"
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <csignal>
 #include <deque>
 #include <mutex>
@@ -228,7 +229,9 @@ struct CoutMute {
  */
 void runStreamMode(quick_ai::Qwen3ASRCausalLM &asr, quick_ai::PcmSource &src,
                    float seg_min_sec, float silence_rms,
-                   const std::string &input_text, bool do_sample,
+                   const std::function<std::string(const std::string &)>
+                     &make_prompt,
+                   quick_ai::ContextCarry &ctx_carry, bool do_sample,
                    const std::string &head, const std::string &tail,
                    bool verbose, unsigned int max_waiting) {
   using clk = std::chrono::steady_clock;
@@ -317,7 +320,7 @@ void runStreamMode(quick_ai::Qwen3ASRCausalLM &asr, quick_ai::PcmSource &src,
     const auto p0 = clk::now();
     {
       CoutMute mute(!verbose);
-      asr.run(input_text, do_sample, head, tail);
+      asr.run(make_prompt(ctx_carry.get()), do_sample, head, tail);
     }
     const auto p1 = clk::now();
     const double ms = std::chrono::duration<double, std::milli>(p1 - p0).count();
@@ -325,6 +328,7 @@ void runStreamMode(quick_ai::Qwen3ASRCausalLM &asr, quick_ai::PcmSource &src,
       std::chrono::duration<double>(p1 - it.ready).count();
     proc_s += ms / 1000.0;
     max_delay_s = std::max(max_delay_s, delay_s);
+    ctx_carry.add(asr.getLastTranscription());
     std::cout << "[" << std::fixed << std::setprecision(1) << t0 << "s-" << t1
               << "s] " << asr.getLastTranscription() << "   (proc "
               << std::setprecision(1) << ms / 1000.0 << " s, text ready "
@@ -373,6 +377,9 @@ int main(int argc, char *argv[]) {
   // --max-backlog N: if the model falls behind real time and more than N
   // segments are waiting, drop the oldest ones (bounded latency) and say so.
   unsigned int max_backlog_opt = 2;
+  // --context-chars N: give the last N characters of the previous segments'
+  // text to the next segment as context (system prompt). 0 = off.
+  size_t context_chars = 0;
   float stream_speed = 1.0f; // --stream-speed X: replay --stream-file X times faster (stress test)
   bool stream_mic = false, stream_stdin = false, stream_verbose = false;
   auto take_opt = [&](const char *name, bool has_value, std::string &val) {
@@ -409,6 +416,8 @@ int main(int argc, char *argv[]) {
       stream_verbose = true;
     if (take_opt("--language", true, v))
       forced_language = v;
+    if (take_opt("--context-chars", true, v))
+      context_chars = static_cast<size_t>(std::stoul(v));
     if (take_opt("--stream-speed", true, v))
       stream_speed = std::stof(v);
     if (take_opt("--max-backlog", true, v))
@@ -448,6 +457,7 @@ int main(int argc, char *argv[]) {
 
   const std::string model_path = argv[1];
   std::string input_text;
+  std::function<std::string(const std::string &)> make_prompt;
   std::string system_head_prompt = "";
   std::string system_tail_prompt = "";
 
@@ -498,6 +508,8 @@ int main(int argc, char *argv[]) {
       unsigned int base_seq_len = nntr_cfg.value("init_seq_len", 15);
       if (!forced_language.empty())
         base_seq_len += 8; // room for the "language X<asr_text>" prompt tokens
+      if (context_chars > 0)
+        base_seq_len += 2 * context_chars + 8; // room for the context tokens
       unsigned int num_to_generate = nntr_cfg.value("num_to_generate", 5);
       nntr_cfg["init_seq_len"] = base_seq_len + audio_seq_len;
       nntr_cfg["max_seq_len"] = base_seq_len + audio_seq_len + num_to_generate;
@@ -592,10 +604,20 @@ int main(int argc, char *argv[]) {
         for (unsigned int idx = 0; idx < audio_seq_len; ++idx) {
           pad_tokens += "<|audio_pad|>";
         }
-        input_text = "<|im_start|>system\n<|im_end|>\n<|im_start|>user\n<|audio_start|>" + 
-                     pad_tokens + "<|audio_end|>" + input_text + "<|im_end|>\n<|im_start|>assistant\n";
-        if (!forced_language.empty())
-          input_text += "language " + forced_language + "<asr_text>";
+        // the prompt of a segment: the optional context goes into the system
+        // message (the official Qwen3-ASR way of giving context)
+        const std::string user_text = input_text;
+        make_prompt = [pad_tokens, user_text,
+                       forced_language](const std::string &ctx) {
+          std::string p = "<|im_start|>system\n" + ctx +
+                          "<|im_end|>\n<|im_start|>user\n<|audio_start|>" +
+                          pad_tokens + "<|audio_end|>" + user_text +
+                          "<|im_end|>\n<|im_start|>assistant\n";
+          if (!forced_language.empty())
+            p += "language " + forced_language + "<asr_text>";
+          return p;
+        };
+        input_text = make_prompt("");
         
         system_head_prompt.clear();
         system_tail_prompt.clear();
@@ -626,8 +648,9 @@ int main(int argc, char *argv[]) {
       } else {
         source = std::make_unique<quick_ai::PipeSource>("");
       }
+      quick_ai::ContextCarry ctx_carry(context_chars);
       runStreamMode(*asr_seg_model, *source, segment_min_sec, silence_rms,
-                    input_text, do_sample, system_head_prompt,
+                    make_prompt, ctx_carry, do_sample, system_head_prompt,
                     system_tail_prompt, stream_verbose, max_backlog_opt);
     } else if (segment_sec > 0.0f && asr_seg_model != nullptr &&
                !audio_path.empty()) {
@@ -642,6 +665,7 @@ int main(int argc, char *argv[]) {
                 << " s" << std::endl;
       double total_proc_ms = 0.0;
       std::string full_text;
+      quick_ai::ContextCarry ctx_carry(context_chars);
       for (size_t k = 0; k < num_segs; ++k) {
         const size_t b = k * seg_samples;
         const size_t e = std::min(all.size(), b + seg_samples);
@@ -649,13 +673,14 @@ int main(int argc, char *argv[]) {
         seg.resize(seg_samples, 0.0f); // pad the last segment with silence
         asr_seg_model->setAudioPcm(std::move(seg));
         auto t0 = std::chrono::high_resolution_clock::now();
-        model->run(input_text, do_sample, system_head_prompt,
+        model->run(make_prompt(ctx_carry.get()), do_sample, system_head_prompt,
                    system_tail_prompt);
         double ms = std::chrono::duration<double, std::milli>(
                       std::chrono::high_resolution_clock::now() - t0)
                       .count();
         total_proc_ms += ms;
         const std::string &txt = asr_seg_model->getLastTranscription();
+        ctx_carry.add(txt);
         std::cout << "[SEG " << k << "] " << b / 16000.0 << "s-" << e / 16000.0
                   << "s processed in " << ms << " ms: " << txt << std::endl;
         if (!full_text.empty() && !txt.empty())

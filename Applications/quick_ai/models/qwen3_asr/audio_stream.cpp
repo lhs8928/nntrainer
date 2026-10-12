@@ -110,6 +110,46 @@ bool Segmenter::flush(std::vector<float> &seg, size_t &start_sample) {
   return true;
 }
 
+void ContextCarry::add(const std::string &text) {
+  if (max_chars_ == 0)
+    return;
+  // trim and drop special-token look-alikes that would confuse the prompt
+  std::string t = text;
+  size_t pos;
+  while ((pos = t.find("<|")) != std::string::npos) {
+    const size_t end = t.find("|>", pos);
+    t.erase(pos, end == std::string::npos ? std::string::npos : end + 2 - pos);
+  }
+  const size_t b = t.find_first_not_of(" \t\r\n");
+  if (b == std::string::npos)
+    return;
+  t = t.substr(b, t.find_last_not_of(" \t\r\n") - b + 1);
+  if (!text_.empty())
+    text_ += ' ';
+  text_ += t;
+  // keep the last max_chars_ code points
+  size_t n_chars = 0;
+  for (unsigned char c : text_)
+    if ((c & 0xC0) != 0x80)
+      ++n_chars;
+  if (n_chars <= max_chars_)
+    return;
+  size_t skip = n_chars - max_chars_, i = 0, seen = 0;
+  while (i < text_.size()) {
+    if (((unsigned char)text_[i] & 0xC0) != 0x80) {
+      if (seen == skip)
+        break;
+      ++seen;
+    }
+    ++i;
+  }
+  text_.erase(0, i);
+  // prefer to start at a word boundary (within the first quarter)
+  const size_t sp = text_.find(' ');
+  if (sp != std::string::npos && sp < text_.size() / 4)
+    text_.erase(0, sp + 1);
+}
+
 float segmentPeakRms(const std::vector<float> &x) {
   float peak = 0.f;
   for (size_t i = 0; i + kFrame <= x.size(); i += kFrame)
