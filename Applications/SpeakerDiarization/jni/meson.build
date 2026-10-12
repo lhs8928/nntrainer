@@ -15,6 +15,8 @@ speaker_diarization_sources = [
   '../models/pyannet.cpp',
   '../models/wespeaker_resnet34.cpp',
   '../models/plda_vbx.cpp',
+  '../models/online_speaker_tracker.cpp',
+  '../models/audio_stream_buffer.cpp',
 ]
 
 openmp_dep = dependency('openmp', required: false)
