@@ -152,6 +152,103 @@ static inline void dotI8Tile4(const int8_t *A, size_t lda, unsigned int rows,
 #endif
 }
 
+/**
+ * @brief 4x4 register micro-tiled INT8 GEMM kernel (Seungbaek Hong's YOLOv7 4x4 micro-kernel).
+ *
+ * Keeps 16 accumulators in NEON registers and computes a 4-row x 4-column tile:
+ * - 4 activation row vectors are loaded once and reused across 4 weight columns (75% savings).
+ * - 4 weight column vectors are loaded once and reused across 4 activation rows (75% savings).
+ * Total 16 vdotq_s32 (SDOT) operations per loop iteration, fully utilizing Cortex-A76 registers.
+ */
+static inline void dotI8Tile4x4(const int8_t *A, size_t lda, unsigned int rows,
+                               const int8_t *W, size_t ldw, unsigned int cols,
+                               size_t K, int32_t out[4][4]) {
+#if (defined(__ARM_FEATURE_DOTPROD) && __ARM_FEATURE_DOTPROD)
+  int32x4_t acc00 = vdupq_n_s32(0), acc01 = vdupq_n_s32(0), acc02 = vdupq_n_s32(0), acc03 = vdupq_n_s32(0);
+  int32x4_t acc10 = vdupq_n_s32(0), acc11 = vdupq_n_s32(0), acc12 = vdupq_n_s32(0), acc13 = vdupq_n_s32(0);
+  int32x4_t acc20 = vdupq_n_s32(0), acc21 = vdupq_n_s32(0), acc22 = vdupq_n_s32(0), acc23 = vdupq_n_s32(0);
+  int32x4_t acc30 = vdupq_n_s32(0), acc31 = vdupq_n_s32(0), acc32 = vdupq_n_s32(0), acc33 = vdupq_n_s32(0);
+
+  size_t k = 0;
+  for (; k + 16 <= K; k += 16) {
+    const int8x16_t a0 = vld1q_s8(A + 0 * lda + k);
+    const int8x16_t a1 = (rows > 1) ? vld1q_s8(A + 1 * lda + k) : vdupq_n_s8(0);
+    const int8x16_t a2 = (rows > 2) ? vld1q_s8(A + 2 * lda + k) : vdupq_n_s8(0);
+    const int8x16_t a3 = (rows > 3) ? vld1q_s8(A + 3 * lda + k) : vdupq_n_s8(0);
+
+    const int8x16_t w0 = vld1q_s8(W + 0 * ldw + k);
+    acc00 = vdotq_s32(acc00, a0, w0);
+    acc10 = vdotq_s32(acc10, a1, w0);
+    acc20 = vdotq_s32(acc20, a2, w0);
+    acc30 = vdotq_s32(acc30, a3, w0);
+
+    if (cols > 1) {
+      const int8x16_t w1 = vld1q_s8(W + 1 * ldw + k);
+      acc01 = vdotq_s32(acc01, a0, w1);
+      acc11 = vdotq_s32(acc11, a1, w1);
+      acc21 = vdotq_s32(acc21, a2, w1);
+      acc31 = vdotq_s32(acc31, a3, w1);
+    }
+    if (cols > 2) {
+      const int8x16_t w2 = vld1q_s8(W + 2 * ldw + k);
+      acc02 = vdotq_s32(acc02, a0, w2);
+      acc12 = vdotq_s32(acc12, a1, w2);
+      acc22 = vdotq_s32(acc22, a2, w2);
+      acc32 = vdotq_s32(acc32, a3, w2);
+    }
+    if (cols > 3) {
+      const int8x16_t w3 = vld1q_s8(W + 3 * ldw + k);
+      acc03 = vdotq_s32(acc03, a0, w3);
+      acc13 = vdotq_s32(acc13, a1, w3);
+      acc23 = vdotq_s32(acc23, a2, w3);
+      acc33 = vdotq_s32(acc33, a3, w3);
+    }
+  }
+
+  out[0][0] = vaddvq_s32(acc00);
+  if (cols > 1) out[0][1] = vaddvq_s32(acc01);
+  if (cols > 2) out[0][2] = vaddvq_s32(acc02);
+  if (cols > 3) out[0][3] = vaddvq_s32(acc03);
+
+  if (rows > 1) {
+    out[1][0] = vaddvq_s32(acc10);
+    if (cols > 1) out[1][1] = vaddvq_s32(acc11);
+    if (cols > 2) out[1][2] = vaddvq_s32(acc12);
+    if (cols > 3) out[1][3] = vaddvq_s32(acc13);
+  }
+  if (rows > 2) {
+    out[2][0] = vaddvq_s32(acc20);
+    if (cols > 1) out[2][1] = vaddvq_s32(acc21);
+    if (cols > 2) out[2][2] = vaddvq_s32(acc22);
+    if (cols > 3) out[2][3] = vaddvq_s32(acc23);
+  }
+  if (rows > 3) {
+    out[3][0] = vaddvq_s32(acc30);
+    if (cols > 1) out[3][1] = vaddvq_s32(acc31);
+    if (cols > 2) out[3][2] = vaddvq_s32(acc32);
+    if (cols > 3) out[3][3] = vaddvq_s32(acc33);
+  }
+
+  for (; k < K; ++k) {
+    for (unsigned int c = 0; c < cols; ++c) {
+      int32_t wv = static_cast<int32_t>(W[c * ldw + k]);
+      for (unsigned int r = 0; r < rows; ++r) {
+        out[r][c] += static_cast<int32_t>(A[r * lda + k]) * wv;
+      }
+    }
+  }
+#else
+  for (unsigned int r = 0; r < rows; ++r) {
+    for (unsigned int c = 0; c < cols; ++c) {
+      out[r][c] = 0;
+      for (size_t k = 0; k < K; ++k) {
+        out[r][c] += static_cast<int32_t>(A[r * lda + k]) * static_cast<int32_t>(W[c * ldw + k]);
+      }
+    }
+  }
+#endif
+}
+
 static inline void quantize_f32_to_i8(const float *src, int8_t *dst, size_t count, float inv_scale) {
 #if (defined(__ARM_NEON) || defined(__ARM_NEON__))
   const float32x4_t vscale = vdupq_n_f32(inv_scale);
@@ -363,17 +460,22 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
       size_t cur_rows = std::min(static_cast<size_t>(4), M - m);
       const int8_t *a_tile = a_i8.data() + m * K;
 
-      for (size_t n = 0; n < N; ++n) {
-        const int8_t *w_col = weights_i8_trans + n * K;
-        int32_t acc[4] = {0, 0, 0, 0};
-        dotI8Tile4(a_tile, K, cur_rows, w_col, K, acc);
+      for (size_t n = 0; n < N; n += 4) {
+        size_t cur_cols = std::min(static_cast<size_t>(4), N - n);
+        const int8_t *w_tile = weights_i8_trans + n * K;
 
-        float eff_scale = act_scale * scales[n];
-        float b = bias ? bias[n] : 0.0f;
+        int32_t acc[4][4];
+        dotI8Tile4x4(a_tile, K, cur_rows, w_tile, K, cur_cols, K, acc);
 
-        for (size_t r = 0; r < cur_rows; ++r) {
-          float val = static_cast<float>(acc[r]) * eff_scale + b;
-          out[(m + r) * N + n] = apply_relu ? std::max(0.0f, val) : val;
+        for (size_t c = 0; c < cur_cols; ++c) {
+          size_t out_n = n + c;
+          float eff_scale = act_scale * scales[out_n];
+          float b = bias ? bias[out_n] : 0.0f;
+
+          for (size_t r = 0; r < cur_rows; ++r) {
+            float val = static_cast<float>(acc[r][c]) * eff_scale + b;
+            out[(m + r) * N + out_n] = apply_relu ? std::max(0.0f, val) : val;
+          }
         }
       }
     }
