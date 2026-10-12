@@ -13,6 +13,18 @@
 #include <stdexcept>
 #include <thread>
 
+#if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
+#define NNTR_POPEN _popen
+#define NNTR_PCLOSE _pclose
+#define NNTR_POPEN_MODE "rb"
+#else
+#define NNTR_POPEN popen
+#define NNTR_PCLOSE pclose
+#define NNTR_POPEN_MODE "r"
+#endif
+
 namespace quick_ai {
 
 static constexpr size_t kSampleRate = 16000;
@@ -43,8 +55,11 @@ PipeSource::PipeSource(const std::string &cmd) {
   if (cmd.empty()) {
     fp_ = stdin;
     is_pipe_ = false;
+#if defined(_WIN32)
+    _setmode(_fileno(stdin), _O_BINARY); // raw PCM: no CRLF translation
+#endif
   } else {
-    fp_ = popen(cmd.c_str(), "r");
+    fp_ = NNTR_POPEN(cmd.c_str(), NNTR_POPEN_MODE);
     if (!fp_)
       throw std::runtime_error("PipeSource: cannot start: " + cmd);
     is_pipe_ = true;
@@ -53,7 +68,7 @@ PipeSource::PipeSource(const std::string &cmd) {
 
 PipeSource::~PipeSource() {
   if (fp_ && is_pipe_)
-    pclose(fp_);
+    NNTR_PCLOSE(fp_);
 }
 
 size_t PipeSource::read(float *dst, size_t max_samples) {

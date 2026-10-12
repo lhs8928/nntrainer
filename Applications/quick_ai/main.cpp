@@ -642,6 +642,11 @@ int main(int argc, char *argv[]) {
         source = std::make_unique<quick_ai::WavRealtimeSource>(
           sp.loadWav(stream_file), stream_speed);
       } else if (stream_mic) {
+#if defined(_WIN32)
+        throw std::invalid_argument(
+          "--mic uses arecord (ALSA) and is not available on Windows; pipe raw "
+          "16 kHz s16le mono PCM with --stdin-pcm or use --stream-file");
+#endif
         const std::string dev = mic_device.empty() ? "default" : mic_device;
         source = std::make_unique<quick_ai::PipeSource>(
           "arecord -q -D " + dev + " -f S16_LE -r 16000 -c 1 -t raw");
