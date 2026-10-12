@@ -14,8 +14,8 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
-#include <vector>
 #include <tensor_dim.h>
+#include <vector>
 
 #include <multimodal_scatter.h>
 #include <nntrainer_error.h>
@@ -62,8 +62,7 @@ void MultimodalScatterLayer::forwarding(nntrainer::RunLayerContext &context,
   if (const char *dump_path = std::getenv("NNTR_DUMP_AUDIO_FEATS")) {
     const size_t n = audio_features.height() * audio_features.width();
     std::vector<float> buf(n);
-    if (audio_features.getDataType() ==
-        ml::train::TensorDim::DataType::FP16) {
+    if (audio_features.getDataType() == ml::train::TensorDim::DataType::FP16) {
 #ifdef ENABLE_FP16
       const _FP16 *src = audio_features.getData<_FP16>();
       for (size_t i = 0; i < n; ++i)
