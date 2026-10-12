@@ -8,9 +8,14 @@
  * @author Hyeonseok Lee <hs89.lee@samsung.com>
  */
 
-#include <cstring>
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
 #include <iostream>
+#include <vector>
+#include <tensor_dim.h>
 
 #include <multimodal_scatter.h>
 #include <nntrainer_error.h>
@@ -50,6 +55,27 @@ void MultimodalScatterLayer::forwarding(nntrainer::RunLayerContext &context,
               << ", fused_embed: " << fused_embed.getData()
               << ", audio_features: " << audio_features.getData() << std::endl;
     return;
+  }
+
+  // Debug aid: NNTR_DUMP_AUDIO_FEATS=<path> writes the audio encoder output
+  // ([audio tokens, hidden], float32) so it can be compared with a reference.
+  if (const char *dump_path = std::getenv("NNTR_DUMP_AUDIO_FEATS")) {
+    const size_t n = audio_features.height() * audio_features.width();
+    std::vector<float> buf(n);
+    if (audio_features.getDataType() ==
+        ml::train::TensorDim::DataType::FP16) {
+#ifdef ENABLE_FP16
+      const _FP16 *src = audio_features.getData<_FP16>();
+      for (size_t i = 0; i < n; ++i)
+        buf[i] = static_cast<float>(src[i]);
+#endif
+    } else {
+      const float *src = audio_features.getData<float>();
+      std::copy(src, src + n, buf.begin());
+    }
+    std::ofstream of(dump_path, std::ios::binary);
+    of.write(reinterpret_cast<const char *>(buf.data()),
+             static_cast<std::streamsize>(n * sizeof(float)));
   }
 
   // Copy all text embeddings to output first
