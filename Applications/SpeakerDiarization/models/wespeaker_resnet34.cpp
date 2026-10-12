@@ -60,6 +60,98 @@ static inline std::vector<int8_t> transpose_KN_to_NK(const int8_t *src, size_t K
   return dst;
 }
 
+/**
+ * @brief 4-row micro-tiled INT8 dot product kernel (Seungbaek Hong's dotI8Tile optimization).
+ *
+ * Keeps accumulators live in vector registers and loads weights ONCE across up to 4
+ * activation rows, reducing weight memory traffic by 75%.
+ */
+static inline void dotI8Tile4(const int8_t *A, size_t lda, unsigned int rows,
+                             const int8_t *w_col, size_t K, int32_t *out) {
+#if (defined(__ARM_FEATURE_DOTPROD) && __ARM_FEATURE_DOTPROD)
+  int32x4_t acc0 = vdupq_n_s32(0);
+  int32x4_t acc1 = vdupq_n_s32(0);
+  int32x4_t acc2 = vdupq_n_s32(0);
+  int32x4_t acc3 = vdupq_n_s32(0);
+
+  size_t k = 0;
+  for (; k + 16 <= K; k += 16) {
+    const int8x16_t w0 = vld1q_s8(w_col + k);
+    acc0 = vdotq_s32(acc0, vld1q_s8(A + 0 * lda + k), w0);
+    if (rows > 1) acc1 = vdotq_s32(acc1, vld1q_s8(A + 1 * lda + k), w0);
+    if (rows > 2) acc2 = vdotq_s32(acc2, vld1q_s8(A + 2 * lda + k), w0);
+    if (rows > 3) acc3 = vdotq_s32(acc3, vld1q_s8(A + 3 * lda + k), w0);
+  }
+
+  out[0] = vaddvq_s32(acc0);
+  if (rows > 1) out[1] = vaddvq_s32(acc1);
+  if (rows > 2) out[2] = vaddvq_s32(acc2);
+  if (rows > 3) out[3] = vaddvq_s32(acc3);
+
+  for (; k < K; ++k) {
+    int32_t wv = static_cast<int32_t>(w_col[k]);
+    out[0] += static_cast<int32_t>(A[0 * lda + k]) * wv;
+    if (rows > 1) out[1] += static_cast<int32_t>(A[1 * lda + k]) * wv;
+    if (rows > 2) out[2] += static_cast<int32_t>(A[2 * lda + k]) * wv;
+    if (rows > 3) out[3] += static_cast<int32_t>(A[3 * lda + k]) * wv;
+  }
+#elif (defined(__ARM_NEON) || defined(__ARM_NEON__))
+  int32x4_t acc0 = vdupq_n_s32(0);
+  int32x4_t acc1 = vdupq_n_s32(0);
+  int32x4_t acc2 = vdupq_n_s32(0);
+  int32x4_t acc3 = vdupq_n_s32(0);
+
+  size_t k = 0;
+  for (; k + 16 <= K; k += 16) {
+    const int8x16_t w0 = vld1q_s8(w_col + k);
+    const int8x8_t w0_l = vget_low_s8(w0);
+    const int8x8_t w0_h = vget_high_s8(w0);
+
+    const int8x16_t a0 = vld1q_s8(A + 0 * lda + k);
+    acc0 = vpadalq_s16(acc0, vmull_s8(vget_low_s8(a0), w0_l));
+    acc0 = vpadalq_s16(acc0, vmull_s8(vget_high_s8(a0), w0_h));
+
+    if (rows > 1) {
+      const int8x16_t a1 = vld1q_s8(A + 1 * lda + k);
+      acc1 = vpadalq_s16(acc1, vmull_s8(vget_low_s8(a1), w0_l));
+      acc1 = vpadalq_s16(acc1, vmull_s8(vget_high_s8(a1), w0_h));
+    }
+    if (rows > 2) {
+      const int8x16_t a2 = vld1q_s8(A + 2 * lda + k);
+      acc2 = vpadalq_s16(acc2, vmull_s8(vget_low_s8(a2), w0_l));
+      acc2 = vpadalq_s16(acc2, vmull_s8(vget_high_s8(a2), w0_h));
+    }
+    if (rows > 3) {
+      const int8x16_t a3 = vld1q_s8(A + 3 * lda + k);
+      acc3 = vpadalq_s16(acc3, vmull_s8(vget_low_s8(a3), w0_l));
+      acc3 = vpadalq_s16(acc3, vmull_s8(vget_high_s8(a3), w0_h));
+    }
+  }
+
+  out[0] = vaddvq_s32(acc0);
+  if (rows > 1) out[1] = vaddvq_s32(acc1);
+  if (rows > 2) out[2] = vaddvq_s32(acc2);
+  if (rows > 3) out[3] = vaddvq_s32(acc3);
+
+  for (; k < K; ++k) {
+    int32_t wv = static_cast<int32_t>(w_col[k]);
+    out[0] += static_cast<int32_t>(A[0 * lda + k]) * wv;
+    if (rows > 1) out[1] += static_cast<int32_t>(A[1 * lda + k]) * wv;
+    if (rows > 2) out[2] += static_cast<int32_t>(A[2 * lda + k]) * wv;
+    if (rows > 3) out[3] += static_cast<int32_t>(A[3 * lda + k]) * wv;
+  }
+#else
+  out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 0;
+  for (size_t k = 0; k < K; ++k) {
+    int32_t wv = static_cast<int32_t>(w_col[k]);
+    out[0] += static_cast<int32_t>(A[0 * lda + k]) * wv;
+    if (rows > 1) out[1] += static_cast<int32_t>(A[1 * lda + k]) * wv;
+    if (rows > 2) out[2] += static_cast<int32_t>(A[2 * lda + k]) * wv;
+    if (rows > 3) out[3] += static_cast<int32_t>(A[3 * lda + k]) * wv;
+  }
+#endif
+}
+
 // NHWC im2col: gathers input patches into Col[out_h * out_w, k_h * k_w * in_c]
 static inline void im2col_nhwc(const float *data_im, size_t in_c,
                               size_t in_h, size_t in_w, size_t k_h, size_t k_w,
@@ -162,7 +254,7 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
     a_gemm = col_data.data();
   }
 
-  // Native W8A8 Quantized GEMM with contiguous pre-transposed weights and NEON sdot
+  // Native W8A8 Quantized GEMM with Seungbaek Hong's dotI8Tile4 micro-tiling
   if (weights_i8_trans && scales && act_scale > 0.0f) {
     thread_local static std::vector<int8_t> a_i8;
     if (a_i8.size() < M * K) {
@@ -177,40 +269,22 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
     }
 
     #pragma omp parallel for schedule(static)
-    for (size_t m = 0; m < M; ++m) {
-      const int8_t *a_row = a_i8.data() + m * K;
-      float *out_row = out + m * N;
+    for (size_t m = 0; m < M; m += 4) {
+      size_t cur_rows = std::min(static_cast<size_t>(4), M - m);
+      const int8_t *a_tile = a_i8.data() + m * K;
 
       for (size_t n = 0; n < N; ++n) {
         const int8_t *w_col = weights_i8_trans + n * K;
-        int32_t acc = 0;
-        size_t k = 0;
-
-#if (defined(__ARM_FEATURE_DOTPROD) && __ARM_FEATURE_DOTPROD)
-        int32x4_t vacc0 = vdupq_n_s32(0);
-        for (; k + 16 <= K; k += 16) {
-          int8x16_t a_vec = vld1q_s8(a_row + k);
-          int8x16_t b_vec = vld1q_s8(w_col + k);
-          vacc0 = vdotq_s32(vacc0, a_vec, b_vec);
-        }
-        acc = vaddvq_s32(vacc0);
-#elif (defined(__ARM_NEON) || defined(__ARM_NEON__))
-        int32x4_t vacc0 = vdupq_n_s32(0);
-        for (; k + 16 <= K; k += 16) {
-          int8x16_t a_vec = vld1q_s8(a_row + k);
-          int8x16_t b_vec = vld1q_s8(w_col + k);
-          vacc0 = vpadalq_s16(vacc0, vmull_s8(vget_low_s8(a_vec), vget_low_s8(b_vec)));
-          vacc0 = vpadalq_s16(vacc0, vmull_s8(vget_high_s8(a_vec), vget_high_s8(b_vec)));
-        }
-        acc = vaddvq_s32(vacc0);
-#endif
-        for (; k < K; ++k) {
-          acc += static_cast<int32_t>(a_row[k]) * static_cast<int32_t>(w_col[k]);
-        }
+        int32_t acc[4] = {0, 0, 0, 0};
+        dotI8Tile4(a_tile, K, cur_rows, w_col, K, acc);
 
         float eff_scale = act_scale * scales[n];
-        float val = static_cast<float>(acc) * eff_scale + (bias ? bias[n] : 0.0f);
-        out_row[n] = apply_relu ? std::max(0.0f, val) : val;
+        float b = bias ? bias[n] : 0.0f;
+
+        for (size_t r = 0; r < cur_rows; ++r) {
+          float val = static_cast<float>(acc[r]) * eff_scale + b;
+          out[(m + r) * N + n] = apply_relu ? std::max(0.0f, val) : val;
+        }
       }
     }
     return;
