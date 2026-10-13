@@ -237,25 +237,21 @@ static inline void dotI8Tile4x4_full(const int8_t *A, size_t lda,
     acc33 = vdotq_s32(acc33, a3, w3);
   }
 
-  out[0][0] = vaddvq_s32(acc00);
-  out[0][1] = vaddvq_s32(acc01);
-  out[0][2] = vaddvq_s32(acc02);
-  out[0][3] = vaddvq_s32(acc03);
+  int32x4_t p00 = vpaddq_s32(acc00, acc01);
+  int32x4_t p01 = vpaddq_s32(acc02, acc03);
+  vst1q_s32(&out[0][0], vpaddq_s32(p00, p01));
 
-  out[1][0] = vaddvq_s32(acc10);
-  out[1][1] = vaddvq_s32(acc11);
-  out[1][2] = vaddvq_s32(acc12);
-  out[1][3] = vaddvq_s32(acc13);
+  int32x4_t p10 = vpaddq_s32(acc10, acc11);
+  int32x4_t p11 = vpaddq_s32(acc12, acc13);
+  vst1q_s32(&out[1][0], vpaddq_s32(p10, p11));
 
-  out[2][0] = vaddvq_s32(acc20);
-  out[2][1] = vaddvq_s32(acc21);
-  out[2][2] = vaddvq_s32(acc22);
-  out[2][3] = vaddvq_s32(acc23);
+  int32x4_t p20 = vpaddq_s32(acc20, acc21);
+  int32x4_t p21 = vpaddq_s32(acc22, acc23);
+  vst1q_s32(&out[2][0], vpaddq_s32(p20, p21));
 
-  out[3][0] = vaddvq_s32(acc30);
-  out[3][1] = vaddvq_s32(acc31);
-  out[3][2] = vaddvq_s32(acc32);
-  out[3][3] = vaddvq_s32(acc33);
+  int32x4_t p30 = vpaddq_s32(acc30, acc31);
+  int32x4_t p31 = vpaddq_s32(acc32, acc33);
+  vst1q_s32(&out[3][0], vpaddq_s32(p30, p31));
 
   for (; k < K; ++k) {
     int32_t a0v = static_cast<int32_t>(a0_ptr[k]);
