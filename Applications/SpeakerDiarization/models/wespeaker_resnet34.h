@@ -69,19 +69,28 @@ public:
    */
   void forwardBackbone(const float *fbank, float *out_feat,
                        size_t chunk_idx = 0, DebugTensorCallback debug_cb = nullptr);
+/**
+ * @brief Forward pass to compute 256-dim speaker embedding from feature map and speaker mask.
+ *
+ * @param feat Feature map of size 256 * 10 * 125.
+ * @param mask Speaker mask pointer.
+ * @param out_emb Destination buffer for 256-dim embedding.
+ * @param mask_stride Stride between mask elements (e.g., 3 for multi-speaker segmentation tensor).
+ * @param chunk_idx Optional chunk index.
+ * @param spk_idx Optional speaker channel index.
+ * @param debug_cb Optional callback.
+ */
+void forwardPool(const float *feat, const float *mask, float *out_emb,
+                 size_t mask_stride = 1, size_t chunk_idx = 0, size_t spk_idx = 0,
+                 DebugTensorCallback debug_cb = nullptr);
 
-  /**
-   * @brief Pool feature map with speaker activity mask and project to 256-dim embedding.
-   * @param feat Feature map of size 256 * 10 * 125.
-   * @param mask Speaker mask of size 589.
-   * @param chunk_idx Optional chunk index.
-   * @param spk_idx Optional speaker channel index.
-   * @param debug_cb Optional callback.
-   * @return 256-dimensional speaker embedding.
-   */
-  std::vector<float> forwardPool(const float *feat, const float *mask,
-                                 size_t chunk_idx = 0, size_t spk_idx = 0,
-                                 DebugTensorCallback debug_cb = nullptr);
+std::vector<float> forwardPool(const float *feat, const float *mask,
+                               size_t chunk_idx = 0, size_t spk_idx = 0,
+                               DebugTensorCallback debug_cb = nullptr) {
+  std::vector<float> emb(256);
+  forwardPool(feat, mask, emb.data(), 1, chunk_idx, spk_idx, debug_cb);
+  return emb;
+}
 
   /**
    * @brief Forward pass to compute 256-dim speaker embedding from Fbank and speaker mask.

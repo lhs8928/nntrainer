@@ -1265,8 +1265,9 @@ void WeSpeakerResNet34::forwardBackbone(const float *fbank, float *out_feat,
   std::memcpy(out_feat, src_feat, 256 * 10 * 125 * sizeof(float));
 }
 
-std::vector<float> WeSpeakerResNet34::forwardPool(const float *feat, const float *mask,
-                                                 size_t chunk_idx, size_t spk_idx, DebugTensorCallback debug_cb) {
+void WeSpeakerResNet34::forwardPool(const float *feat, const float *mask, float *out_emb,
+                                    size_t mask_stride, size_t chunk_idx, size_t spk_idx,
+                                    DebugTensorCallback debug_cb) {
   std::string pfx = "emb_chunk" + std::to_string(chunk_idx) + "_spk" + std::to_string(spk_idx) + "_";
   constexpr size_t NUM_FRAMES = 125;
   constexpr size_t FEAT_DIM = 2560; // 256 * 10
@@ -1277,13 +1278,15 @@ std::vector<float> WeSpeakerResNet34::forwardPool(const float *feat, const float
 
   for (size_t t = 0; t < NUM_FRAMES; ++t) {
     size_t src_idx = static_cast<size_t>(t * 589 / 125);
-    float weight_val = mask ? mask[src_idx] : 1.0f;
+    float weight_val = mask ? mask[src_idx * mask_stride] : 1.0f;
     w[t] = weight_val;
     v1 += weight_val;
     v2 += weight_val * weight_val;
   }
 
-  std::vector<float> stats(5120, 0.0f);
+  thread_local static std::vector<float> stats;
+  if (stats.size() < 5120) stats.resize(5120);
+
   float var_denom = v1 - (v2 / v1) + 1e-8f;
 
   for (size_t d = 0; d < FEAT_DIM; ++d) {
@@ -1312,7 +1315,6 @@ std::vector<float> WeSpeakerResNet34::forwardPool(const float *feat, const float
   if (debug_cb) debug_cb(pfx + "resnet_pool_tstp", stats.data(), {1, 5120});
 
   // seg_1: Linear(5120 -> 256) W4 Quantized or FP32
-  std::vector<float> embedding(256, 0.0f);
   if (seg_1_w_i4_ && seg_1_s_) {
     // Native W4 computation: stats (float) * int4 * scale
     #pragma omp parallel for schedule(static)
@@ -1323,7 +1325,7 @@ std::vector<float> WeSpeakerResNet34::forwardPool(const float *feat, const float
       for (size_t ic = 0; ic < 5120; ++ic) {
         acc += static_cast<float>(w_row_i4[ic]) * stats[ic];
       }
-      embedding[oc] = acc * seg_1_s_[oc] + seg_1_b_[oc];
+      out_emb[oc] = acc * seg_1_s_[oc] + seg_1_b_[oc];
     }
   } else {
     // FP32 baseline
@@ -1335,12 +1337,10 @@ std::vector<float> WeSpeakerResNet34::forwardPool(const float *feat, const float
       for (size_t ic = 0; ic < 5120; ++ic) {
         acc += w_row[ic] * stats[ic];
       }
-      embedding[oc] = acc;
+      out_emb[oc] = acc;
     }
   }
-  if (debug_cb) debug_cb(pfx + "spk_embedding", embedding.data(), {1, 256});
-
-  return embedding;
+  if (debug_cb) debug_cb(pfx + "spk_embedding", out_emb, {1, 256});
 }
 
 } // namespace speaker_diarization
