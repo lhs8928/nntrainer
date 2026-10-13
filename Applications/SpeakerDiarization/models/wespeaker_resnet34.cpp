@@ -675,28 +675,163 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
   }
 }
 
+// Pure byte copy im2col for standard 3x3 stride-1 pad-1 convolution on already-quantized INT8 input
+static inline void im2col_nhwc_copy_i8(
+    const int8_t *data_im, size_t in_c,
+    size_t in_h, size_t in_w, int8_t *data_col_i8) {
+  size_t K = 9 * in_c;
+  size_t row_span = 3 * in_c;
+
+  #pragma omp parallel for schedule(static)
+  for (size_t oh = 0; oh < in_h; ++oh) {
+    for (size_t ow = 0; ow < in_w; ++ow) {
+      int8_t *col_row = data_col_i8 + (oh * in_w + ow) * K;
+      for (size_t kh = 0; kh < 3; ++kh) {
+        int ih = static_cast<int>(oh + kh) - 1;
+        int8_t *dst_kh = col_row + kh * row_span;
+        if (ih >= 0 && ih < static_cast<int>(in_h)) {
+          if (ow >= 1 && ow + 1 < in_w) {
+            const int8_t *src = data_im + (static_cast<size_t>(ih) * in_w + (ow - 1)) * in_c;
+            std::memcpy(dst_kh, src, row_span);
+          } else {
+            for (size_t kw = 0; kw < 3; ++kw) {
+              int iw = static_cast<int>(ow + kw) - 1;
+              int8_t *dst = dst_kh + kw * in_c;
+              if (iw >= 0 && iw < static_cast<int>(in_w)) {
+                std::memcpy(dst, data_im + (static_cast<size_t>(ih) * in_w + static_cast<size_t>(iw)) * in_c, in_c);
+              } else {
+                std::memset(dst, 0, in_c);
+              }
+            }
+          }
+        } else {
+          std::memset(dst_kh, 0, row_span);
+        }
+      }
+    }
+  }
+}
+
+void WeSpeakerResNet34::runConv2d_F32toI8(
+    const float *in, int8_t *out_i8, size_t in_c, size_t out_c,
+    size_t in_h, size_t in_w, size_t k_h, size_t k_w,
+    size_t stride, size_t pad,
+    const int8_t *weights_i8_trans,
+    const float *scales, const float *bias,
+    float in_act_scale, float next_act_scale) {
+  size_t out_h = (in_h + 2 * pad - k_h) / stride + 1;
+  size_t out_w = (in_w + 2 * pad - k_w) / stride + 1;
+  size_t M = out_h * out_w;
+  size_t N = out_c;
+  size_t K = in_c * k_h * k_w;
+
+  float inv_act_scale = 1.0f / in_act_scale;
+  thread_local static std::vector<int8_t> a_i8;
+
+  if (a_i8.size() < M * K) a_i8.resize(M * K);
+  im2col_nhwc_i8(in, in_c, in_h, in_w, k_h, k_w, pad, stride, inv_act_scale, a_i8.data());
+
+  #pragma omp parallel for schedule(static)
+  for (size_t m = 0; m < M; m += 4) {
+    size_t cur_rows = std::min(static_cast<size_t>(4), M - m);
+    const int8_t *a_tile = a_i8.data() + m * K;
+
+    for (size_t n = 0; n < N; n += 4) {
+      size_t cur_cols = std::min(static_cast<size_t>(4), N - n);
+      const int8_t *w_tile = weights_i8_trans + n * K;
+
+      int32_t acc[4][4];
+      if (cur_rows == 4 && cur_cols == 4) {
+        dotI8Tile4x4_full(a_tile, K, w_tile, K, K, acc);
+      } else {
+        dotI8Tile4x4(a_tile, K, cur_rows, w_tile, K, cur_cols, K, acc);
+      }
+
+      for (size_t c = 0; c < cur_cols; ++c) {
+        size_t out_n = n + c;
+        float eff_scale = (in_act_scale * scales[out_n]) / next_act_scale;
+        float b = (bias ? bias[out_n] : 0.0f) / next_act_scale;
+
+        for (size_t r = 0; r < cur_rows; ++r) {
+          float val = static_cast<float>(acc[r][c]) * eff_scale + b;
+          float relu_val = std::max(0.0f, val);
+          out_i8[(m + r) * N + out_n] = static_cast<int8_t>(
+              std::clamp(static_cast<int>(std::round(relu_val)), -128, 127));
+        }
+      }
+    }
+  }
+}
+
+void WeSpeakerResNet34::runConv2d_I8toF32(
+    const int8_t *in_i8, float *out, size_t in_c, size_t out_c,
+    size_t in_h, size_t in_w, size_t k_h, size_t k_w,
+    size_t stride, size_t pad,
+    const int8_t *weights_i8_trans,
+    const float *scales, const float *bias,
+    float act_scale, bool apply_relu) {
+  size_t out_h = (in_h + 2 * pad - k_h) / stride + 1;
+  size_t out_w = (in_w + 2 * pad - k_w) / stride + 1;
+  size_t M = out_h * out_w;
+  size_t N = out_c;
+  size_t K = in_c * k_h * k_w;
+
+  thread_local static std::vector<int8_t> a_i8;
+  if (a_i8.size() < M * K) a_i8.resize(M * K);
+  im2col_nhwc_copy_i8(in_i8, in_c, in_h, in_w, a_i8.data());
+
+  #pragma omp parallel for schedule(static)
+  for (size_t m = 0; m < M; m += 4) {
+    size_t cur_rows = std::min(static_cast<size_t>(4), M - m);
+    const int8_t *a_tile = a_i8.data() + m * K;
+
+    for (size_t n = 0; n < N; n += 4) {
+      size_t cur_cols = std::min(static_cast<size_t>(4), N - n);
+      const int8_t *w_tile = weights_i8_trans + n * K;
+
+      int32_t acc[4][4];
+      if (cur_rows == 4 && cur_cols == 4) {
+        dotI8Tile4x4_full(a_tile, K, w_tile, K, K, acc);
+      } else {
+        dotI8Tile4x4(a_tile, K, cur_rows, w_tile, K, cur_cols, K, acc);
+      }
+
+      for (size_t c = 0; c < cur_cols; ++c) {
+        size_t out_n = n + c;
+        float eff_scale = act_scale * scales[out_n];
+        float b = bias ? bias[out_n] : 0.0f;
+
+        for (size_t r = 0; r < cur_rows; ++r) {
+          float val = static_cast<float>(acc[r][c]) * eff_scale + b;
+          out[(m + r) * N + out_n] = apply_relu ? std::max(0.0f, val) : val;
+        }
+      }
+    }
+  }
+}
+
 void WeSpeakerResNet34::runBasicBlock(const float *in, float *out, size_t in_h, size_t in_w,
                                      const BasicBlockWeights &block, size_t &out_h, size_t &out_w) {
   out_h = (in_h + 2 * 1 - 3) / block.stride + 1;
   out_w = (in_w + 2 * 1 - 3) / block.stride + 1;
   size_t total_out = block.out_channels * out_h * out_w;
 
-  thread_local static std::vector<float> conv1_out;
+  thread_local static std::vector<int8_t> conv1_out_i8;
   thread_local static std::vector<float> ds_out;
 
-  if (conv1_out.size() < total_out) conv1_out.resize(total_out);
+  if (conv1_out_i8.size() < total_out) conv1_out_i8.resize(total_out);
 
-  // 1. conv1 + bias1 + relu (Fused W8A8)
-  runConv2d(in, conv1_out.data(), block.in_channels, block.out_channels,
-            in_h, in_w, 3, 3, block.stride, 1,
-            block.conv1_w, block.conv1_w_i8_trans.data(), block.conv1_s, block.conv1_b, block.conv1_act_scale,
-            /*apply_relu=*/true);
+  // 1. conv1 + bias1 + relu + direct quantize to int8 (Fused W8A8)
+  runConv2d_F32toI8(in, conv1_out_i8.data(), block.in_channels, block.out_channels,
+                    in_h, in_w, 3, 3, block.stride, 1,
+                    block.conv1_w_i8_trans.data(), block.conv1_s, block.conv1_b,
+                    block.conv1_act_scale, block.conv2_act_scale);
 
-  // 2. conv2 + bias2 (Fused W8A8, no relu before residual addition)
-  runConv2d(conv1_out.data(), out, block.out_channels, block.out_channels,
-            out_h, out_w, 3, 3, 1, 1,
-            block.conv2_w, block.conv2_w_i8_trans.data(), block.conv2_s, block.conv2_b, block.conv2_act_scale,
-            /*apply_relu=*/false);
+  // 2. conv2 + bias2 from int8 (Fused W8A8, no relu before residual addition)
+  runConv2d_I8toF32(conv1_out_i8.data(), out, block.out_channels, block.out_channels,
+                    out_h, out_w, 3, 3, 1, 1,
+                    block.conv2_w_i8_trans.data(), block.conv2_s, block.conv2_b,
+                    block.conv2_act_scale, /*apply_relu=*/false);
 
   // 3. Shortcut / Residual addition + final ReLU
   if (block.downsample) {
