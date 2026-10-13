@@ -36,5 +36,8 @@ e = executable('nntrainer_speaker_diarization',
   include_directories: [include_directories('.'), include_directories('../models')],
   dependencies: speaker_diarization_dependencies,
   install: get_option('install-app'),
-  install_dir: application_install_dir
+  install_dir: application_install_dir,
+  # $ORIGIN: the installed folder can be copied elsewhere and still find the
+  # libraries that sit next to the binary (the build-tree RUNPATH would not).
+  install_rpath: '$ORIGIN'
 )

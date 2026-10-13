@@ -186,6 +186,8 @@ else
         install: true,
         install_dir: application_install_dir,
         link_args: tokenizer_link_args,
+        # the layer libraries sit next to libquick_ai.so in the install folder
+        install_rpath: '$ORIGIN',
         cpp_args: cpp_args
     )
 endif
@@ -204,8 +206,9 @@ e = executable('nntr_quick_ai',
     install_dir: application_install_dir,
     # libquick_ai.so is installed next to the executable, not in a default
     # search path, so without this the installed binary dies with
-    # "cannot open shared object file: libquick_ai.so".
-    install_rpath: application_install_dir
+    # "cannot open shared object file: libquick_ai.so". $ORIGIN keeps the
+    # installed folder relocatable.
+    install_rpath: '$ORIGIN'
 )
 
 
