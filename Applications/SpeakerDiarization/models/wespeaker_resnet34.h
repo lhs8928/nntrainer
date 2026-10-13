@@ -118,6 +118,20 @@ private:
                  const float *scales, const float *bias, float act_scale,
                  bool apply_relu = false);
 
+  void runConv2d_F32toI8(const float *in, int8_t *out_i8, size_t in_c, size_t out_c,
+                         size_t in_h, size_t in_w, size_t k_h, size_t k_w,
+                         size_t stride, size_t pad,
+                         const int8_t *weights_i8_trans,
+                         const float *scales, const float *bias,
+                         float in_act_scale, float next_act_scale);
+
+  void runConv2d_I8toF32(const int8_t *in_i8, float *out, size_t in_c, size_t out_c,
+                         size_t in_h, size_t in_w, size_t k_h, size_t k_w,
+                         size_t stride, size_t pad,
+                         const int8_t *weights_i8_trans,
+                         const float *scales, const float *bias,
+                         float act_scale, bool apply_relu);
+
   void runBasicBlock(const float *in, float *out, size_t in_h, size_t in_w,
                      const BasicBlockWeights &block, size_t &out_h, size_t &out_w);
 };
