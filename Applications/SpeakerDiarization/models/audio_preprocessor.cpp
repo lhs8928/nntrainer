@@ -245,13 +245,66 @@ void AudioPreprocessor::fft512(float *real, float *imag) {
     }
   }
 
-  // 2. Cooley-Tukey Radix-2 with precomputed twiddle factors
+  // 2. Cooley-Tukey Radix-2 with precomputed twiddle factors and NEON butterflies
   for (int len = 2; len <= N; len <<= 1) {
     int half_len = len >> 1;
     int step = N / len;
 
     for (int i = 0; i < N; i += len) {
-      for (int k = 0; k < half_len; ++k) {
+      int k = 0;
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
+      if (step == 1) {
+        // Last stage (len == 512, half_len == 256): 100% contiguous twiddle factors and data!
+        for (; k + 4 <= half_len; k += 4) {
+          float32x4_t vr_top = vld1q_f32(real + i + k);
+          float32x4_t vi_top = vld1q_f32(imag + i + k);
+          float32x4_t vr_bot = vld1q_f32(real + i + k + half_len);
+          float32x4_t vi_bot = vld1q_f32(imag + i + k + half_len);
+
+          float32x4_t vwr = vld1q_f32(twiddle_cos + k);
+          float32x4_t vwi = vld1q_f32(twiddle_sin + k);
+
+          float32x4_t vtr = vmlsq_f32(vmulq_f32(vwr, vr_bot), vwi, vi_bot);
+          float32x4_t vti = vmlaq_f32(vmulq_f32(vwr, vi_bot), vwi, vr_bot);
+
+          vst1q_f32(real + i + k + half_len, vsubq_f32(vr_top, vtr));
+          vst1q_f32(imag + i + k + half_len, vsubq_f32(vi_top, vti));
+          vst1q_f32(real + i + k, vaddq_f32(vr_top, vtr));
+          vst1q_f32(imag + i + k, vaddq_f32(vi_top, vti));
+        }
+      } else if (half_len >= 4) {
+        for (; k + 4 <= half_len; k += 4) {
+          float32x4_t vr_top = vld1q_f32(real + i + k);
+          float32x4_t vi_top = vld1q_f32(imag + i + k);
+          float32x4_t vr_bot = vld1q_f32(real + i + k + half_len);
+          float32x4_t vi_bot = vld1q_f32(imag + i + k + half_len);
+
+          float wr0 = twiddle_cos[(k + 0) * step];
+          float wr1 = twiddle_cos[(k + 1) * step];
+          float wr2 = twiddle_cos[(k + 2) * step];
+          float wr3 = twiddle_cos[(k + 3) * step];
+
+          float wi0 = twiddle_sin[(k + 0) * step];
+          float wi1 = twiddle_sin[(k + 1) * step];
+          float wi2 = twiddle_sin[(k + 2) * step];
+          float wi3 = twiddle_sin[(k + 3) * step];
+
+          float wr_arr[4] = {wr0, wr1, wr2, wr3};
+          float wi_arr[4] = {wi0, wi1, wi2, wi3};
+          float32x4_t vwr = vld1q_f32(wr_arr);
+          float32x4_t vwi = vld1q_f32(wi_arr);
+
+          float32x4_t vtr = vmlsq_f32(vmulq_f32(vwr, vr_bot), vwi, vi_bot);
+          float32x4_t vti = vmlaq_f32(vmulq_f32(vwr, vi_bot), vwi, vr_bot);
+
+          vst1q_f32(real + i + k + half_len, vsubq_f32(vr_top, vtr));
+          vst1q_f32(imag + i + k + half_len, vsubq_f32(vi_top, vti));
+          vst1q_f32(real + i + k, vaddq_f32(vr_top, vtr));
+          vst1q_f32(imag + i + k, vaddq_f32(vi_top, vti));
+        }
+      }
+#endif
+      for (; k < half_len; ++k) {
         int idx = k * step;
         float wr = twiddle_cos[idx];
         float wi = twiddle_sin[idx];
