@@ -18,6 +18,10 @@
 #include <algorithm>
 #include <stdexcept>
 
+#if (defined(__ARM_FEATURE_DOTPROD) && __ARM_FEATURE_DOTPROD) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+#endif
+
 namespace speaker_diarization {
 
 #ifndef M_PI
@@ -265,6 +269,20 @@ std::vector<float> AudioPreprocessor::computeFbank(const float *chunk, size_t nu
 
     // 1. Scale by 32768.0 and remove DC offset
     float mean_val = 0.0f;
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
+    float32x4_t vsum = vdupq_n_f32(0.0f);
+    const float32x4_t vscale = vdupq_n_f32(32768.0f);
+    for (size_t i = 0; i < FRAME_LEN; i += 4) {
+      vsum = vaddq_f32(vsum, vmulq_f32(vld1q_f32(frame_src + i), vscale));
+    }
+    mean_val = vaddvq_f32(vsum) / FRAME_LEN;
+
+    float frame_buf[FRAME_LEN];
+    const float32x4_t vmean = vdupq_n_f32(mean_val);
+    for (size_t i = 0; i < FRAME_LEN; i += 4) {
+      vst1q_f32(frame_buf + i, vsubq_f32(vmulq_f32(vld1q_f32(frame_src + i), vscale), vmean));
+    }
+#else
     for (size_t i = 0; i < FRAME_LEN; ++i) {
       mean_val += frame_src[i] * 32768.0f;
     }
@@ -274,6 +292,7 @@ std::vector<float> AudioPreprocessor::computeFbank(const float *chunk, size_t nu
     for (size_t i = 0; i < FRAME_LEN; ++i) {
       frame_buf[i] = frame_src[i] * 32768.0f - mean_val;
     }
+#endif
 
     // 2. Preemphasis: frame[0] -= 0.97 * frame[0], frame[i] -= 0.97 * frame[i-1]
     float prev = frame_buf[0];
@@ -285,6 +304,17 @@ std::vector<float> AudioPreprocessor::computeFbank(const float *chunk, size_t nu
     }
 
     // 3. Windowing & zero padding to 512
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
+    const float32x4_t vzero = vdupq_n_f32(0.0f);
+    for (size_t i = 0; i < FRAME_LEN; i += 4) {
+      vst1q_f32(real + i, vmulq_f32(vld1q_f32(frame_buf + i), vld1q_f32(window + i)));
+      vst1q_f32(imag + i, vzero);
+    }
+    for (size_t i = FRAME_LEN; i < N_FFT; i += 4) {
+      vst1q_f32(real + i, vzero);
+      vst1q_f32(imag + i, vzero);
+    }
+#else
     for (size_t i = 0; i < FRAME_LEN; ++i) {
       real[i] = frame_buf[i] * window[i];
       imag[i] = 0.0f;
@@ -293,34 +323,76 @@ std::vector<float> AudioPreprocessor::computeFbank(const float *chunk, size_t nu
       real[i] = 0.0f;
       imag[i] = 0.0f;
     }
+#endif
 
     // 4. FFT & Power spectrum for 256 bins
     fft512(real, imag);
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
+    for (size_t k = 0; k < 256; k += 4) {
+      float32x4_t vr = vld1q_f32(real + k);
+      float32x4_t vi = vld1q_f32(imag + k);
+      vst1q_f32(power + k, vfmaq_f32(vmulq_f32(vr, vr), vi, vi));
+    }
+#else
     for (size_t k = 0; k < 256; ++k) {
       power[k] = real[k] * real[k] + imag[k] * imag[k];
     }
+#endif
 
     // 5. Mel filterbank multiplication & Log
     for (size_t m = 0; m < NUM_MEL_BINS; ++m) {
       const float *mel_row = mel_banks + m * 256;
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
+      float32x4_t vsum0 = vdupq_n_f32(0.0f);
+      float32x4_t vsum1 = vdupq_n_f32(0.0f);
+      for (size_t k = 0; k < 256; k += 8) {
+        vsum0 = vfmaq_f32(vsum0, vld1q_f32(mel_row + k + 0), vld1q_f32(power + k + 0));
+        vsum1 = vfmaq_f32(vsum1, vld1q_f32(mel_row + k + 4), vld1q_f32(power + k + 4));
+      }
+      float sum = vaddvq_f32(vaddq_f32(vsum0, vsum1));
+#else
       float sum = 0.0f;
       for (size_t k = 0; k < 256; ++k) {
         sum += mel_row[k] * power[k];
       }
+#endif
       fbank[m * num_frames + f] = std::log(std::max(sum, 1.1920929e-7f));
     }
   }
 
   // 6. Mean-centering across time frames for each mel bin
   for (size_t m = 0; m < NUM_MEL_BINS; ++m) {
+    float *bin_row = fbank.data() + m * num_frames;
     float bin_mean = 0.0f;
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
+    float32x4_t vm0 = vdupq_n_f32(0.0f);
+    size_t f = 0;
+    for (; f + 4 <= num_frames; f += 4) {
+      vm0 = vaddq_f32(vm0, vld1q_f32(bin_row + f));
+    }
+    bin_mean = vaddvq_f32(vm0);
+    for (; f < num_frames; ++f) {
+      bin_mean += bin_row[f];
+    }
+    bin_mean /= num_frames;
+
+    const float32x4_t vsub = vdupq_n_f32(bin_mean);
+    f = 0;
+    for (; f + 4 <= num_frames; f += 4) {
+      vst1q_f32(bin_row + f, vsubq_f32(vld1q_f32(bin_row + f), vsub));
+    }
+    for (; f < num_frames; ++f) {
+      bin_row[f] -= bin_mean;
+    }
+#else
     for (size_t f = 0; f < num_frames; ++f) {
-      bin_mean += fbank[m * num_frames + f];
+      bin_mean += bin_row[f];
     }
     bin_mean /= num_frames;
     for (size_t f = 0; f < num_frames; ++f) {
       fbank[m * num_frames + f] -= bin_mean;
     }
+#endif
   }
 
   return fbank;
