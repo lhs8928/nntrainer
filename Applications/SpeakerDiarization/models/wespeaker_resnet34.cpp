@@ -181,6 +181,111 @@ static inline void dotI8Tile4(const int8_t *A, size_t lda, unsigned int rows,
 }
 
 /**
+ * @brief Completely unbranched 4x4 register micro-tiled INT8 GEMM kernel for full tiles.
+ *
+ * Eliminates all runtime conditional branches inside the innermost loop for the >98% of tiles
+ * where cur_rows == 4 and cur_cols == 4.
+ */
+static inline void dotI8Tile4x4_full(const int8_t *A, size_t lda,
+                                    const int8_t *W, size_t ldw,
+                                    size_t K, int32_t out[4][4]) {
+#if (defined(__ARM_FEATURE_DOTPROD) && __ARM_FEATURE_DOTPROD)
+  int32x4_t acc00 = vdupq_n_s32(0), acc01 = vdupq_n_s32(0), acc02 = vdupq_n_s32(0), acc03 = vdupq_n_s32(0);
+  int32x4_t acc10 = vdupq_n_s32(0), acc11 = vdupq_n_s32(0), acc12 = vdupq_n_s32(0), acc13 = vdupq_n_s32(0);
+  int32x4_t acc20 = vdupq_n_s32(0), acc21 = vdupq_n_s32(0), acc22 = vdupq_n_s32(0), acc23 = vdupq_n_s32(0);
+  int32x4_t acc30 = vdupq_n_s32(0), acc31 = vdupq_n_s32(0), acc32 = vdupq_n_s32(0), acc33 = vdupq_n_s32(0);
+
+  const int8_t *a0_ptr = A + 0 * lda;
+  const int8_t *a1_ptr = A + 1 * lda;
+  const int8_t *a2_ptr = A + 2 * lda;
+  const int8_t *a3_ptr = A + 3 * lda;
+
+  const int8_t *w0_ptr = W + 0 * ldw;
+  const int8_t *w1_ptr = W + 1 * ldw;
+  const int8_t *w2_ptr = W + 2 * ldw;
+  const int8_t *w3_ptr = W + 3 * ldw;
+
+  size_t k = 0;
+  for (; k + 16 <= K; k += 16) {
+    const int8x16_t a0 = vld1q_s8(a0_ptr + k);
+    const int8x16_t a1 = vld1q_s8(a1_ptr + k);
+    const int8x16_t a2 = vld1q_s8(a2_ptr + k);
+    const int8x16_t a3 = vld1q_s8(a3_ptr + k);
+
+    const int8x16_t w0 = vld1q_s8(w0_ptr + k);
+    acc00 = vdotq_s32(acc00, a0, w0);
+    acc10 = vdotq_s32(acc10, a1, w0);
+    acc20 = vdotq_s32(acc20, a2, w0);
+    acc30 = vdotq_s32(acc30, a3, w0);
+
+    const int8x16_t w1 = vld1q_s8(w1_ptr + k);
+    acc01 = vdotq_s32(acc01, a0, w1);
+    acc11 = vdotq_s32(acc11, a1, w1);
+    acc21 = vdotq_s32(acc21, a2, w1);
+    acc31 = vdotq_s32(acc31, a3, w1);
+
+    const int8x16_t w2 = vld1q_s8(w2_ptr + k);
+    acc02 = vdotq_s32(acc02, a0, w2);
+    acc12 = vdotq_s32(acc12, a1, w2);
+    acc22 = vdotq_s32(acc22, a2, w2);
+    acc32 = vdotq_s32(acc32, a3, w2);
+
+    const int8x16_t w3 = vld1q_s8(w3_ptr + k);
+    acc03 = vdotq_s32(acc03, a0, w3);
+    acc13 = vdotq_s32(acc13, a1, w3);
+    acc23 = vdotq_s32(acc23, a2, w3);
+    acc33 = vdotq_s32(acc33, a3, w3);
+  }
+
+  out[0][0] = vaddvq_s32(acc00);
+  out[0][1] = vaddvq_s32(acc01);
+  out[0][2] = vaddvq_s32(acc02);
+  out[0][3] = vaddvq_s32(acc03);
+
+  out[1][0] = vaddvq_s32(acc10);
+  out[1][1] = vaddvq_s32(acc11);
+  out[1][2] = vaddvq_s32(acc12);
+  out[1][3] = vaddvq_s32(acc13);
+
+  out[2][0] = vaddvq_s32(acc20);
+  out[2][1] = vaddvq_s32(acc21);
+  out[2][2] = vaddvq_s32(acc22);
+  out[2][3] = vaddvq_s32(acc23);
+
+  out[3][0] = vaddvq_s32(acc30);
+  out[3][1] = vaddvq_s32(acc31);
+  out[3][2] = vaddvq_s32(acc32);
+  out[3][3] = vaddvq_s32(acc33);
+
+  for (; k < K; ++k) {
+    int32_t a0v = static_cast<int32_t>(a0_ptr[k]);
+    int32_t a1v = static_cast<int32_t>(a1_ptr[k]);
+    int32_t a2v = static_cast<int32_t>(a2_ptr[k]);
+    int32_t a3v = static_cast<int32_t>(a3_ptr[k]);
+
+    int32_t w0v = static_cast<int32_t>(w0_ptr[k]);
+    int32_t w1v = static_cast<int32_t>(w1_ptr[k]);
+    int32_t w2v = static_cast<int32_t>(w2_ptr[k]);
+    int32_t w3v = static_cast<int32_t>(w3_ptr[k]);
+
+    out[0][0] += a0v * w0v; out[0][1] += a0v * w1v; out[0][2] += a0v * w2v; out[0][3] += a0v * w3v;
+    out[1][0] += a1v * w0v; out[1][1] += a1v * w1v; out[1][2] += a1v * w2v; out[1][3] += a1v * w3v;
+    out[2][0] += a2v * w0v; out[2][1] += a2v * w1v; out[2][2] += a2v * w2v; out[2][3] += a2v * w3v;
+    out[3][0] += a3v * w0v; out[3][1] += a3v * w1v; out[3][2] += a3v * w2v; out[3][3] += a3v * w3v;
+  }
+#else
+  for (unsigned int r = 0; r < 4; ++r) {
+    for (unsigned int c = 0; c < 4; ++c) {
+      out[r][c] = 0;
+      for (size_t k = 0; k < K; ++k) {
+        out[r][c] += static_cast<int32_t>(A[r * lda + k]) * static_cast<int32_t>(W[c * ldw + k]);
+      }
+    }
+  }
+#endif
+}
+
+/**
  * @brief 4x4 register micro-tiled INT8 GEMM kernel (Seungbaek Hong's YOLOv7 4x4 micro-kernel).
  *
  * Keeps 16 accumulators in NEON registers and computes a 4-row x 4-column tile:
@@ -493,7 +598,11 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
         const int8_t *w_tile = weights_i8_trans + n * K;
 
         int32_t acc[4][4];
-        dotI8Tile4x4(a_tile, K, cur_rows, w_tile, K, cur_cols, K, acc);
+        if (cur_rows == 4 && cur_cols == 4) {
+          dotI8Tile4x4_full(a_tile, K, w_tile, K, K, acc);
+        } else {
+          dotI8Tile4x4(a_tile, K, cur_rows, w_tile, K, cur_cols, K, acc);
+        }
 
         for (size_t c = 0; c < cur_cols; ++c) {
           size_t out_n = n + c;
