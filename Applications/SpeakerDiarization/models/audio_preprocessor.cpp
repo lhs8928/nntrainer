@@ -282,11 +282,12 @@ std::vector<float> AudioPreprocessor::computeFbank(const float *chunk, size_t nu
   size_t num_frames = (num_samples - FRAME_LEN) / HOP_LEN + 1; // 998 for 160,000
   std::vector<float> fbank(num_frames * NUM_MEL_BINS, 0.0f);
 
-  float real[N_FFT];
-  float imag[N_FFT];
-  float power[256];
-
+  #pragma omp parallel for schedule(static)
   for (size_t f = 0; f < num_frames; ++f) {
+    float real[N_FFT];
+    float imag[N_FFT];
+    float power[256];
+
     const float *frame_src = chunk + f * HOP_LEN;
 
     // 1. Scale by 32768.0 and remove DC offset
@@ -383,6 +384,7 @@ std::vector<float> AudioPreprocessor::computeFbank(const float *chunk, size_t nu
   }
 
   // 6. Mean-centering across time frames for each mel bin
+  #pragma omp parallel for schedule(static)
   for (size_t m = 0; m < NUM_MEL_BINS; ++m) {
     float *bin_row = fbank.data() + m * num_frames;
     float bin_mean = 0.0f;
