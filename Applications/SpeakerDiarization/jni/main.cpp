@@ -469,7 +469,18 @@ static void runStreamingPipeline(
   std::cout << "============================================================\n";
 }
 
+#if defined(USE_BLAS)
+extern "C" void openblas_set_num_threads(int num_threads) __attribute__((weak));
+#endif
+
 int main(int argc, char **argv) {
+#if defined(USE_BLAS)
+  if (openblas_set_num_threads) {
+    openblas_set_num_threads(1);
+  }
+#endif
+  setenv("OPENBLAS_NUM_THREADS", "1", 1);
+
   std::string audio_path = "sample.wav";
   std::string weights_path = "weights/speaker_diarization.bin";
   bool debug_mode = false;
