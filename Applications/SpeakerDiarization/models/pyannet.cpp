@@ -394,34 +394,59 @@ std::vector<float> PyanNet::forwardChunk(const float *chunk, size_t chunk_idx, D
       float *pool_row = pool0_out.data() + oc * POOL0_LEN;
 
       for (size_t pt = 0; pt < POOL0_LEN; ++pt) {
-        float max_val = 0.0f;
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
+        size_t in_start0 = pt * 30 + 0;
+        size_t in_start1 = pt * 30 + 10;
+        size_t in_start2 = pt * 30 + 20;
 
+        float32x4_t vacc0_0 = vdupq_n_f32(0.0f), vacc0_1 = vdupq_n_f32(0.0f);
+        float32x4_t vacc1_0 = vdupq_n_f32(0.0f), vacc1_1 = vdupq_n_f32(0.0f);
+        float32x4_t vacc2_0 = vdupq_n_f32(0.0f), vacc2_1 = vdupq_n_f32(0.0f);
+
+        size_t k = 0;
+        for (; k + 8 <= 251; k += 8) {
+          const float32x4_t f0 = vld1q_f32(filt + k + 0);
+          const float32x4_t f1 = vld1q_f32(filt + k + 4);
+
+          vacc0_0 = vfmaq_f32(vacc0_0, vld1q_f32(wav_norm.data() + in_start0 + k + 0), f0);
+          vacc0_1 = vfmaq_f32(vacc0_1, vld1q_f32(wav_norm.data() + in_start0 + k + 4), f1);
+
+          vacc1_0 = vfmaq_f32(vacc1_0, vld1q_f32(wav_norm.data() + in_start1 + k + 0), f0);
+          vacc1_1 = vfmaq_f32(vacc1_1, vld1q_f32(wav_norm.data() + in_start1 + k + 4), f1);
+
+          vacc2_0 = vfmaq_f32(vacc2_0, vld1q_f32(wav_norm.data() + in_start2 + k + 0), f0);
+          vacc2_1 = vfmaq_f32(vacc2_1, vld1q_f32(wav_norm.data() + in_start2 + k + 4), f1);
+        }
+
+        float acc0 = vaddvq_f32(vaddq_f32(vacc0_0, vacc0_1));
+        float acc1 = vaddvq_f32(vaddq_f32(vacc1_0, vacc1_1));
+        float acc2 = vaddvq_f32(vaddq_f32(vacc2_0, vacc2_1));
+
+        for (; k < 251; ++k) {
+          float f = filt[k];
+          acc0 += wav_norm[in_start0 + k] * f;
+          acc1 += wav_norm[in_start1 + k] * f;
+          acc2 += wav_norm[in_start2 + k] * f;
+        }
+
+        float abs0 = std::abs(acc0);
+        float abs1 = std::abs(acc1);
+        float abs2 = std::abs(acc2);
+        pool_row[pt] = std::max(abs0, std::max(abs1, abs2));
+#else
+        float max_val = 0.0f;
         for (size_t step = 0; step < 3; ++step) {
           size_t t = pt * 3 + step;
           size_t in_start = t * 10;
           float acc = 0.0f;
-#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
-          float32x4_t vacc0 = vdupq_n_f32(0.0f);
-          float32x4_t vacc1 = vdupq_n_f32(0.0f);
-          size_t k = 0;
-          for (; k + 8 <= 251; k += 8) {
-            vacc0 = vfmaq_f32(vacc0, vld1q_f32(wav_norm.data() + in_start + k + 0), vld1q_f32(filt + k + 0));
-            vacc1 = vfmaq_f32(vacc1, vld1q_f32(wav_norm.data() + in_start + k + 4), vld1q_f32(filt + k + 4));
-          }
-          acc = vaddvq_f32(vaddq_f32(vacc0, vacc1));
-          for (; k < 251; ++k) {
-            acc += wav_norm[in_start + k] * filt[k];
-          }
-#else
           for (size_t k = 0; k < 251; ++k) {
             acc += wav_norm[in_start + k] * filt[k];
           }
-#endif
           float abs_val = std::abs(acc);
           if (abs_val > max_val) max_val = abs_val;
         }
-
         pool_row[pt] = max_val;
+#endif
       }
     }
   }
