@@ -675,6 +675,51 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
   }
 }
 
+static inline void copy_i8_vec(int8_t *dst, const int8_t *src, size_t count) {
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
+  size_t i = 0;
+  for (; i + 64 <= count; i += 64) {
+    int8x16_t v0 = vld1q_s8(src + i + 0);
+    int8x16_t v1 = vld1q_s8(src + i + 16);
+    int8x16_t v2 = vld1q_s8(src + i + 32);
+    int8x16_t v3 = vld1q_s8(src + i + 48);
+    vst1q_s8(dst + i + 0, v0);
+    vst1q_s8(dst + i + 16, v1);
+    vst1q_s8(dst + i + 32, v2);
+    vst1q_s8(dst + i + 48, v3);
+  }
+  for (; i + 16 <= count; i += 16) {
+    vst1q_s8(dst + i, vld1q_s8(src + i));
+  }
+  for (; i < count; ++i) {
+    dst[i] = src[i];
+  }
+#else
+  std::memcpy(dst, src, count);
+#endif
+}
+
+static inline void zero_i8_vec(int8_t *dst, size_t count) {
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
+  const int8x16_t vzero = vdupq_n_s8(0);
+  size_t i = 0;
+  for (; i + 64 <= count; i += 64) {
+    vst1q_s8(dst + i + 0, vzero);
+    vst1q_s8(dst + i + 16, vzero);
+    vst1q_s8(dst + i + 32, vzero);
+    vst1q_s8(dst + i + 48, vzero);
+  }
+  for (; i + 16 <= count; i += 16) {
+    vst1q_s8(dst + i, vzero);
+  }
+  for (; i < count; ++i) {
+    dst[i] = 0;
+  }
+#else
+  std::memset(dst, 0, count);
+#endif
+}
+
 // Pure byte copy im2col for standard 3x3 stride-1 pad-1 convolution on already-quantized INT8 input
 static inline void im2col_nhwc_copy_i8(
     const int8_t *data_im, size_t in_c,
@@ -692,20 +737,20 @@ static inline void im2col_nhwc_copy_i8(
         if (ih >= 0 && ih < static_cast<int>(in_h)) {
           if (ow >= 1 && ow + 1 < in_w) {
             const int8_t *src = data_im + (static_cast<size_t>(ih) * in_w + (ow - 1)) * in_c;
-            std::memcpy(dst_kh, src, row_span);
+            copy_i8_vec(dst_kh, src, row_span);
           } else {
             for (size_t kw = 0; kw < 3; ++kw) {
               int iw = static_cast<int>(ow + kw) - 1;
               int8_t *dst = dst_kh + kw * in_c;
               if (iw >= 0 && iw < static_cast<int>(in_w)) {
-                std::memcpy(dst, data_im + (static_cast<size_t>(ih) * in_w + static_cast<size_t>(iw)) * in_c, in_c);
+                copy_i8_vec(dst, data_im + (static_cast<size_t>(ih) * in_w + static_cast<size_t>(iw)) * in_c, in_c);
               } else {
-                std::memset(dst, 0, in_c);
+                zero_i8_vec(dst, in_c);
               }
             }
           }
         } else {
-          std::memset(dst_kh, 0, row_span);
+          zero_i8_vec(dst_kh, row_span);
         }
       }
     }
