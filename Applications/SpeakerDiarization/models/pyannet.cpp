@@ -63,11 +63,12 @@ static inline float leaky_relu(float x, float slope = 0.01f) {
 
 static void instance_norm_1d(const float *src, float *dst, size_t channels, size_t length,
                              const float *gamma, const float *beta, float eps = 1e-5f,
-                             bool apply_leaky_relu = false, float slope = 0.01f) {
+                             bool apply_leaky_relu = false, float slope = 0.01f,
+                             size_t out_stride = 0) {
   #pragma omp parallel for schedule(static)
   for (size_t c = 0; c < channels; ++c) {
     const float *channel_src = src + c * length;
-    float *channel_dst = dst + c * length;
+    float *channel_dst = (out_stride > 0) ? (dst + c) : (dst + c * length);
 
     float mean = 0.0f;
     float var = 0.0f;
@@ -119,50 +120,63 @@ static void instance_norm_1d(const float *src, float *dst, size_t channels, size
     float b = beta ? beta[c] : 0.0f;
     float scale = inv_std * g;
 
-    const float32x4_t vscale = vdupq_n_f32(scale);
-    const float32x4_t vb = vdupq_n_f32(b);
-    const float32x4_t vzero = vdupq_n_f32(0.0f);
-    const float32x4_t vslope = vdupq_n_f32(slope);
-
-    i = 0;
-    if (apply_leaky_relu) {
-      for (; i + 16 <= length; i += 16) {
-        float32x4_t val0 = vmlaq_f32(vb, vsubq_f32(vld1q_f32(channel_src + i + 0), vmean), vscale);
-        float32x4_t val1 = vmlaq_f32(vb, vsubq_f32(vld1q_f32(channel_src + i + 4), vmean), vscale);
-        float32x4_t val2 = vmlaq_f32(vb, vsubq_f32(vld1q_f32(channel_src + i + 8), vmean), vscale);
-        float32x4_t val3 = vmlaq_f32(vb, vsubq_f32(vld1q_f32(channel_src + i + 12), vmean), vscale);
-
-        float32x4_t r0 = vmlaq_f32(vmaxq_f32(val0, vzero), vminq_f32(val0, vzero), vslope);
-        float32x4_t r1 = vmlaq_f32(vmaxq_f32(val1, vzero), vminq_f32(val1, vzero), vslope);
-        float32x4_t r2 = vmlaq_f32(vmaxq_f32(val2, vzero), vminq_f32(val2, vzero), vslope);
-        float32x4_t r3 = vmlaq_f32(vmaxq_f32(val3, vzero), vminq_f32(val3, vzero), vslope);
-
-        vst1q_f32(channel_dst + i + 0, r0);
-        vst1q_f32(channel_dst + i + 4, r1);
-        vst1q_f32(channel_dst + i + 8, r2);
-        vst1q_f32(channel_dst + i + 12, r3);
-      }
-      for (; i + 4 <= length; i += 4) {
-        float32x4_t val = vmlaq_f32(vb, vsubq_f32(vld1q_f32(channel_src + i), vmean), vscale);
-        float32x4_t r = vmlaq_f32(vmaxq_f32(val, vzero), vminq_f32(val, vzero), vslope);
-        vst1q_f32(channel_dst + i, r);
-      }
-      for (; i < length; ++i) {
-        float val = (channel_src[i] - mean) * scale + b;
-        channel_dst[i] = val >= 0.0f ? val : slope * val;
+    if (out_stride > 0) {
+      if (apply_leaky_relu) {
+        for (size_t j = 0; j < length; ++j) {
+          float val = (channel_src[j] - mean) * scale + b;
+          channel_dst[j * out_stride] = val >= 0.0f ? val : slope * val;
+        }
+      } else {
+        for (size_t j = 0; j < length; ++j) {
+          channel_dst[j * out_stride] = (channel_src[j] - mean) * scale + b;
+        }
       }
     } else {
-      for (; i + 16 <= length; i += 16) {
-        vst1q_f32(channel_dst + i + 0, vmlaq_f32(vb, vsubq_f32(vld1q_f32(channel_src + i + 0), vmean), vscale));
-        vst1q_f32(channel_dst + i + 4, vmlaq_f32(vb, vsubq_f32(vld1q_f32(channel_src + i + 4), vmean), vscale));
-        vst1q_f32(channel_dst + i + 8, vmlaq_f32(vb, vsubq_f32(vld1q_f32(channel_src + i + 8), vmean), vscale));
-        vst1q_f32(channel_dst + i + 12, vmlaq_f32(vb, vsubq_f32(vld1q_f32(channel_src + i + 12), vmean), vscale));
-      }
-      for (; i + 4 <= length; i += 4) {
-        vst1q_f32(channel_dst + i, vmlaq_f32(vb, vsubq_f32(vld1q_f32(channel_src + i), vmean), vscale));
-      }
-      for (; i < length; ++i) {
-        channel_dst[i] = (channel_src[i] - mean) * scale + b;
+      const float32x4_t vscale = vdupq_n_f32(scale);
+      const float32x4_t vb = vdupq_n_f32(b);
+      const float32x4_t vzero = vdupq_n_f32(0.0f);
+      const float32x4_t vslope = vdupq_n_f32(slope);
+
+      i = 0;
+      if (apply_leaky_relu) {
+        for (; i + 16 <= length; i += 16) {
+          float32x4_t val0 = vmlaq_f32(vb, vsubq_f32(vld1q_f32(channel_src + i + 0), vmean), vscale);
+          float32x4_t val1 = vmlaq_f32(vb, vsubq_f32(vld1q_f32(channel_src + i + 4), vmean), vscale);
+          float32x4_t val2 = vmlaq_f32(vb, vsubq_f32(vld1q_f32(channel_src + i + 8), vmean), vscale);
+          float32x4_t val3 = vmlaq_f32(vb, vsubq_f32(vld1q_f32(channel_src + i + 12), vmean), vscale);
+
+          float32x4_t r0 = vmlaq_f32(vmaxq_f32(val0, vzero), vminq_f32(val0, vzero), vslope);
+          float32x4_t r1 = vmlaq_f32(vmaxq_f32(val1, vzero), vminq_f32(val1, vzero), vslope);
+          float32x4_t r2 = vmlaq_f32(vmaxq_f32(val2, vzero), vminq_f32(val2, vzero), vslope);
+          float32x4_t r3 = vmlaq_f32(vmaxq_f32(val3, vzero), vminq_f32(val3, vzero), vslope);
+
+          vst1q_f32(channel_dst + i + 0, r0);
+          vst1q_f32(channel_dst + i + 4, r1);
+          vst1q_f32(channel_dst + i + 8, r2);
+          vst1q_f32(channel_dst + i + 12, r3);
+        }
+        for (; i + 4 <= length; i += 4) {
+          float32x4_t val = vmlaq_f32(vb, vsubq_f32(vld1q_f32(channel_src + i), vmean), vscale);
+          float32x4_t r = vmlaq_f32(vmaxq_f32(val, vzero), vminq_f32(val, vzero), vslope);
+          vst1q_f32(channel_dst + i, r);
+        }
+        for (; i < length; ++i) {
+          float val = (channel_src[i] - mean) * scale + b;
+          channel_dst[i] = val >= 0.0f ? val : slope * val;
+        }
+      } else {
+        for (; i + 16 <= length; i += 16) {
+          vst1q_f32(channel_dst + i + 0, vmlaq_f32(vb, vsubq_f32(vld1q_f32(channel_src + i + 0), vmean), vscale));
+          vst1q_f32(channel_dst + i + 4, vmlaq_f32(vb, vsubq_f32(vld1q_f32(channel_src + i + 4), vmean), vscale));
+          vst1q_f32(channel_dst + i + 8, vmlaq_f32(vb, vsubq_f32(vld1q_f32(channel_src + i + 8), vmean), vscale));
+          vst1q_f32(channel_dst + i + 12, vmlaq_f32(vb, vsubq_f32(vld1q_f32(channel_src + i + 12), vmean), vscale));
+        }
+        for (; i + 4 <= length; i += 4) {
+          vst1q_f32(channel_dst + i, vmlaq_f32(vb, vsubq_f32(vld1q_f32(channel_src + i), vmean), vscale));
+        }
+        for (; i < length; ++i) {
+          channel_dst[i] = (channel_src[i] - mean) * scale + b;
+        }
       }
     }
 #else
@@ -177,14 +191,27 @@ static void instance_norm_1d(const float *src, float *dst, size_t channels, size
     float g = gamma ? gamma[c] : 1.0f;
     float b = beta ? beta[c] : 0.0f;
     float scale = inv_std * g;
-    if (apply_leaky_relu) {
-      for (size_t i = 0; i < length; ++i) {
-        float val = (channel_src[i] - mean) * scale + b;
-        channel_dst[i] = val >= 0.0f ? val : slope * val;
+    if (out_stride > 0) {
+      if (apply_leaky_relu) {
+        for (size_t i = 0; i < length; ++i) {
+          float val = (channel_src[i] - mean) * scale + b;
+          channel_dst[i * out_stride] = val >= 0.0f ? val : slope * val;
+        }
+      } else {
+        for (size_t i = 0; i < length; ++i) {
+          channel_dst[i * out_stride] = (channel_src[i] - mean) * scale + b;
+        }
       }
     } else {
-      for (size_t i = 0; i < length; ++i) {
-        channel_dst[i] = (channel_src[i] - mean) * scale + b;
+      if (apply_leaky_relu) {
+        for (size_t i = 0; i < length; ++i) {
+          float val = (channel_src[i] - mean) * scale + b;
+          channel_dst[i] = val >= 0.0f ? val : slope * val;
+        }
+      } else {
+        for (size_t i = 0; i < length; ++i) {
+          channel_dst[i] = (channel_src[i] - mean) * scale + b;
+        }
       }
     }
 #endif
@@ -619,22 +646,24 @@ std::vector<float> PyanNet::forwardChunk(const float *chunk, size_t chunk_idx, D
     }
   }
 
-  // 10. norm1d_2 fused with leaky_relu(0.01)
-  std::vector<float> norm2_out(60 * POOL2_LEN);
-  instance_norm_1d(pool2_out.data(), norm2_out.data(), 60, POOL2_LEN, norm1d_2_w_, norm1d_2_b_, 1e-5f, /*apply_leaky_relu=*/true);
-  if (debug_cb) debug_cb(pfx + "norm1d_2", norm2_out.data(), {1, 60, POOL2_LEN});
-
-  // 11. 4-Layer Bidirectional LSTM with Zero-Copy Ping-Pong Buffers
+  // 10 & 11. norm1d_2 and 4-Layer Bidirectional LSTM with Zero-Copy Ping-Pong Buffers
   thread_local static std::vector<float> lstm_buf0;
   thread_local static std::vector<float> lstm_buf1;
   if (lstm_buf0.size() < 589 * 256) lstm_buf0.resize(589 * 256);
   if (lstm_buf1.size() < 589 * 256) lstm_buf1.resize(589 * 256);
 
-  // Transpose [60, 589] to [589, 60] directly into lstm_buf0
-  for (size_t c = 0; c < 60; ++c) {
-    for (size_t t = 0; t < 589; ++t) {
-      lstm_buf0[t * 60 + c] = norm2_out[c * 589 + t];
+  if (debug_cb) {
+    std::vector<float> norm2_out(60 * POOL2_LEN);
+    instance_norm_1d(pool2_out.data(), norm2_out.data(), 60, POOL2_LEN, norm1d_2_w_, norm1d_2_b_, 1e-5f, /*apply_leaky_relu=*/true);
+    debug_cb(pfx + "norm1d_2", norm2_out.data(), {1, 60, POOL2_LEN});
+    for (size_t c = 0; c < 60; ++c) {
+      for (size_t t = 0; t < 589; ++t) {
+        lstm_buf0[t * 60 + c] = norm2_out[c * 589 + t];
+      }
     }
+  } else {
+    // Zero-cost transpose: write directly in [589, 60] layout into lstm_buf0!
+    instance_norm_1d(pool2_out.data(), lstm_buf0.data(), 60, POOL2_LEN, norm1d_2_w_, norm1d_2_b_, 1e-5f, /*apply_leaky_relu=*/true, 0.01f, /*out_stride=*/60);
   }
 
   float *src_buf = lstm_buf0.data();
