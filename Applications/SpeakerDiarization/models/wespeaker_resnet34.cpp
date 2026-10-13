@@ -943,6 +943,44 @@ void WeSpeakerResNet34::runConv2d_F32toI8(
         size_t cur_cols = std::min(static_cast<size_t>(4), N - n);
         const int8_t *w_tile = weights_i8_trans + n * K;
 
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
+        if (cur_rows == 4 && cur_cols == 4) {
+          int32_t acc[4][4];
+          dotI8Tile4x4_full(a_tile, K, w_tile, K, K, acc);
+
+          const float32x4_t veff_scale = vld1q_f32(eff_scale_buf + n);
+          const float32x4_t veff_bias  = vld1q_f32(eff_bias_buf + n);
+          const float32x4_t vzero = vdupq_n_f32(0.0f);
+
+          float32x4_t f0 = vmaxq_f32(vmlaq_f32(veff_bias, vcvtq_f32_s32(vld1q_s32(&acc[0][0])), veff_scale), vzero);
+          float32x4_t f1 = vmaxq_f32(vmlaq_f32(veff_bias, vcvtq_f32_s32(vld1q_s32(&acc[1][0])), veff_scale), vzero);
+          float32x4_t f2 = vmaxq_f32(vmlaq_f32(veff_bias, vcvtq_f32_s32(vld1q_s32(&acc[2][0])), veff_scale), vzero);
+          float32x4_t f3 = vmaxq_f32(vmlaq_f32(veff_bias, vcvtq_f32_s32(vld1q_s32(&acc[3][0])), veff_scale), vzero);
+
+          int32x4_t s0 = vcvtnq_s32_f32(f0);
+          int32x4_t s1 = vcvtnq_s32_f32(f1);
+          int32x4_t s2 = vcvtnq_s32_f32(f2);
+          int32x4_t s3 = vcvtnq_s32_f32(f3);
+
+          int16x4_t n0_16 = vqmovn_s32(s0);
+          int8x8_t n0_8 = vqmovn_s16(vcombine_s16(n0_16, n0_16));
+          *reinterpret_cast<int32_t*>(out_i8 + (global_m + 0) * N + n) = vget_lane_s32(vreinterpret_s32_s8(n0_8), 0);
+
+          int16x4_t n1_16 = vqmovn_s32(s1);
+          int8x8_t n1_8 = vqmovn_s16(vcombine_s16(n1_16, n1_16));
+          *reinterpret_cast<int32_t*>(out_i8 + (global_m + 1) * N + n) = vget_lane_s32(vreinterpret_s32_s8(n1_8), 0);
+
+          int16x4_t n2_16 = vqmovn_s32(s2);
+          int8x8_t n2_8 = vqmovn_s16(vcombine_s16(n2_16, n2_16));
+          *reinterpret_cast<int32_t*>(out_i8 + (global_m + 2) * N + n) = vget_lane_s32(vreinterpret_s32_s8(n2_8), 0);
+
+          int16x4_t n3_16 = vqmovn_s32(s3);
+          int8x8_t n3_8 = vqmovn_s16(vcombine_s16(n3_16, n3_16));
+          *reinterpret_cast<int32_t*>(out_i8 + (global_m + 3) * N + n) = vget_lane_s32(vreinterpret_s32_s8(n3_8), 0);
+          continue;
+        }
+#endif
+
         int32_t acc[4][4];
         if (cur_rows == 4 && cur_cols == 4) {
           dotI8Tile4x4_full(a_tile, K, w_tile, K, K, acc);
@@ -1008,6 +1046,35 @@ void WeSpeakerResNet34::runConv2d_I8toF32(
       for (size_t n = 0; n < N; n += 4) {
         size_t cur_cols = std::min(static_cast<size_t>(4), N - n);
         const int8_t *w_tile = weights_i8_trans + n * K;
+
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
+        if (cur_rows == 4 && cur_cols == 4) {
+          int32_t acc[4][4];
+          dotI8Tile4x4_full(a_tile, K, w_tile, K, K, acc);
+
+          const float32x4_t veff_scale = vld1q_f32(eff_scale_buf + n);
+          const float32x4_t veff_bias  = vld1q_f32(eff_bias_buf + n);
+
+          float32x4_t f0 = vmlaq_f32(veff_bias, vcvtq_f32_s32(vld1q_s32(&acc[0][0])), veff_scale);
+          float32x4_t f1 = vmlaq_f32(veff_bias, vcvtq_f32_s32(vld1q_s32(&acc[1][0])), veff_scale);
+          float32x4_t f2 = vmlaq_f32(veff_bias, vcvtq_f32_s32(vld1q_s32(&acc[2][0])), veff_scale);
+          float32x4_t f3 = vmlaq_f32(veff_bias, vcvtq_f32_s32(vld1q_s32(&acc[3][0])), veff_scale);
+
+          if (apply_relu) {
+            const float32x4_t vzero = vdupq_n_f32(0.0f);
+            f0 = vmaxq_f32(f0, vzero);
+            f1 = vmaxq_f32(f1, vzero);
+            f2 = vmaxq_f32(f2, vzero);
+            f3 = vmaxq_f32(f3, vzero);
+          }
+
+          vst1q_f32(out + (global_m + 0) * N + n, f0);
+          vst1q_f32(out + (global_m + 1) * N + n, f1);
+          vst1q_f32(out + (global_m + 2) * N + n, f2);
+          vst1q_f32(out + (global_m + 3) * N + n, f3);
+          continue;
+        }
+#endif
 
         int32_t acc[4][4];
         if (cur_rows == 4 && cur_cols == 4) {
