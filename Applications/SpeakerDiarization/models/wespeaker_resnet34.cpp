@@ -720,37 +720,101 @@ static inline void zero_i8_vec(int8_t *dst, size_t count) {
 #endif
 }
 
-// Pure byte copy im2col for standard 3x3 stride-1 pad-1 convolution on already-quantized INT8 input
-static inline void im2col_nhwc_copy_i8(
+// Cache-blocked pure byte copy im2col for strip of rows [m0, m1)
+static inline void im2col_nhwc_copy_i8_block(
     const int8_t *data_im, size_t in_c,
-    size_t in_h, size_t in_w, int8_t *data_col_i8) {
+    size_t in_h, size_t in_w,
+    size_t m0, size_t m1, int8_t *a_tile_buf) {
   size_t K = 9 * in_c;
   size_t row_span = 3 * in_c;
 
-  #pragma omp parallel for schedule(static)
-  for (size_t oh = 0; oh < in_h; ++oh) {
-    for (size_t ow = 0; ow < in_w; ++ow) {
-      int8_t *col_row = data_col_i8 + (oh * in_w + ow) * K;
+  for (size_t m = m0; m < m1; ++m) {
+    size_t oh = m / in_w;
+    size_t ow = m % in_w;
+    int8_t *col_row = a_tile_buf + (m - m0) * K;
+
+    for (size_t kh = 0; kh < 3; ++kh) {
+      int ih = static_cast<int>(oh + kh) - 1;
+      int8_t *dst_kh = col_row + kh * row_span;
+      if (ih >= 0 && ih < static_cast<int>(in_h)) {
+        if (ow >= 1 && ow + 1 < in_w) {
+          const int8_t *src = data_im + (static_cast<size_t>(ih) * in_w + (ow - 1)) * in_c;
+          copy_i8_vec(dst_kh, src, row_span);
+        } else {
+          for (size_t kw = 0; kw < 3; ++kw) {
+            int iw = static_cast<int>(ow + kw) - 1;
+            int8_t *dst = dst_kh + kw * in_c;
+            if (iw >= 0 && iw < static_cast<int>(in_w)) {
+              copy_i8_vec(dst, data_im + (static_cast<size_t>(ih) * in_w + static_cast<size_t>(iw)) * in_c, in_c);
+            } else {
+              zero_i8_vec(dst, in_c);
+            }
+          }
+        }
+      } else {
+        zero_i8_vec(dst_kh, row_span);
+      }
+    }
+  }
+}
+
+// Cache-blocked single-pass im2col + quantization for strip of rows [m0, m1)
+static inline void im2col_nhwc_i8_block(
+    const float *data_im, size_t in_c,
+    size_t in_h, size_t in_w, size_t k_h, size_t k_w,
+    size_t pad, size_t stride, float inv_scale,
+    size_t out_h, size_t out_w,
+    size_t m0, size_t m1, int8_t *a_tile_buf) {
+  size_t K = k_h * k_w * in_c;
+
+  if (k_h == 3 && k_w == 3 && stride == 1 && pad == 1) {
+    for (size_t m = m0; m < m1; ++m) {
+      size_t oh = m / out_w;
+      size_t ow = m % out_w;
+      int8_t *col_row = a_tile_buf + (m - m0) * K;
+
       for (size_t kh = 0; kh < 3; ++kh) {
         int ih = static_cast<int>(oh + kh) - 1;
-        int8_t *dst_kh = col_row + kh * row_span;
+        int8_t *dst_kh = col_row + kh * (3 * in_c);
         if (ih >= 0 && ih < static_cast<int>(in_h)) {
           if (ow >= 1 && ow + 1 < in_w) {
-            const int8_t *src = data_im + (static_cast<size_t>(ih) * in_w + (ow - 1)) * in_c;
-            copy_i8_vec(dst_kh, src, row_span);
+            const float *src = data_im + (static_cast<size_t>(ih) * in_w + (ow - 1)) * in_c;
+            quantize_f32_to_i8(src, dst_kh, 3 * in_c, inv_scale);
           } else {
             for (size_t kw = 0; kw < 3; ++kw) {
               int iw = static_cast<int>(ow + kw) - 1;
               int8_t *dst = dst_kh + kw * in_c;
               if (iw >= 0 && iw < static_cast<int>(in_w)) {
-                copy_i8_vec(dst, data_im + (static_cast<size_t>(ih) * in_w + static_cast<size_t>(iw)) * in_c, in_c);
+                const float *src = data_im + (static_cast<size_t>(ih) * in_w + static_cast<size_t>(iw)) * in_c;
+                quantize_f32_to_i8(src, dst, in_c, inv_scale);
               } else {
-                zero_i8_vec(dst, in_c);
+                std::memset(dst, 0, in_c);
               }
             }
           }
         } else {
-          zero_i8_vec(dst_kh, row_span);
+          std::memset(dst_kh, 0, 3 * in_c);
+        }
+      }
+    }
+    return;
+  }
+
+  for (size_t m = m0; m < m1; ++m) {
+    size_t oh = m / out_w;
+    size_t ow = m % out_w;
+    int8_t *col_row = a_tile_buf + (m - m0) * K;
+
+    for (size_t kh = 0; kh < k_h; ++kh) {
+      int ih = static_cast<int>(oh * stride + kh) - static_cast<int>(pad);
+      for (size_t kw = 0; kw < k_w; ++kw) {
+        int iw = static_cast<int>(ow * stride + kw) - static_cast<int>(pad);
+        int8_t *dst = col_row + (kh * k_w + kw) * in_c;
+        if (ih >= 0 && ih < static_cast<int>(in_h) && iw >= 0 && iw < static_cast<int>(in_w)) {
+          const float *src = data_im + (static_cast<size_t>(ih) * in_w + static_cast<size_t>(iw)) * in_c;
+          quantize_f32_to_i8(src, dst, in_c, inv_scale);
+        } else {
+          std::memset(dst, 0, in_c);
         }
       }
     }
@@ -771,12 +835,6 @@ void WeSpeakerResNet34::runConv2d_F32toI8(
   size_t K = in_c * k_h * k_w;
 
   float inv_act_scale = 1.0f / in_act_scale;
-  thread_local static std::vector<int8_t> a_i8;
-
-  if (a_i8.size() < M * K) a_i8.resize(M * K);
-  im2col_nhwc_i8(in, in_c, in_h, in_w, k_h, k_w, pad, stride, inv_act_scale, a_i8.data());
-
-  // Precompute effective scales and biases outside loop to eliminate 160,000 divisions per layer
   float eff_scale_buf[256];
   float eff_bias_buf[256];
   float inv_next_scale = 1.0f / next_act_scale;
@@ -785,32 +843,47 @@ void WeSpeakerResNet34::runConv2d_F32toI8(
     eff_bias_buf[n] = (bias ? bias[n] : 0.0f) * inv_next_scale;
   }
 
+  constexpr size_t M_CHUNK = 128;
+
   #pragma omp parallel for schedule(static)
-  for (size_t m = 0; m < M; m += 4) {
-    size_t cur_rows = std::min(static_cast<size_t>(4), M - m);
-    const int8_t *a_tile = a_i8.data() + m * K;
+  for (size_t m0 = 0; m0 < M; m0 += M_CHUNK) {
+    size_t m1 = std::min(m0 + M_CHUNK, M);
+    size_t local_M = m1 - m0;
 
-    for (size_t n = 0; n < N; n += 4) {
-      size_t cur_cols = std::min(static_cast<size_t>(4), N - n);
-      const int8_t *w_tile = weights_i8_trans + n * K;
+    // Small L1/L2 cache-resident buffer: at most 128 * K bytes (36 KB for layer 1!)
+    thread_local static std::vector<int8_t> a_tile_buf;
+    if (a_tile_buf.size() < M_CHUNK * K) a_tile_buf.resize(M_CHUNK * K);
 
-      int32_t acc[4][4];
-      if (cur_rows == 4 && cur_cols == 4) {
-        dotI8Tile4x4_full(a_tile, K, w_tile, K, K, acc);
-      } else {
-        dotI8Tile4x4(a_tile, K, cur_rows, w_tile, K, cur_cols, K, acc);
-      }
+    im2col_nhwc_i8_block(in, in_c, in_h, in_w, k_h, k_w, pad, stride, inv_act_scale,
+                         out_h, out_w, m0, m1, a_tile_buf.data());
 
-      for (size_t c = 0; c < cur_cols; ++c) {
-        size_t out_n = n + c;
-        float eff_scale = eff_scale_buf[out_n];
-        float b = eff_bias_buf[out_n];
+    for (size_t lm = 0; lm < local_M; lm += 4) {
+      size_t cur_rows = std::min(static_cast<size_t>(4), local_M - lm);
+      const int8_t *a_tile = a_tile_buf.data() + lm * K;
+      size_t global_m = m0 + lm;
 
-        for (size_t r = 0; r < cur_rows; ++r) {
-          float val = static_cast<float>(acc[r][c]) * eff_scale + b;
-          float relu_val = std::max(0.0f, val);
-          out_i8[(m + r) * N + out_n] = static_cast<int8_t>(
-              std::clamp(static_cast<int>(std::round(relu_val)), -128, 127));
+      for (size_t n = 0; n < N; n += 4) {
+        size_t cur_cols = std::min(static_cast<size_t>(4), N - n);
+        const int8_t *w_tile = weights_i8_trans + n * K;
+
+        int32_t acc[4][4];
+        if (cur_rows == 4 && cur_cols == 4) {
+          dotI8Tile4x4_full(a_tile, K, w_tile, K, K, acc);
+        } else {
+          dotI8Tile4x4(a_tile, K, cur_rows, w_tile, K, cur_cols, K, acc);
+        }
+
+        for (size_t c = 0; c < cur_cols; ++c) {
+          size_t out_n = n + c;
+          float eff_scale = eff_scale_buf[out_n];
+          float b = eff_bias_buf[out_n];
+
+          for (size_t r = 0; r < cur_rows; ++r) {
+            float val = static_cast<float>(acc[r][c]) * eff_scale + b;
+            float relu_val = std::max(0.0f, val);
+            out_i8[(global_m + r) * N + out_n] = static_cast<int8_t>(
+                std::clamp(static_cast<int>(std::round(relu_val)), -128, 127));
+          }
         }
       }
     }
@@ -830,10 +903,6 @@ void WeSpeakerResNet34::runConv2d_I8toF32(
   size_t N = out_c;
   size_t K = in_c * k_h * k_w;
 
-  thread_local static std::vector<int8_t> a_i8;
-  if (a_i8.size() < M * K) a_i8.resize(M * K);
-  im2col_nhwc_copy_i8(in_i8, in_c, in_h, in_w, a_i8.data());
-
   float eff_scale_buf[256];
   float eff_bias_buf[256];
   for (size_t n = 0; n < N; ++n) {
@@ -841,30 +910,44 @@ void WeSpeakerResNet34::runConv2d_I8toF32(
     eff_bias_buf[n] = bias ? bias[n] : 0.0f;
   }
 
+  constexpr size_t M_CHUNK = 128;
+
   #pragma omp parallel for schedule(static)
-  for (size_t m = 0; m < M; m += 4) {
-    size_t cur_rows = std::min(static_cast<size_t>(4), M - m);
-    const int8_t *a_tile = a_i8.data() + m * K;
+  for (size_t m0 = 0; m0 < M; m0 += M_CHUNK) {
+    size_t m1 = std::min(m0 + M_CHUNK, M);
+    size_t local_M = m1 - m0;
 
-    for (size_t n = 0; n < N; n += 4) {
-      size_t cur_cols = std::min(static_cast<size_t>(4), N - n);
-      const int8_t *w_tile = weights_i8_trans + n * K;
+    // Small L1/L2 cache-resident buffer: at most 128 * K bytes (36 KB for layer 1!)
+    thread_local static std::vector<int8_t> a_tile_buf;
+    if (a_tile_buf.size() < M_CHUNK * K) a_tile_buf.resize(M_CHUNK * K);
 
-      int32_t acc[4][4];
-      if (cur_rows == 4 && cur_cols == 4) {
-        dotI8Tile4x4_full(a_tile, K, w_tile, K, K, acc);
-      } else {
-        dotI8Tile4x4(a_tile, K, cur_rows, w_tile, K, cur_cols, K, acc);
-      }
+    im2col_nhwc_copy_i8_block(in_i8, in_c, in_h, in_w, m0, m1, a_tile_buf.data());
 
-      for (size_t c = 0; c < cur_cols; ++c) {
-        size_t out_n = n + c;
-        float eff_scale = eff_scale_buf[out_n];
-        float b = eff_bias_buf[out_n];
+    for (size_t lm = 0; lm < local_M; lm += 4) {
+      size_t cur_rows = std::min(static_cast<size_t>(4), local_M - lm);
+      const int8_t *a_tile = a_tile_buf.data() + lm * K;
+      size_t global_m = m0 + lm;
 
-        for (size_t r = 0; r < cur_rows; ++r) {
-          float val = static_cast<float>(acc[r][c]) * eff_scale + b;
-          out[(m + r) * N + out_n] = apply_relu ? std::max(0.0f, val) : val;
+      for (size_t n = 0; n < N; n += 4) {
+        size_t cur_cols = std::min(static_cast<size_t>(4), N - n);
+        const int8_t *w_tile = weights_i8_trans + n * K;
+
+        int32_t acc[4][4];
+        if (cur_rows == 4 && cur_cols == 4) {
+          dotI8Tile4x4_full(a_tile, K, w_tile, K, K, acc);
+        } else {
+          dotI8Tile4x4(a_tile, K, cur_rows, w_tile, K, cur_cols, K, acc);
+        }
+
+        for (size_t c = 0; c < cur_cols; ++c) {
+          size_t out_n = n + c;
+          float eff_scale = eff_scale_buf[out_n];
+          float b = eff_bias_buf[out_n];
+
+          for (size_t r = 0; r < cur_rows; ++r) {
+            float val = static_cast<float>(acc[r][c]) * eff_scale + b;
+            out[(global_m + r) * N + out_n] = apply_relu ? std::max(0.0f, val) : val;
+          }
         }
       }
     }
