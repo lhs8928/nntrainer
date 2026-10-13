@@ -334,12 +334,9 @@ static void runStreamingPipeline(
         emb_model.forwardBackbone(fbank.data(), chunk_feat.data(), c, nullptr);
 
         for (size_t s = 0; s < 3; ++s) {
-          std::vector<float> spk_mask(589);
-          for (size_t f = 0; f < 589; ++f) {
-            spk_mask[f] = segmentations[c][f * 3 + s];
-          }
-          auto emb = emb_model.forwardPool(chunk_feat.data(), spk_mask.data(), c, s, nullptr);
-          std::memcpy(chunk_embeddings[c].data() + s * 256, emb.data(), 256 * sizeof(float));
+          emb_model.forwardPool(chunk_feat.data(), segmentations[c].data() + s,
+                                chunk_embeddings[c].data() + s * 256, /*mask_stride=*/3,
+                                c, s, nullptr);
         }
       }
 
@@ -421,10 +418,9 @@ static void runStreamingPipeline(
         std::vector<float> chunk_feat(256 * 10 * 125);
         emb_model.forwardBackbone(fbank.data(), chunk_feat.data(), c, nullptr);
         for (size_t s = 0; s < 3; ++s) {
-          std::vector<float> spk_mask(589);
-          for (size_t f = 0; f < 589; ++f) spk_mask[f] = segmentations[c][f * 3 + s];
-          auto emb = emb_model.forwardPool(chunk_feat.data(), spk_mask.data(), c, s, nullptr);
-          std::memcpy(chunk_embeddings[c].data() + s * 256, emb.data(), 256 * sizeof(float));
+          emb_model.forwardPool(chunk_feat.data(), segmentations[c].data() + s,
+                                chunk_embeddings[c].data() + s * 256, /*mask_stride=*/3,
+                                c, s, nullptr);
         }
       }
       for (size_t c = 0; c < num_chunks; ++c) {
@@ -660,12 +656,9 @@ int main(int argc, char **argv) {
       emb_model.forwardBackbone(fbank.data(), chunk_feat.data(), c, debug_cb);
 
       for (size_t s = 0; s < 3; ++s) {
-        std::vector<float> spk_mask(589);
-        for (size_t f = 0; f < 589; ++f) {
-          spk_mask[f] = segmentations[c][f * 3 + s];
-        }
-        auto emb = emb_model.forwardPool(chunk_feat.data(), spk_mask.data(), c, s, debug_cb);
-        std::memcpy(chunk_embeddings[c].data() + s * 256, emb.data(), 256 * sizeof(float));
+        emb_model.forwardPool(chunk_feat.data(), segmentations[c].data() + s,
+                              chunk_embeddings[c].data() + s * 256, /*mask_stride=*/3,
+                              c, s, debug_cb);
       }
     }
   } else {
@@ -676,12 +669,9 @@ int main(int argc, char **argv) {
       emb_model.forwardBackbone(fbank.data(), chunk_feat.data(), c, nullptr);
 
       for (size_t s = 0; s < 3; ++s) {
-        std::vector<float> spk_mask(589);
-        for (size_t f = 0; f < 589; ++f) {
-          spk_mask[f] = segmentations[c][f * 3 + s];
-        }
-        auto emb = emb_model.forwardPool(chunk_feat.data(), spk_mask.data(), c, s, nullptr);
-        std::memcpy(chunk_embeddings[c].data() + s * 256, emb.data(), 256 * sizeof(float));
+        emb_model.forwardPool(chunk_feat.data(), segmentations[c].data() + s,
+                              chunk_embeddings[c].data() + s * 256, /*mask_stride=*/3,
+                              c, s, nullptr);
       }
     }
   }
