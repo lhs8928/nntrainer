@@ -201,34 +201,61 @@ std::vector<std::vector<float>> AudioPreprocessor::sliceChunks(const std::vector
   return chunks;
 }
 
+struct FFT512Tables {
+  uint16_t bit_rev[512];
+  float twiddle_cos[256];
+  float twiddle_sin[256];
+
+  FFT512Tables() {
+    constexpr int N = 512;
+    int j = 0;
+    for (int i = 0; i < N - 1; ++i) {
+      bit_rev[i] = static_cast<uint16_t>(j);
+      int k = N / 2;
+      while (k <= j) {
+        j -= k;
+        k /= 2;
+      }
+      j += k;
+    }
+    bit_rev[N - 1] = static_cast<uint16_t>(j);
+
+    for (int idx = 0; idx < N / 2; ++idx) {
+      double angle = -2.0 * M_PI * idx / N;
+      twiddle_cos[idx] = static_cast<float>(std::cos(angle));
+      twiddle_sin[idx] = static_cast<float>(std::sin(angle));
+    }
+  }
+};
+
+static const FFT512Tables G_FFT_TABLES;
+
 void AudioPreprocessor::fft512(float *real, float *imag) {
   constexpr int N = 512;
-  // Bit reversal
-  int j = 0;
-  for (int i = 0; i < N - 1; ++i) {
+  const uint16_t *bit_rev = G_FFT_TABLES.bit_rev;
+  const float *twiddle_cos = G_FFT_TABLES.twiddle_cos;
+  const float *twiddle_sin = G_FFT_TABLES.twiddle_sin;
+
+  // 1. Bit reversal with O(1) table lookup
+  for (int i = 0; i < N; ++i) {
+    int j = bit_rev[i];
     if (i < j) {
       std::swap(real[i], real[j]);
       std::swap(imag[i], imag[j]);
     }
-    int k = N / 2;
-    while (k <= j) {
-      j -= k;
-      k /= 2;
-    }
-    j += k;
   }
 
-  // Cooley-Tukey Radix-2
+  // 2. Cooley-Tukey Radix-2 with precomputed twiddle factors
   for (int len = 2; len <= N; len <<= 1) {
-    float angle = static_cast<float>(-2.0 * M_PI / len);
-    float wlen_r = std::cos(angle);
-    float wlen_i = std::sin(angle);
     int half_len = len >> 1;
+    int step = N / len;
 
     for (int i = 0; i < N; i += len) {
-      float wr = 1.0f;
-      float wi = 0.0f;
       for (int k = 0; k < half_len; ++k) {
+        int idx = k * step;
+        float wr = twiddle_cos[idx];
+        float wi = twiddle_sin[idx];
+
         float tr = wr * real[i + k + half_len] - wi * imag[i + k + half_len];
         float ti = wr * imag[i + k + half_len] + wi * real[i + k + half_len];
 
@@ -236,11 +263,6 @@ void AudioPreprocessor::fft512(float *real, float *imag) {
         imag[i + k + half_len] = imag[i + k] - ti;
         real[i + k] += tr;
         imag[i + k] += ti;
-
-        float next_wr = wr * wlen_r - wi * wlen_i;
-        float next_wi = wr * wlen_i + wi * wlen_r;
-        wr = next_wr;
-        wi = next_wi;
       }
     }
   }
