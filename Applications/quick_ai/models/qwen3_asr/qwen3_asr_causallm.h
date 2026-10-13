@@ -113,6 +113,25 @@ public:
   /** @brief transcription (without the language tag) of the last run() */
   const std::string &getLastTranscription() const { return last_transcription; }
 
+  /** @brief a word of the last transcription and where it sits in the audio */
+  struct WordTimestamp {
+    std::string text;
+    double time_sec; /**< audio position the word attends to, from 0 */
+  };
+
+  /**
+   * @brief Record per-word timestamps in the next run()s (off by default, or
+   * set NNTR_WORD_TIMESTAMPS=1). Each generated token's cross-attention over
+   * the audio tokens is read from one decoder layer and its peak is the
+   * token's time, so it costs a small copy per generated token.
+   */
+  void setWordTimestamps(bool on) { word_timestamps = on; }
+
+  /** @brief words of the last run(); empty unless word timestamps are on */
+  const std::vector<WordTimestamp> &getLastWordTimestamps() const {
+    return last_words;
+  }
+
   /** @brief number of mel frames (10 ms each) the model was built for */
   unsigned int getAudioSeqLen() const { return audio_seq_len; }
 
@@ -123,6 +142,9 @@ private:
   std::string audio_path;
   std::vector<float> audio_pcm;
   std::string last_transcription;
+  bool word_timestamps = false;
+  bool align_armed = false; /**< capture is switched on in the decoder layer */
+  std::vector<WordTimestamp> last_words;
 };
 
 } // namespace quick_ai

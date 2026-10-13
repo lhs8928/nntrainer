@@ -390,6 +390,28 @@ private:
   bool is_causal;
   unsigned int attn_window =
     0; /**< block size for windowed non-causal attention, 0 = off */
+
+  /**
+   * @brief Cross-attention alignment capture for Qwen3-ASR word timestamps.
+   *        Opt-in (default off) so other models sharing this layer are
+   * unaffected. When enabled on a layer, each decode step (step_size==1)
+   * appends one row = per-audio-token attention (averaged over heads) to a
+   * global buffer.
+   */
+  bool capture_align_ = false;
+  unsigned int align_audio_start_ = 0; /** first audio-pad key position */
+  unsigned int align_audio_len_ = 0;   /** number of audio tokens */
+
+  /**
+   * @brief If alignment capture is enabled on this layer and this is a single
+   *        decode step, append one per-audio-token attention row (averaged over
+   *        heads) to the global alignment buffer. No-op otherwise.
+   * @param qk_out post-softmax attention tensor (layout [keys, heads_Q])
+   * @param step_size number of query rows this step (capture only when == 1)
+   * @param from absolute position of the query token
+   */
+  void capture_audio_alignment(nntrainer::Tensor &qk_out,
+                               unsigned int step_size, unsigned int from);
   bool skip_prefill = false;
 
   enum INOUT_INDEX {
@@ -553,6 +575,17 @@ private:
   }
 
 }; // end of class MHACoreLayer
+
+/**
+ * @brief Global accumulation buffer for cross-attention alignment capture.
+ *        rows[k] = per-audio-token attention (len = align_audio_len) for the
+ *        k-th generated decode token, in emission order. Used by Qwen3-ASR to
+ *        derive word timestamps. Not thread-safe; intended for single-stream
+ *        incremental decode.
+ */
+WIN_EXPORT void mhaAlignClear();
+WIN_EXPORT const std::vector<std::vector<float>> &mhaAlignRows();
+
 } // namespace quick_ai
 
 #endif

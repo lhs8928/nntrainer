@@ -23,8 +23,10 @@
 #include <engine.h>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
+#include <layer_context.h>
 #include <mha_core.h>
 #include <multimodal_scatter.h>
 #include <nhwc_to_nchw.h>
@@ -560,6 +562,45 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
 
   float *logits = output[0];
 
+  // Cross-attention alignment (word timestamps): find the <|audio_pad|> block
+  // in the prompt and have one decoder layer record, at every decode step, how
+  // much the new token attends to each audio token. Layer 11 gave the cleanest
+  // monotonic alignment on Qwen3-ASR-1.7B; NNTR_ALIGN_LAYER overrides it.
+  const char *word_ts_env = std::getenv("NNTR_WORD_TIMESTAMPS");
+  const bool word_ts_on =
+    word_timestamps || (word_ts_env != nullptr && word_ts_env[0] != '\0' &&
+                        std::string(word_ts_env) != "0");
+  constexpr int AUDIO_PAD_ID = 151676;
+  unsigned int align_audio_start = 0, align_audio_len = 0;
+  for (unsigned int i = 0; i < init_len; ++i) {
+    if (static_cast<int>(init_input[i]) == AUDIO_PAD_ID) {
+      if (align_audio_len == 0)
+        align_audio_start = i;
+      align_audio_len++;
+    }
+  }
+  const char *align_layer_env = std::getenv("NNTR_ALIGN_LAYER");
+  const std::string align_layer =
+    align_layer_env ? align_layer_env : "layer11_attention";
+  const bool align_enabled = word_ts_on && align_audio_len > 0;
+  last_words.clear();
+  quick_ai::mhaAlignClear();
+  if (align_enabled || align_armed) {
+    std::function<void(ml::train::Layer &, nntrainer::RunLayerContext &,
+                       void *)>
+      fn = [&](ml::train::Layer &l, nntrainer::RunLayerContext &, void *) {
+        if (l.getType() == quick_ai::MHACoreLayer::type &&
+            l.getName() == align_layer) {
+          l.setProperty(
+            {std::string("align_capture=") + (align_enabled ? "1" : "0"),
+             "align_audio_start=" + std::to_string(align_audio_start),
+             "align_audio_len=" + std::to_string(align_audio_len)});
+        }
+      };
+    model->forEachLayer(fn, nullptr);
+    align_armed = align_enabled;
+  }
+
   // 6. Autoregressive Generation Loop
   std::vector<std::vector<int>> gen_ids(BATCH_SIZE);
   unsigned int generation_cnt = 0;
@@ -644,6 +685,57 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
   }
 
   last_transcription = transcription;
+
+  if (align_enabled && !gen_ids.empty()) {
+    // Token k's attention row is the k-th captured row; its peak over the
+    // audio tokens is the token's time. Tokens are grouped until they decode
+    // to complete UTF-8 (a character can span several byte-level tokens), and
+    // a group starting with a space opens a new word.
+    const auto &rows = quick_ai::mhaAlignRows();
+    const double sec_per_tok = audio_duration_sec / align_audio_len;
+    const auto &ids = gen_ids[0];
+    const size_t n = std::min(rows.size(), ids.size());
+    const std::string marker = "<asr_text>";
+    bool in_preamble = output_list[0].find(marker) != std::string::npos;
+    std::vector<int> group;
+    double group_t = 0.0;
+    for (size_t k = 0; k < n; ++k) {
+      if (group.empty()) {
+        size_t best = 0;
+        for (size_t j = 1; j < rows[k].size(); ++j)
+          if (rows[k][j] > rows[k][best])
+            best = j;
+        group_t = (static_cast<double>(best) + 0.5) * sec_per_tok;
+      }
+      group.push_back(ids[k]);
+      std::string piece = tokenizer->Decode(group);
+      if (piece.find("\xEF\xBF\xBD") != std::string::npos && k + 1 < n)
+        continue; // incomplete character, take the next token too
+      group.clear();
+      if (in_preamble) { // skip "language <name><asr_text>"
+        const size_t pos = piece.find(marker);
+        if (pos == std::string::npos)
+          continue;
+        in_preamble = false;
+        piece = piece.substr(pos + marker.size());
+      }
+      if (piece.empty())
+        continue;
+      if (last_words.empty() || piece[0] == ' ') {
+        if (piece[0] == ' ')
+          piece.erase(0, 1);
+        last_words.push_back({piece, group_t});
+      } else {
+        last_words.back().text += piece;
+      }
+    }
+    if (log_output) {
+      qlog << "\n[Qwen3-ASR] Word timestamps (layer=" << align_layer << "):\n";
+      for (const auto &w : last_words)
+        qlog << "  " << std::fixed << std::setprecision(2) << w.time_sec
+             << "s  " << w.text << "\n";
+    }
+  }
   qlog << "\n[Qwen3-ASR] Output: " << transcription << std::endl;
   qlog << "[Qwen3-ASR] Prefill: " << init_len << " tokens in " << prefill_ms
        << " ms (" << prefill_tps << " TPS)" << std::endl;

@@ -829,6 +829,8 @@ void MHACoreLayer::one_batch_incremental_forwarding(
 
   softmax_triangle(out_, step_size, num_heads_Q, cache_from);
 
+  capture_audio_alignment(out_, step_size, cache_from);
+
   compute_fp16vcache_transposed(out_, b_cached_value, attention_output_step,
                                 cache_from, num_heads_KV, gqa_size, head_dim,
                                 cache_to);
@@ -1694,6 +1696,61 @@ void MHACoreLayer::exportTo(nntrainer::Exporter &exporter,
   exporter.saveResult(mha_core_props, method, this);
 }
 
+namespace {
+/** global accumulation buffer for alignment capture (single-stream decode) */
+std::vector<std::vector<float>> g_mha_align_rows;
+} // namespace
+
+void mhaAlignClear() { g_mha_align_rows.clear(); }
+
+const std::vector<std::vector<float>> &mhaAlignRows() {
+  return g_mha_align_rows;
+}
+
+void MHACoreLayer::capture_audio_alignment(nntrainer::Tensor &qk_out,
+                                           unsigned int step_size,
+                                           unsigned int from) {
+  (void)from;
+  if (!capture_align_ || step_size != 1 || align_audio_len_ == 0)
+    return;
+
+  // Decode-step layout of qk_out: [1, 1, num_keys, num_heads_Q]; element
+  // (key i, head h) == data[i * num_heads_Q + h]. Audio tokens occupy the
+  // contiguous key range [align_audio_start_,
+  // align_audio_start_+align_audio_len_).
+  const unsigned int H = static_cast<unsigned int>(num_heads_Q);
+  const unsigned int num_keys = qk_out.height();
+  if (align_audio_start_ + align_audio_len_ > num_keys)
+    return; // audio keys fell outside the (windowed) attention range this step
+
+  std::vector<float> row(align_audio_len_, 0.0f);
+#ifdef ENABLE_FP16
+  if (qk_out.getDataType() == ml::train::TensorDim::DataType::FP16) {
+    const _FP16 *d = qk_out.getData<_FP16>();
+    for (unsigned int k = 0; k < align_audio_len_; ++k) {
+      const size_t base = static_cast<size_t>(align_audio_start_ + k) * H;
+      float s = 0.0f;
+      for (unsigned int h = 0; h < H; ++h)
+        s += static_cast<float>(d[base + h]);
+      row[k] = s / static_cast<float>(H);
+    }
+    g_mha_align_rows.push_back(std::move(row));
+    return;
+  }
+#endif
+  if (qk_out.getDataType() == ml::train::TensorDim::DataType::FP32) {
+    const float *d = qk_out.getData<float>();
+    for (unsigned int k = 0; k < align_audio_len_; ++k) {
+      const size_t base = static_cast<size_t>(align_audio_start_ + k) * H;
+      float s = 0.0f;
+      for (unsigned int h = 0; h < H; ++h)
+        s += d[base + h];
+      row[k] = s / static_cast<float>(H);
+    }
+    g_mha_align_rows.push_back(std::move(row));
+  }
+}
+
 void MHACoreLayer::setProperty(const std::vector<std::string> &values) {
   std::vector<std::string> props;
   props.reserve(values.size());
@@ -1703,7 +1760,15 @@ void MHACoreLayer::setProperty(const std::vector<std::string> &values) {
     if (nntrainer::getKeyValue(value, key, parsed_value) == ML_ERROR_NONE) {
       if (key == "cache_index") {
         setCacheIndex(static_cast<unsigned int>(std::stoul(parsed_value)));
-      } else if (key == "rope_type" || key == "mrope_section" || key == "mrope_interleaved") {
+      } else if (key == "align_capture") {
+        capture_align_ = (std::stoul(parsed_value) != 0);
+      } else if (key == "align_audio_start") {
+        align_audio_start_ =
+          static_cast<unsigned int>(std::stoul(parsed_value));
+      } else if (key == "align_audio_len") {
+        align_audio_len_ = static_cast<unsigned int>(std::stoul(parsed_value));
+      } else if (key == "rope_type" || key == "mrope_section" ||
+                 key == "mrope_interleaved") {
         // Ignored or mapped because Qwen3-ASR's 1D audio sequence positions are identical 
         // across all spatial dimensions, making mROPE mathematically identical to standard 1D RoPE.
       } else {
