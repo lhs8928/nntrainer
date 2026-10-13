@@ -54,3 +54,5 @@ endif
 
 subdir('Optimizers/jni')
 subdir('quick_ai')
+# needs quick_ai's library and the speaker diarization models
+subdir('discretion')
