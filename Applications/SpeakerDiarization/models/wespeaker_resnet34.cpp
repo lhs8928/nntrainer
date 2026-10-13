@@ -776,6 +776,15 @@ void WeSpeakerResNet34::runConv2d_F32toI8(
   if (a_i8.size() < M * K) a_i8.resize(M * K);
   im2col_nhwc_i8(in, in_c, in_h, in_w, k_h, k_w, pad, stride, inv_act_scale, a_i8.data());
 
+  // Precompute effective scales and biases outside loop to eliminate 160,000 divisions per layer
+  float eff_scale_buf[256];
+  float eff_bias_buf[256];
+  float inv_next_scale = 1.0f / next_act_scale;
+  for (size_t n = 0; n < N; ++n) {
+    eff_scale_buf[n] = (in_act_scale * scales[n]) * inv_next_scale;
+    eff_bias_buf[n] = (bias ? bias[n] : 0.0f) * inv_next_scale;
+  }
+
   #pragma omp parallel for schedule(static)
   for (size_t m = 0; m < M; m += 4) {
     size_t cur_rows = std::min(static_cast<size_t>(4), M - m);
@@ -794,8 +803,8 @@ void WeSpeakerResNet34::runConv2d_F32toI8(
 
       for (size_t c = 0; c < cur_cols; ++c) {
         size_t out_n = n + c;
-        float eff_scale = (in_act_scale * scales[out_n]) / next_act_scale;
-        float b = (bias ? bias[out_n] : 0.0f) / next_act_scale;
+        float eff_scale = eff_scale_buf[out_n];
+        float b = eff_bias_buf[out_n];
 
         for (size_t r = 0; r < cur_rows; ++r) {
           float val = static_cast<float>(acc[r][c]) * eff_scale + b;
@@ -825,6 +834,13 @@ void WeSpeakerResNet34::runConv2d_I8toF32(
   if (a_i8.size() < M * K) a_i8.resize(M * K);
   im2col_nhwc_copy_i8(in_i8, in_c, in_h, in_w, a_i8.data());
 
+  float eff_scale_buf[256];
+  float eff_bias_buf[256];
+  for (size_t n = 0; n < N; ++n) {
+    eff_scale_buf[n] = act_scale * scales[n];
+    eff_bias_buf[n] = bias ? bias[n] : 0.0f;
+  }
+
   #pragma omp parallel for schedule(static)
   for (size_t m = 0; m < M; m += 4) {
     size_t cur_rows = std::min(static_cast<size_t>(4), M - m);
@@ -843,8 +859,8 @@ void WeSpeakerResNet34::runConv2d_I8toF32(
 
       for (size_t c = 0; c < cur_cols; ++c) {
         size_t out_n = n + c;
-        float eff_scale = act_scale * scales[out_n];
-        float b = bias ? bias[out_n] : 0.0f;
+        float eff_scale = eff_scale_buf[out_n];
+        float b = eff_bias_buf[out_n];
 
         for (size_t r = 0; r < cur_rows; ++r) {
           float val = static_cast<float>(acc[r][c]) * eff_scale + b;
