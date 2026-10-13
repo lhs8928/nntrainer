@@ -453,59 +453,60 @@ std::vector<float> PyanNet::forwardChunk(const float *chunk, size_t chunk_idx, D
   if (debug_cb) debug_cb(pfx + "norm1d_2", norm2_out.data(), {1, 60, POOL2_LEN});
   for (float &val : norm2_out) val = leaky_relu(val, 0.01f);
 
-  // 11. Transpose [60, 589] to [589, 60] for LSTM input
-  std::vector<float> lstm_in(589 * 60);
+  // 11. 4-Layer Bidirectional LSTM with Zero-Copy Ping-Pong Buffers
+  thread_local static std::vector<float> lstm_buf0;
+  thread_local static std::vector<float> lstm_buf1;
+  if (lstm_buf0.size() < 589 * 256) lstm_buf0.resize(589 * 256);
+  if (lstm_buf1.size() < 589 * 256) lstm_buf1.resize(589 * 256);
+
+  // Transpose [60, 589] to [589, 60] directly into lstm_buf0
   for (size_t c = 0; c < 60; ++c) {
     for (size_t t = 0; t < 589; ++t) {
-      lstm_in[t * 60 + c] = norm2_out[c * 589 + t];
+      lstm_buf0[t * 60 + c] = norm2_out[c * 589 + t];
     }
   }
 
-  // 12. 4-Layer Bidirectional LSTM
-  std::vector<float> lstm_layer_in = std::move(lstm_in);
-  std::vector<float> lstm_layer_out(589 * 256);
+  float *src_buf = lstm_buf0.data();
+  float *dst_buf = lstm_buf1.data();
 
   for (size_t l = 0; l < 4; ++l) {
-    runLSTMLayer(lstm_layer_in.data(), 589, lstm_layers_[l], lstm_layer_out.data());
-    if (l < 3) {
-      lstm_layer_in = lstm_layer_out;
-    }
+    runLSTMLayer(src_buf, 589, lstm_layers_[l], dst_buf);
+    std::swap(src_buf, dst_buf);
   }
-  if (debug_cb) debug_cb(pfx + "lstm", lstm_layer_out.data(), {1, 589, 256});
+  const float *lstm_out = src_buf;
+  if (debug_cb) debug_cb(pfx + "lstm", lstm_out, {1, 589, 256});
 
-  // 13. linear.0: [589, 256] -> [589, 128] + LeakyReLU(0.01)
+  // 12. linear.0: [589, 256] -> [589, 128] + LeakyReLU(0.01)
   std::vector<float> lin0_out(589 * 128);
   for (size_t t = 0; t < 589; ++t) {
-    const float *x_t = lstm_layer_out.data() + t * 256;
-    for (size_t oc = 0; oc < 128; ++oc) {
-      const float *w_row = linear_0_w_ + oc * 256;
-      float acc = linear_0_b_[oc];
-      for (size_t ic = 0; ic < 256; ++ic) {
-        acc += w_row[ic] * x_t[ic];
-      }
-      lin0_out[t * 128 + oc] = acc;
-    }
+    std::memcpy(lin0_out.data() + t * 128, linear_0_b_, 128 * sizeof(float));
   }
+#if defined(USE_BLAS)
+  nntrainer::__cblas_sgemm(0, false, true, 589, 128, 256,
+                           1.0f, lstm_out, 256, linear_0_w_, 256,
+                           1.0f, lin0_out.data(), 128);
+#else
+  sgemm_fallback(true, 589, 128, 256, lstm_out, linear_0_w_, lin0_out.data());
+#endif
   if (debug_cb) debug_cb(pfx + "linear_0", lin0_out.data(), {1, 589, 128});
   for (float &val : lin0_out) val = leaky_relu(val, 0.01f);
 
-  // 14. linear.1: [589, 128] -> [589, 128] + LeakyReLU(0.01)
+  // 13. linear.1: [589, 128] -> [589, 128] + LeakyReLU(0.01)
   std::vector<float> lin1_out(589 * 128);
   for (size_t t = 0; t < 589; ++t) {
-    const float *x_t = lin0_out.data() + t * 128;
-    for (size_t oc = 0; oc < 128; ++oc) {
-      const float *w_row = linear_1_w_ + oc * 128;
-      float acc = linear_1_b_[oc];
-      for (size_t ic = 0; ic < 128; ++ic) {
-        acc += w_row[ic] * x_t[ic];
-      }
-      lin1_out[t * 128 + oc] = acc;
-    }
+    std::memcpy(lin1_out.data() + t * 128, linear_1_b_, 128 * sizeof(float));
   }
+#if defined(USE_BLAS)
+  nntrainer::__cblas_sgemm(0, false, true, 589, 128, 128,
+                           1.0f, lin0_out.data(), 128, linear_1_w_, 128,
+                           1.0f, lin1_out.data(), 128);
+#else
+  sgemm_fallback(true, 589, 128, 128, lin0_out.data(), linear_1_w_, lin1_out.data());
+#endif
   if (debug_cb) debug_cb(pfx + "linear_1", lin1_out.data(), {1, 589, 128});
   for (float &val : lin1_out) val = leaky_relu(val, 0.01f);
 
-  // 15. classifier: [589, 128] -> [589, 7]
+  // 14. classifier: [589, 128] -> [589, 7]
   std::vector<float> cls_out(589 * 7);
   for (size_t t = 0; t < 589; ++t) {
     const float *x_t = lin1_out.data() + t * 128;
