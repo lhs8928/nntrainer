@@ -456,120 +456,168 @@ std::vector<float> PyanNet::forwardChunk(const float *chunk, size_t chunk_idx, D
   instance_norm_1d(pool0_out.data(), norm0_out.data(), 80, POOL0_LEN, norm1d_0_w_, norm1d_0_b_, 1e-5f, /*apply_leaky_relu=*/true);
   if (debug_cb) debug_cb(pfx + "norm1d_0", norm0_out.data(), {1, 80, POOL0_LEN});
 
-  // 5. conv1d_1: 80 in, 60 out, kernel 5, stride 1 -> out_len = 5321
+  // 5 & 6. conv1d_1 fused with pool1d_1 (k=3, s=3) -> POOL1_LEN = 1773
   constexpr size_t OUT1_LEN = 5321;
-  std::vector<float> conv1_out(60 * OUT1_LEN);
-  #pragma omp parallel for schedule(static)
-  for (size_t oc = 0; oc < 60; ++oc) {
-    const float *w_oc = conv1d_1_w_ + oc * (80 * 5);
-    float b_oc = conv1d_1_b_[oc];
-    float *out_row = conv1_out.data() + oc * OUT1_LEN;
-#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
-    const float32x4_t vb = vdupq_n_f32(b_oc);
-    size_t t = 0;
-    for (; t + 4 <= OUT1_LEN; t += 4) {
-      float32x4_t vacc = vb;
-      for (size_t ic = 0; ic < 80; ++ic) {
-        const float *in_base = norm0_out.data() + ic * POOL0_LEN + t;
-        const float *w_ic = w_oc + ic * 5;
-
-        vacc = vfmaq_f32(vacc, vld1q_f32(in_base + 0), vdupq_n_f32(w_ic[0]));
-        vacc = vfmaq_f32(vacc, vld1q_f32(in_base + 1), vdupq_n_f32(w_ic[1]));
-        vacc = vfmaq_f32(vacc, vld1q_f32(in_base + 2), vdupq_n_f32(w_ic[2]));
-        vacc = vfmaq_f32(vacc, vld1q_f32(in_base + 3), vdupq_n_f32(w_ic[3]));
-        vacc = vfmaq_f32(vacc, vld1q_f32(in_base + 4), vdupq_n_f32(w_ic[4]));
-      }
-      vst1q_f32(out_row + t, vacc);
-    }
-    for (; t < OUT1_LEN; ++t) {
-      float acc = b_oc;
-      for (size_t ic = 0; ic < 80; ++ic) {
-        const float *in_row = norm0_out.data() + ic * POOL0_LEN + t;
-        const float *w_ic = w_oc + ic * 5;
-        acc += in_row[0] * w_ic[0] + in_row[1] * w_ic[1] + in_row[2] * w_ic[2]
-             + in_row[3] * w_ic[3] + in_row[4] * w_ic[4];
-      }
-      out_row[t] = acc;
-    }
-#else
-    for (size_t t = 0; t < OUT1_LEN; ++t) {
-      float acc = b_oc;
-      for (size_t ic = 0; ic < 80; ++ic) {
-        const float *in_row = norm0_out.data() + ic * POOL0_LEN + t;
-        const float *w_ic = w_oc + ic * 5;
-        acc += in_row[0] * w_ic[0] + in_row[1] * w_ic[1] + in_row[2] * w_ic[2]
-             + in_row[3] * w_ic[3] + in_row[4] * w_ic[4];
-      }
-      out_row[t] = acc;
-    }
-#endif
-  }
-  if (debug_cb) debug_cb(pfx + "conv1d_1", conv1_out.data(), {1, 60, OUT1_LEN});
-
-  // 6. pool1d_1 (k=3, s=3) -> 1773
   constexpr size_t POOL1_LEN = 1773;
   std::vector<float> pool1_out(60 * POOL1_LEN);
-  max_pool_1d(conv1_out.data(), pool1_out.data(), 60, OUT1_LEN, 3, 3);
+
+  if (debug_cb) {
+    std::vector<float> conv1_out(60 * OUT1_LEN);
+    #pragma omp parallel for schedule(static)
+    for (size_t oc = 0; oc < 60; ++oc) {
+      const float *w_oc = conv1d_1_w_ + oc * (80 * 5);
+      float b_oc = conv1d_1_b_[oc];
+      float *out_row = conv1_out.data() + oc * OUT1_LEN;
+      for (size_t t = 0; t < OUT1_LEN; ++t) {
+        float acc = b_oc;
+        for (size_t ic = 0; ic < 80; ++ic) {
+          const float *in_row = norm0_out.data() + ic * POOL0_LEN + t;
+          const float *w_ic = w_oc + ic * 5;
+          acc += in_row[0] * w_ic[0] + in_row[1] * w_ic[1] + in_row[2] * w_ic[2]
+               + in_row[3] * w_ic[3] + in_row[4] * w_ic[4];
+        }
+        out_row[t] = acc;
+      }
+    }
+    debug_cb(pfx + "conv1d_1", conv1_out.data(), {1, 60, OUT1_LEN});
+    max_pool_1d(conv1_out.data(), pool1_out.data(), 60, OUT1_LEN, 3, 3);
+  } else {
+    #pragma omp parallel for schedule(static)
+    for (size_t oc = 0; oc < 60; ++oc) {
+      const float *w_oc = conv1d_1_w_ + oc * (80 * 5);
+      float b_oc = conv1d_1_b_[oc];
+      float *pool_row = pool1_out.data() + oc * POOL1_LEN;
+
+      for (size_t pt = 0; pt < POOL1_LEN; ++pt) {
+        size_t t0 = pt * 3;
+        size_t t1 = t0 + 1;
+        size_t t2 = t0 + 2;
+
+        float acc0 = b_oc;
+        float acc1 = b_oc;
+        float acc2 = b_oc;
+
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
+        float32x4_t vacc0 = vdupq_n_f32(0.0f);
+        float32x4_t vacc1 = vdupq_n_f32(0.0f);
+        float32x4_t vacc2 = vdupq_n_f32(0.0f);
+
+        for (size_t ic = 0; ic < 80; ++ic) {
+          const float *in_row = norm0_out.data() + ic * POOL0_LEN;
+          const float *w_ic = w_oc + ic * 5;
+
+          const float32x4_t w_vec = vld1q_f32(w_ic);
+          const float w4 = w_ic[4];
+
+          vacc0 = vfmaq_f32(vacc0, vld1q_f32(in_row + t0), w_vec);
+          vacc1 = vfmaq_f32(vacc1, vld1q_f32(in_row + t1), w_vec);
+          vacc2 = vfmaq_f32(vacc2, vld1q_f32(in_row + t2), w_vec);
+
+          acc0 += in_row[t0 + 4] * w4;
+          acc1 += in_row[t1 + 4] * w4;
+          acc2 += in_row[t2 + 4] * w4;
+        }
+
+        acc0 += vaddvq_f32(vacc0);
+        acc1 += vaddvq_f32(vacc1);
+        acc2 += vaddvq_f32(vacc2);
+#else
+        for (size_t ic = 0; ic < 80; ++ic) {
+          const float *in_row = norm0_out.data() + ic * POOL0_LEN;
+          const float *w_ic = w_oc + ic * 5;
+          acc0 += in_row[t0] * w_ic[0] + in_row[t0+1] * w_ic[1] + in_row[t0+2] * w_ic[2] + in_row[t0+3] * w_ic[3] + in_row[t0+4] * w_ic[4];
+          acc1 += in_row[t1] * w_ic[0] + in_row[t1+1] * w_ic[1] + in_row[t1+2] * w_ic[2] + in_row[t1+3] * w_ic[3] + in_row[t1+4] * w_ic[4];
+          acc2 += in_row[t2] * w_ic[0] + in_row[t2+1] * w_ic[1] + in_row[t2+2] * w_ic[2] + in_row[t2+3] * w_ic[3] + in_row[t2+4] * w_ic[4];
+        }
+#endif
+        pool_row[pt] = std::max(acc0, std::max(acc1, acc2));
+      }
+    }
+  }
 
   // 7. norm1d_1 fused with leaky_relu(0.01)
   std::vector<float> norm1_out(60 * POOL1_LEN);
   instance_norm_1d(pool1_out.data(), norm1_out.data(), 60, POOL1_LEN, norm1d_1_w_, norm1d_1_b_, 1e-5f, /*apply_leaky_relu=*/true);
   if (debug_cb) debug_cb(pfx + "norm1d_1", norm1_out.data(), {1, 60, POOL1_LEN});
 
-  // 8. conv1d_2: 60 in, 60 out, kernel 5, stride 1 -> out_len = 1769
+  // 8 & 9. conv1d_2 fused with pool1d_2 (k=3, s=3) -> POOL2_LEN = 589
   constexpr size_t OUT2_LEN = 1769;
-  std::vector<float> conv2_out(60 * OUT2_LEN);
-  #pragma omp parallel for schedule(static)
-  for (size_t oc = 0; oc < 60; ++oc) {
-    const float *w_oc = conv1d_2_w_ + oc * (60 * 5);
-    float b_oc = conv1d_2_b_[oc];
-    float *out_row = conv2_out.data() + oc * OUT2_LEN;
-#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
-    const float32x4_t vb = vdupq_n_f32(b_oc);
-    size_t t = 0;
-    for (; t + 4 <= OUT2_LEN; t += 4) {
-      float32x4_t vacc = vb;
-      for (size_t ic = 0; ic < 60; ++ic) {
-        const float *in_base = norm1_out.data() + ic * POOL1_LEN + t;
-        const float *w_ic = w_oc + ic * 5;
-
-        vacc = vfmaq_f32(vacc, vld1q_f32(in_base + 0), vdupq_n_f32(w_ic[0]));
-        vacc = vfmaq_f32(vacc, vld1q_f32(in_base + 1), vdupq_n_f32(w_ic[1]));
-        vacc = vfmaq_f32(vacc, vld1q_f32(in_base + 2), vdupq_n_f32(w_ic[2]));
-        vacc = vfmaq_f32(vacc, vld1q_f32(in_base + 3), vdupq_n_f32(w_ic[3]));
-        vacc = vfmaq_f32(vacc, vld1q_f32(in_base + 4), vdupq_n_f32(w_ic[4]));
-      }
-      vst1q_f32(out_row + t, vacc);
-    }
-    for (; t < OUT2_LEN; ++t) {
-      float acc = b_oc;
-      for (size_t ic = 0; ic < 60; ++ic) {
-        const float *in_row = norm1_out.data() + ic * POOL1_LEN + t;
-        const float *w_ic = w_oc + ic * 5;
-        acc += in_row[0] * w_ic[0] + in_row[1] * w_ic[1] + in_row[2] * w_ic[2]
-             + in_row[3] * w_ic[3] + in_row[4] * w_ic[4];
-      }
-      out_row[t] = acc;
-    }
-#else
-    for (size_t t = 0; t < OUT2_LEN; ++t) {
-      float acc = b_oc;
-      for (size_t ic = 0; ic < 60; ++ic) {
-        const float *in_row = norm1_out.data() + ic * POOL1_LEN + t;
-        const float *w_ic = w_oc + ic * 5;
-        acc += in_row[0] * w_ic[0] + in_row[1] * w_ic[1] + in_row[2] * w_ic[2]
-             + in_row[3] * w_ic[3] + in_row[4] * w_ic[4];
-      }
-      out_row[t] = acc;
-    }
-#endif
-  }
-  if (debug_cb) debug_cb(pfx + "conv1d_2", conv2_out.data(), {1, 60, OUT2_LEN});
-
-  // 9. pool1d_2 (k=3, s=3) -> 589
   constexpr size_t POOL2_LEN = 589;
   std::vector<float> pool2_out(60 * POOL2_LEN);
-  max_pool_1d(conv2_out.data(), pool2_out.data(), 60, OUT2_LEN, 3, 3);
+
+  if (debug_cb) {
+    std::vector<float> conv2_out(60 * OUT2_LEN);
+    #pragma omp parallel for schedule(static)
+    for (size_t oc = 0; oc < 60; ++oc) {
+      const float *w_oc = conv1d_2_w_ + oc * (60 * 5);
+      float b_oc = conv1d_2_b_[oc];
+      float *out_row = conv2_out.data() + oc * OUT2_LEN;
+      for (size_t t = 0; t < OUT2_LEN; ++t) {
+        float acc = b_oc;
+        for (size_t ic = 0; ic < 60; ++ic) {
+          const float *in_row = norm1_out.data() + ic * POOL1_LEN + t;
+          const float *w_ic = w_oc + ic * 5;
+          acc += in_row[0] * w_ic[0] + in_row[1] * w_ic[1] + in_row[2] * w_ic[2]
+               + in_row[3] * w_ic[3] + in_row[4] * w_ic[4];
+        }
+        out_row[t] = acc;
+      }
+    }
+    debug_cb(pfx + "conv1d_2", conv2_out.data(), {1, 60, OUT2_LEN});
+    max_pool_1d(conv2_out.data(), pool2_out.data(), 60, OUT2_LEN, 3, 3);
+  } else {
+    #pragma omp parallel for schedule(static)
+    for (size_t oc = 0; oc < 60; ++oc) {
+      const float *w_oc = conv1d_2_w_ + oc * (60 * 5);
+      float b_oc = conv1d_2_b_[oc];
+      float *pool_row = pool2_out.data() + oc * POOL2_LEN;
+
+      for (size_t pt = 0; pt < POOL2_LEN; ++pt) {
+        size_t t0 = pt * 3;
+        size_t t1 = t0 + 1;
+        size_t t2 = t0 + 2;
+
+        float acc0 = b_oc;
+        float acc1 = b_oc;
+        float acc2 = b_oc;
+
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
+        float32x4_t vacc0 = vdupq_n_f32(0.0f);
+        float32x4_t vacc1 = vdupq_n_f32(0.0f);
+        float32x4_t vacc2 = vdupq_n_f32(0.0f);
+
+        for (size_t ic = 0; ic < 60; ++ic) {
+          const float *in_row = norm1_out.data() + ic * POOL1_LEN;
+          const float *w_ic = w_oc + ic * 5;
+
+          const float32x4_t w_vec = vld1q_f32(w_ic);
+          const float w4 = w_ic[4];
+
+          vacc0 = vfmaq_f32(vacc0, vld1q_f32(in_row + t0), w_vec);
+          vacc1 = vfmaq_f32(vacc1, vld1q_f32(in_row + t1), w_vec);
+          vacc2 = vfmaq_f32(vacc2, vld1q_f32(in_row + t2), w_vec);
+
+          acc0 += in_row[t0 + 4] * w4;
+          acc1 += in_row[t1 + 4] * w4;
+          acc2 += in_row[t2 + 4] * w4;
+        }
+
+        acc0 += vaddvq_f32(vacc0);
+        acc1 += vaddvq_f32(vacc1);
+        acc2 += vaddvq_f32(vacc2);
+#else
+        for (size_t ic = 0; ic < 60; ++ic) {
+          const float *in_row = norm1_out.data() + ic * POOL1_LEN;
+          const float *w_ic = w_oc + ic * 5;
+          acc0 += in_row[t0] * w_ic[0] + in_row[t0+1] * w_ic[1] + in_row[t0+2] * w_ic[2] + in_row[t0+3] * w_ic[3] + in_row[t0+4] * w_ic[4];
+          acc1 += in_row[t1] * w_ic[0] + in_row[t1+1] * w_ic[1] + in_row[t1+2] * w_ic[2] + in_row[t1+3] * w_ic[3] + in_row[t1+4] * w_ic[4];
+          acc2 += in_row[t2] * w_ic[0] + in_row[t2+1] * w_ic[1] + in_row[t2+2] * w_ic[2] + in_row[t2+3] * w_ic[3] + in_row[t2+4] * w_ic[4];
+        }
+#endif
+        pool_row[pt] = std::max(acc0, std::max(acc1, acc2));
+      }
+    }
+  }
 
   // 10. norm1d_2 fused with leaky_relu(0.01)
   std::vector<float> norm2_out(60 * POOL2_LEN);
