@@ -17,6 +17,40 @@
 #include <algorithm>
 #include <cassert>
 
+#if (defined(__ARM_FEATURE_DOTPROD) && __ARM_FEATURE_DOTPROD) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+#endif
+
+#if defined(USE_BLAS)
+#include <cblas_interface.h>
+#else
+static inline void sgemm_fallback(bool transB, size_t M, size_t N, size_t K,
+                                  const float *A, const float *B, float *C) {
+  for (size_t m = 0; m < M; ++m) {
+    const float *a_row = A + m * K;
+    float *c_row = C + m * N;
+    for (size_t n = 0; n < N; ++n) {
+      float acc = 0.0f;
+      for (size_t k = 0; k < K; ++k) {
+        float b_val = transB ? B[n * K + k] : B[k * N + n];
+        acc += a_row[k] * b_val;
+      }
+      c_row[n] += acc;
+    }
+  }
+}
+static inline void sgemv_fallback(size_t M, size_t N, const float *A, const float *X, float *Y) {
+  for (size_t m = 0; m < M; ++m) {
+    const float *a_row = A + m * N;
+    float acc = 0.0f;
+    for (size_t n = 0; n < N; ++n) {
+      acc += a_row[n] * X[n];
+    }
+    Y[m] += acc;
+  }
+}
+#endif
+
 namespace speaker_diarization {
 
 static inline float sigmoid(float x) {
@@ -123,92 +157,99 @@ void PyanNet::runLSTMLayer(const float *input, size_t seq_len, const LSTMLayerWe
   std::vector<float> h_fwd(seq_len * HIDDEN_DIM, 0.0f);
   std::vector<float> h_bwd(seq_len * HIDDEN_DIM, 0.0f);
 
-  // 1. Forward direction
-  float c_fwd[HIDDEN_DIM] = {0.0f};
-  float curr_h_fwd[HIDDEN_DIM] = {0.0f};
-  float gates_buf[GATES_DIM];
+  // 1. Precompute sum of biases: [512]
+  float b_fwd_sum[GATES_DIM];
+  float b_bwd_sum[GATES_DIM];
+  for (size_t g = 0; g < GATES_DIM; ++g) {
+    b_fwd_sum[g] = weights.b_ih[g] + weights.b_hh[g];
+    b_bwd_sum[g] = weights.b_ih_rev[g] + weights.b_hh_rev[g];
+  }
+
+  // 2. Sequence-level GEMM: Gates_ih = X * W_ih^T + Bias_sum
+  std::vector<float> gates_fwd(seq_len * GATES_DIM);
+  std::vector<float> gates_bwd(seq_len * GATES_DIM);
 
   for (size_t t = 0; t < seq_len; ++t) {
-    const float *x_t = input + t * in_dim;
+    std::memcpy(gates_fwd.data() + t * GATES_DIM, b_fwd_sum, GATES_DIM * sizeof(float));
+    std::memcpy(gates_bwd.data() + t * GATES_DIM, b_bwd_sum, GATES_DIM * sizeof(float));
+  }
 
-    // gates_buf = b_ih + b_hh + W_ih * x_t + W_hh * curr_h_fwd
-    for (size_t g = 0; g < GATES_DIM; ++g) {
-      gates_buf[g] = weights.b_ih[g] + weights.b_hh[g];
-    }
+#if defined(USE_BLAS)
+  nntrainer::__cblas_sgemm(0, false, true, seq_len, GATES_DIM, in_dim,
+                           1.0f, input, in_dim, weights.w_ih, in_dim,
+                           1.0f, gates_fwd.data(), GATES_DIM);
+  nntrainer::__cblas_sgemm(0, false, true, seq_len, GATES_DIM, in_dim,
+                           1.0f, input, in_dim, weights.w_ih_rev, in_dim,
+                           1.0f, gates_bwd.data(), GATES_DIM);
+#else
+  sgemm_fallback(true, seq_len, GATES_DIM, in_dim, input, weights.w_ih, gates_fwd.data());
+  sgemm_fallback(true, seq_len, GATES_DIM, in_dim, input, weights.w_ih_rev, gates_bwd.data());
+#endif
 
-    for (size_t g = 0; g < GATES_DIM; ++g) {
-      const float *w_ih_row = weights.w_ih + g * in_dim;
-      float acc = 0.0f;
-      for (size_t i = 0; i < in_dim; ++i) {
-        acc += w_ih_row[i] * x_t[i];
+  // 3. Run forward and backward LSTM recurrent loops concurrently across 2 CPU cores
+  #pragma omp parallel sections
+  {
+    #pragma omp section
+    {
+      float c_fwd[HIDDEN_DIM] = {0.0f};
+      float curr_h_fwd[HIDDEN_DIM] = {0.0f};
+
+      for (size_t t = 0; t < seq_len; ++t) {
+        float *gates = gates_fwd.data() + t * GATES_DIM;
+
+#if defined(USE_BLAS)
+        nntrainer::__cblas_sgemv(0, false, GATES_DIM, HIDDEN_DIM,
+                                 1.0f, weights.w_hh, HIDDEN_DIM,
+                                 curr_h_fwd, 1, 1.0f, gates, 1);
+#else
+        sgemv_fallback(GATES_DIM, HIDDEN_DIM, weights.w_hh, curr_h_fwd, gates);
+#endif
+
+        for (size_t d = 0; d < HIDDEN_DIM; ++d) {
+          float i_gate = sigmoid(gates[d]);
+          float f_gate = sigmoid(gates[HIDDEN_DIM + d]);
+          float g_gate = std::tanh(gates[2 * HIDDEN_DIM + d]);
+          float o_gate = sigmoid(gates[3 * HIDDEN_DIM + d]);
+
+          c_fwd[d] = f_gate * c_fwd[d] + i_gate * g_gate;
+          curr_h_fwd[d] = o_gate * std::tanh(c_fwd[d]);
+          h_fwd[t * HIDDEN_DIM + d] = curr_h_fwd[d];
+        }
       }
-      gates_buf[g] += acc;
     }
 
-    for (size_t g = 0; g < GATES_DIM; ++g) {
-      const float *w_hh_row = weights.w_hh + g * HIDDEN_DIM;
-      float acc = 0.0f;
-      for (size_t i = 0; i < HIDDEN_DIM; ++i) {
-        acc += w_hh_row[i] * curr_h_fwd[i];
+    #pragma omp section
+    {
+      float c_bwd[HIDDEN_DIM] = {0.0f};
+      float curr_h_bwd[HIDDEN_DIM] = {0.0f};
+
+      for (int t = static_cast<int>(seq_len) - 1; t >= 0; --t) {
+        float *gates = gates_bwd.data() + t * GATES_DIM;
+
+#if defined(USE_BLAS)
+        nntrainer::__cblas_sgemv(0, false, GATES_DIM, HIDDEN_DIM,
+                                 1.0f, weights.w_hh_rev, HIDDEN_DIM,
+                                 curr_h_bwd, 1, 1.0f, gates, 1);
+#else
+        sgemv_fallback(GATES_DIM, HIDDEN_DIM, weights.w_hh_rev, curr_h_bwd, gates);
+#endif
+
+        for (size_t d = 0; d < HIDDEN_DIM; ++d) {
+          float i_gate = sigmoid(gates[d]);
+          float f_gate = sigmoid(gates[HIDDEN_DIM + d]);
+          float g_gate = std::tanh(gates[2 * HIDDEN_DIM + d]);
+          float o_gate = sigmoid(gates[3 * HIDDEN_DIM + d]);
+
+          c_bwd[d] = f_gate * c_bwd[d] + i_gate * g_gate;
+          curr_h_bwd[d] = o_gate * std::tanh(c_bwd[d]);
+          h_bwd[t * HIDDEN_DIM + d] = curr_h_bwd[d];
+        }
       }
-      gates_buf[g] += acc;
-    }
-
-    // Gate activations: i, f, g, o
-    for (size_t d = 0; d < HIDDEN_DIM; ++d) {
-      float i_gate = sigmoid(gates_buf[d]);
-      float f_gate = sigmoid(gates_buf[HIDDEN_DIM + d]);
-      float g_gate = std::tanh(gates_buf[2 * HIDDEN_DIM + d]);
-      float o_gate = sigmoid(gates_buf[3 * HIDDEN_DIM + d]);
-
-      c_fwd[d] = f_gate * c_fwd[d] + i_gate * g_gate;
-      curr_h_fwd[d] = o_gate * std::tanh(c_fwd[d]);
-      h_fwd[t * HIDDEN_DIM + d] = curr_h_fwd[d];
     }
   }
 
-  // 2. Backward direction
-  float c_bwd[HIDDEN_DIM] = {0.0f};
-  float curr_h_bwd[HIDDEN_DIM] = {0.0f};
-
-  for (int t = static_cast<int>(seq_len) - 1; t >= 0; --t) {
-    const float *x_t = input + t * in_dim;
-
-    for (size_t g = 0; g < GATES_DIM; ++g) {
-      gates_buf[g] = weights.b_ih_rev[g] + weights.b_hh_rev[g];
-    }
-
-    for (size_t g = 0; g < GATES_DIM; ++g) {
-      const float *w_ih_row = weights.w_ih_rev + g * in_dim;
-      float acc = 0.0f;
-      for (size_t i = 0; i < in_dim; ++i) {
-        acc += w_ih_row[i] * x_t[i];
-      }
-      gates_buf[g] += acc;
-    }
-
-    for (size_t g = 0; g < GATES_DIM; ++g) {
-      const float *w_hh_row = weights.w_hh_rev + g * HIDDEN_DIM;
-      float acc = 0.0f;
-      for (size_t i = 0; i < HIDDEN_DIM; ++i) {
-        acc += w_hh_row[i] * curr_h_bwd[i];
-      }
-      gates_buf[g] += acc;
-    }
-
-    for (size_t d = 0; d < HIDDEN_DIM; ++d) {
-      float i_gate = sigmoid(gates_buf[d]);
-      float f_gate = sigmoid(gates_buf[HIDDEN_DIM + d]);
-      float g_gate = std::tanh(gates_buf[2 * HIDDEN_DIM + d]);
-      float o_gate = sigmoid(gates_buf[3 * HIDDEN_DIM + d]);
-
-      c_bwd[d] = f_gate * c_bwd[d] + i_gate * g_gate;
-      curr_h_bwd[d] = o_gate * std::tanh(c_bwd[d]);
-      h_bwd[t * HIDDEN_DIM + d] = curr_h_bwd[d];
-    }
-  }
-
-  // 3. Concatenate forward and backward: [seq_len, 256]
+  // 4. Concatenate forward and backward: [seq_len, 256]
+  #pragma omp parallel for schedule(static)
   for (size_t t = 0; t < seq_len; ++t) {
     std::memcpy(output + t * 256, h_fwd.data() + t * HIDDEN_DIM, HIDDEN_DIM * sizeof(float));
     std::memcpy(output + t * 256 + HIDDEN_DIM, h_bwd.data() + t * HIDDEN_DIM, HIDDEN_DIM * sizeof(float));
@@ -227,15 +268,30 @@ std::vector<float> PyanNet::forwardChunk(const float *chunk, size_t chunk_idx, D
   // 2. conv1d_0: 80 filters, kernel 251, stride 10 -> out_len = 15975
   constexpr size_t OUT0_LEN = 15975;
   std::vector<float> conv0_out(80 * OUT0_LEN);
+  #pragma omp parallel for schedule(static)
   for (size_t oc = 0; oc < 80; ++oc) {
     const float *filt = conv1d_0_w_ + oc * 251;
     float *out_row = conv0_out.data() + oc * OUT0_LEN;
     for (size_t t = 0; t < OUT0_LEN; ++t) {
       size_t in_start = t * 10;
       float acc = 0.0f;
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
+      float32x4_t vacc0 = vdupq_n_f32(0.0f);
+      float32x4_t vacc1 = vdupq_n_f32(0.0f);
+      size_t k = 0;
+      for (; k + 8 <= 251; k += 8) {
+        vacc0 = vfmaq_f32(vacc0, vld1q_f32(wav_norm.data() + in_start + k + 0), vld1q_f32(filt + k + 0));
+        vacc1 = vfmaq_f32(vacc1, vld1q_f32(wav_norm.data() + in_start + k + 4), vld1q_f32(filt + k + 4));
+      }
+      acc = vaddvq_f32(vaddq_f32(vacc0, vacc1));
+      for (; k < 251; ++k) {
+        acc += wav_norm[in_start + k] * filt[k];
+      }
+#else
       for (size_t k = 0; k < 251; ++k) {
         acc += wav_norm[in_start + k] * filt[k];
       }
+#endif
       out_row[t] = acc;
     }
   }
@@ -257,6 +313,7 @@ std::vector<float> PyanNet::forwardChunk(const float *chunk, size_t chunk_idx, D
   // 5. conv1d_1: 80 in, 60 out, kernel 5, stride 1 -> out_len = 5321
   constexpr size_t OUT1_LEN = 5321;
   std::vector<float> conv1_out(60 * OUT1_LEN);
+  #pragma omp parallel for schedule(static)
   for (size_t oc = 0; oc < 60; ++oc) {
     const float *w_oc = conv1d_1_w_ + oc * (80 * 5);
     float b_oc = conv1d_1_b_[oc];
@@ -288,6 +345,7 @@ std::vector<float> PyanNet::forwardChunk(const float *chunk, size_t chunk_idx, D
   // 8. conv1d_2: 60 in, 60 out, kernel 5, stride 1 -> out_len = 1769
   constexpr size_t OUT2_LEN = 1769;
   std::vector<float> conv2_out(60 * OUT2_LEN);
+  #pragma omp parallel for schedule(static)
   for (size_t oc = 0; oc < 60; ++oc) {
     const float *w_oc = conv1d_2_w_ + oc * (60 * 5);
     float b_oc = conv1d_2_b_[oc];
