@@ -975,64 +975,51 @@ void WeSpeakerResNet34::forwardBackbone(const float *fbank, float *out_feat,
                                        size_t chunk_idx, DebugTensorCallback debug_cb) {
   std::string pfx = "emb_chunk" + std::to_string(chunk_idx) + "_";
 
+  // Pre-allocated thread-local ping-pong buffers to eliminate 336 dynamic heap allocations
+  thread_local static std::vector<float> feat_buf0;
+  thread_local static std::vector<float> feat_buf1;
+  constexpr size_t MAX_FEAT_SIZE = 32 * 80 * 998;
+  if (feat_buf0.size() < MAX_FEAT_SIZE) feat_buf0.resize(MAX_FEAT_SIZE);
+  if (feat_buf1.size() < MAX_FEAT_SIZE) feat_buf1.resize(MAX_FEAT_SIZE);
+
+  float *src_feat = feat_buf0.data();
+  float *dst_feat = feat_buf1.data();
+
   // 1. Stem Conv1 + Bias1 + ReLU (Fused W8A8): [80, 998, 1] -> [80, 998, 32]
-  std::vector<float> curr_feat(32 * 80 * 998);
-  runConv2d(fbank, curr_feat.data(), 1, 32, 80, 998, 3, 3, 1, 1,
+  runConv2d(fbank, src_feat, 1, 32, 80, 998, 3, 3, 1, 1,
             conv1_w_, conv1_w_i8_trans_.data(), conv1_s_, conv1_b_, conv1_act_scale_, /*apply_relu=*/true);
-  if (debug_cb) debug_cb(pfx + "resnet_conv1", curr_feat.data(), {1, 80, 998, 32});
+  if (debug_cb) debug_cb(pfx + "resnet_conv1", src_feat, {1, 80, 998, 32});
 
   size_t curr_h = 80;
   size_t curr_w = 998;
 
+  auto run_stage = [&](const std::vector<BasicBlockWeights> &blocks) {
+    for (size_t b = 0; b < blocks.size(); ++b) {
+      size_t next_h = 0, next_w = 0;
+      runBasicBlock(src_feat, dst_feat, curr_h, curr_w, blocks[b], next_h, next_w);
+      std::swap(src_feat, dst_feat);
+      curr_h = next_h;
+      curr_w = next_w;
+    }
+  };
+
   // 2. layer1: 3 blocks (32 channels, 80 x 998)
-  for (size_t b = 0; b < layer1_.size(); ++b) {
-    size_t next_h = 0, next_w = 0;
-    std::vector<float> next_feat(layer1_[b].out_channels * curr_h * curr_w);
-    runBasicBlock(curr_feat.data(), next_feat.data(), curr_h, curr_w, layer1_[b], next_h, next_w);
-    curr_feat = std::move(next_feat);
-  }
-  if (debug_cb) debug_cb(pfx + "resnet_layer1", curr_feat.data(), {1, curr_h, curr_w, 32});
+  run_stage(layer1_);
+  if (debug_cb) debug_cb(pfx + "resnet_layer1", src_feat, {1, curr_h, curr_w, 32});
 
   // 3. layer2: 4 blocks (64 channels, 40 x 499)
-  for (size_t b = 0; b < layer2_.size(); ++b) {
-    size_t next_h = 0, next_w = 0;
-    size_t target_h = (b == 0) ? (curr_h + 2 - 3) / 2 + 1 : curr_h;
-    size_t target_w = (b == 0) ? (curr_w + 2 - 3) / 2 + 1 : curr_w;
-    std::vector<float> next_feat(layer2_[b].out_channels * target_h * target_w);
-    runBasicBlock(curr_feat.data(), next_feat.data(), curr_h, curr_w, layer2_[b], next_h, next_w);
-    curr_feat = std::move(next_feat);
-    curr_h = next_h;
-    curr_w = next_w;
-  }
-  if (debug_cb) debug_cb(pfx + "resnet_layer2", curr_feat.data(), {1, curr_h, curr_w, 64});
+  run_stage(layer2_);
+  if (debug_cb) debug_cb(pfx + "resnet_layer2", src_feat, {1, curr_h, curr_w, 64});
 
   // 4. layer3: 6 blocks (128 channels, 20 x 250)
-  for (size_t b = 0; b < layer3_.size(); ++b) {
-    size_t next_h = 0, next_w = 0;
-    size_t target_h = (b == 0) ? (curr_h + 2 - 3) / 2 + 1 : curr_h;
-    size_t target_w = (b == 0) ? (curr_w + 2 - 3) / 2 + 1 : curr_w;
-    std::vector<float> next_feat(layer3_[b].out_channels * target_h * target_w);
-    runBasicBlock(curr_feat.data(), next_feat.data(), curr_h, curr_w, layer3_[b], next_h, next_w);
-    curr_feat = std::move(next_feat);
-    curr_h = next_h;
-    curr_w = next_w;
-  }
-  if (debug_cb) debug_cb(pfx + "resnet_layer3", curr_feat.data(), {1, curr_h, curr_w, 128});
+  run_stage(layer3_);
+  if (debug_cb) debug_cb(pfx + "resnet_layer3", src_feat, {1, curr_h, curr_w, 128});
 
   // 5. layer4: 3 blocks (256 channels, 10 x 125)
-  for (size_t b = 0; b < layer4_.size(); ++b) {
-    size_t next_h = 0, next_w = 0;
-    size_t target_h = (b == 0) ? (curr_h + 2 - 3) / 2 + 1 : curr_h;
-    size_t target_w = (b == 0) ? (curr_w + 2 - 3) / 2 + 1 : curr_w;
-    std::vector<float> next_feat(layer4_[b].out_channels * target_h * target_w);
-    runBasicBlock(curr_feat.data(), next_feat.data(), curr_h, curr_w, layer4_[b], next_h, next_w);
-    curr_feat = std::move(next_feat);
-    curr_h = next_h;
-    curr_w = next_w;
-  }
-  if (debug_cb) debug_cb(pfx + "resnet_layer4", curr_feat.data(), {1, curr_h, curr_w, 256});
+  run_stage(layer4_);
+  if (debug_cb) debug_cb(pfx + "resnet_layer4", src_feat, {1, curr_h, curr_w, 256});
 
-  std::memcpy(out_feat, curr_feat.data(), 256 * 10 * 125 * sizeof(float));
+  std::memcpy(out_feat, src_feat, 256 * 10 * 125 * sizeof(float));
 }
 
 std::vector<float> WeSpeakerResNet34::forwardPool(const float *feat, const float *mask,
