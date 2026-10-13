@@ -463,11 +463,12 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
     thread_local static std::vector<int8_t> a_i8;
 
     if (k_h == 1 && k_w == 1 && stride == 1 && pad == 0) {
-      // 1x1 stride-1: Quantize directly into a_i8 once (no im2col, identity matrix)
       if (a_i8.size() < M * in_c) a_i8.resize(M * in_c);
-      quantize_f32_to_i8(in, a_i8.data(), M * in_c, inv_act_scale);
+      #pragma omp parallel for schedule(static)
+      for (size_t m = 0; m < M; ++m) {
+        quantize_f32_to_i8(in + m * in_c, a_i8.data() + m * in_c, in_c, inv_act_scale);
+      }
     } else if (k_h == 1 && k_w == 1 && stride > 1 && pad == 0) {
-      // 1x1 stride > 1: Subsample directly into a_i8 with one-shot quantization
       if (a_i8.size() < M * in_c) a_i8.resize(M * in_c);
       #pragma omp parallel for schedule(static)
       for (size_t oh = 0; oh < out_h; ++oh) {
@@ -478,7 +479,6 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
         }
       }
     } else {
-      // 3x3 conv: Single-pass fused im2col with direct INT8 quantization
       if (a_i8.size() < M * K) a_i8.resize(M * K);
       im2col_nhwc_i8(in, in_c, in_h, in_w, k_h, k_w, pad, stride, inv_act_scale, a_i8.data());
     }
@@ -495,30 +495,14 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
         int32_t acc[4][4];
         dotI8Tile4x4(a_tile, K, cur_rows, w_tile, K, cur_cols, K, acc);
 
-#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
-        if (cur_cols == 4) {
-          float32x4_t vscale = vmulq_n_f32(vld1q_f32(scales + n), act_scale);
-          float32x4_t vbias = bias ? vld1q_f32(bias + n) : vdupq_n_f32(0.0f);
-          const float32x4_t vzero = vdupq_n_f32(0.0f);
+        for (size_t c = 0; c < cur_cols; ++c) {
+          size_t out_n = n + c;
+          float eff_scale = act_scale * scales[out_n];
+          float b = bias ? bias[out_n] : 0.0f;
 
           for (size_t r = 0; r < cur_rows; ++r) {
-            float32x4_t vval = vcvtq_f32_s32(vld1q_s32(&acc[r][0]));
-            vval = vmlaq_f32(vbias, vval, vscale);
-            if (apply_relu) vval = vmaxq_f32(vval, vzero);
-            vst1q_f32(out + (m + r) * N + n, vval);
-          }
-        } else
-#endif
-        {
-          for (size_t c = 0; c < cur_cols; ++c) {
-            size_t out_n = n + c;
-            float eff_scale = act_scale * scales[out_n];
-            float b = bias ? bias[out_n] : 0.0f;
-
-            for (size_t r = 0; r < cur_rows; ++r) {
-              float val = static_cast<float>(acc[r][c]) * eff_scale + b;
-              out[(m + r) * N + out_n] = apply_relu ? std::max(0.0f, val) : val;
-            }
+            float val = static_cast<float>(acc[r][c]) * eff_scale + b;
+            out[(m + r) * N + out_n] = apply_relu ? std::max(0.0f, val) : val;
           }
         }
       }
