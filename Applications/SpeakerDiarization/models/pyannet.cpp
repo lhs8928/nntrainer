@@ -318,6 +318,34 @@ std::vector<float> PyanNet::forwardChunk(const float *chunk, size_t chunk_idx, D
     const float *w_oc = conv1d_1_w_ + oc * (80 * 5);
     float b_oc = conv1d_1_b_[oc];
     float *out_row = conv1_out.data() + oc * OUT1_LEN;
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
+    const float32x4_t vb = vdupq_n_f32(b_oc);
+    size_t t = 0;
+    for (; t + 4 <= OUT1_LEN; t += 4) {
+      float32x4_t vacc = vb;
+      for (size_t ic = 0; ic < 80; ++ic) {
+        const float *in_base = norm0_out.data() + ic * POOL0_LEN + t;
+        const float *w_ic = w_oc + ic * 5;
+
+        vacc = vfmaq_f32(vacc, vld1q_f32(in_base + 0), vdupq_n_f32(w_ic[0]));
+        vacc = vfmaq_f32(vacc, vld1q_f32(in_base + 1), vdupq_n_f32(w_ic[1]));
+        vacc = vfmaq_f32(vacc, vld1q_f32(in_base + 2), vdupq_n_f32(w_ic[2]));
+        vacc = vfmaq_f32(vacc, vld1q_f32(in_base + 3), vdupq_n_f32(w_ic[3]));
+        vacc = vfmaq_f32(vacc, vld1q_f32(in_base + 4), vdupq_n_f32(w_ic[4]));
+      }
+      vst1q_f32(out_row + t, vacc);
+    }
+    for (; t < OUT1_LEN; ++t) {
+      float acc = b_oc;
+      for (size_t ic = 0; ic < 80; ++ic) {
+        const float *in_row = norm0_out.data() + ic * POOL0_LEN + t;
+        const float *w_ic = w_oc + ic * 5;
+        acc += in_row[0] * w_ic[0] + in_row[1] * w_ic[1] + in_row[2] * w_ic[2]
+             + in_row[3] * w_ic[3] + in_row[4] * w_ic[4];
+      }
+      out_row[t] = acc;
+    }
+#else
     for (size_t t = 0; t < OUT1_LEN; ++t) {
       float acc = b_oc;
       for (size_t ic = 0; ic < 80; ++ic) {
@@ -328,6 +356,7 @@ std::vector<float> PyanNet::forwardChunk(const float *chunk, size_t chunk_idx, D
       }
       out_row[t] = acc;
     }
+#endif
   }
   if (debug_cb) debug_cb(pfx + "conv1d_1", conv1_out.data(), {1, 60, OUT1_LEN});
 
@@ -350,6 +379,34 @@ std::vector<float> PyanNet::forwardChunk(const float *chunk, size_t chunk_idx, D
     const float *w_oc = conv1d_2_w_ + oc * (60 * 5);
     float b_oc = conv1d_2_b_[oc];
     float *out_row = conv2_out.data() + oc * OUT2_LEN;
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
+    const float32x4_t vb = vdupq_n_f32(b_oc);
+    size_t t = 0;
+    for (; t + 4 <= OUT2_LEN; t += 4) {
+      float32x4_t vacc = vb;
+      for (size_t ic = 0; ic < 60; ++ic) {
+        const float *in_base = norm1_out.data() + ic * POOL1_LEN + t;
+        const float *w_ic = w_oc + ic * 5;
+
+        vacc = vfmaq_f32(vacc, vld1q_f32(in_base + 0), vdupq_n_f32(w_ic[0]));
+        vacc = vfmaq_f32(vacc, vld1q_f32(in_base + 1), vdupq_n_f32(w_ic[1]));
+        vacc = vfmaq_f32(vacc, vld1q_f32(in_base + 2), vdupq_n_f32(w_ic[2]));
+        vacc = vfmaq_f32(vacc, vld1q_f32(in_base + 3), vdupq_n_f32(w_ic[3]));
+        vacc = vfmaq_f32(vacc, vld1q_f32(in_base + 4), vdupq_n_f32(w_ic[4]));
+      }
+      vst1q_f32(out_row + t, vacc);
+    }
+    for (; t < OUT2_LEN; ++t) {
+      float acc = b_oc;
+      for (size_t ic = 0; ic < 60; ++ic) {
+        const float *in_row = norm1_out.data() + ic * POOL1_LEN + t;
+        const float *w_ic = w_oc + ic * 5;
+        acc += in_row[0] * w_ic[0] + in_row[1] * w_ic[1] + in_row[2] * w_ic[2]
+             + in_row[3] * w_ic[3] + in_row[4] * w_ic[4];
+      }
+      out_row[t] = acc;
+    }
+#else
     for (size_t t = 0; t < OUT2_LEN; ++t) {
       float acc = b_oc;
       for (size_t ic = 0; ic < 60; ++ic) {
@@ -360,6 +417,7 @@ std::vector<float> PyanNet::forwardChunk(const float *chunk, size_t chunk_idx, D
       }
       out_row[t] = acc;
     }
+#endif
   }
   if (debug_cb) debug_cb(pfx + "conv1d_2", conv2_out.data(), {1, 60, OUT2_LEN});
 
