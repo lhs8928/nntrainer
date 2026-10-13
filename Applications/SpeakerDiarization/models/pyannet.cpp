@@ -509,16 +509,15 @@ std::vector<float> PyanNet::forwardChunk(const float *chunk, size_t chunk_idx, D
   // 14. classifier: [589, 128] -> [589, 7]
   std::vector<float> cls_out(589 * 7);
   for (size_t t = 0; t < 589; ++t) {
-    const float *x_t = lin1_out.data() + t * 128;
-    for (size_t oc = 0; oc < 7; ++oc) {
-      const float *w_row = classifier_w_ + oc * 128;
-      float acc = classifier_b_[oc];
-      for (size_t ic = 0; ic < 128; ++ic) {
-        acc += w_row[ic] * x_t[ic];
-      }
-      cls_out[t * 7 + oc] = acc;
-    }
+    std::memcpy(cls_out.data() + t * 7, classifier_b_, 7 * sizeof(float));
   }
+#if defined(USE_BLAS)
+  nntrainer::__cblas_sgemm(0, false, true, 589, 7, 128,
+                           1.0f, lin1_out.data(), 128, classifier_w_, 128,
+                           1.0f, cls_out.data(), 7);
+#else
+  sgemm_fallback(true, 589, 7, 128, lin1_out.data(), classifier_w_, cls_out.data());
+#endif
   if (debug_cb) debug_cb(pfx + "classifier", cls_out.data(), {1, 589, 7});
 
   // 16. LogSoftmax: [589, 7]
