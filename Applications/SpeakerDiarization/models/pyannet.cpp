@@ -265,44 +265,65 @@ std::vector<float> PyanNet::forwardChunk(const float *chunk, size_t chunk_idx, D
   instance_norm_1d(chunk, wav_norm.data(), 1, IN_LEN, wav_norm1d_w_, wav_norm1d_b_);
   if (debug_cb) debug_cb(pfx + "wav_norm1d", wav_norm.data(), {1, 1, IN_LEN});
 
-  // 2. conv1d_0: 80 filters, kernel 251, stride 10 -> out_len = 15975
-  constexpr size_t OUT0_LEN = 15975;
-  std::vector<float> conv0_out(80 * OUT0_LEN);
-  #pragma omp parallel for schedule(static)
-  for (size_t oc = 0; oc < 80; ++oc) {
-    const float *filt = conv1d_0_w_ + oc * 251;
-    float *out_row = conv0_out.data() + oc * OUT0_LEN;
-    for (size_t t = 0; t < OUT0_LEN; ++t) {
-      size_t in_start = t * 10;
-      float acc = 0.0f;
-#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
-      float32x4_t vacc0 = vdupq_n_f32(0.0f);
-      float32x4_t vacc1 = vdupq_n_f32(0.0f);
-      size_t k = 0;
-      for (; k + 8 <= 251; k += 8) {
-        vacc0 = vfmaq_f32(vacc0, vld1q_f32(wav_norm.data() + in_start + k + 0), vld1q_f32(filt + k + 0));
-        vacc1 = vfmaq_f32(vacc1, vld1q_f32(wav_norm.data() + in_start + k + 4), vld1q_f32(filt + k + 4));
-      }
-      acc = vaddvq_f32(vaddq_f32(vacc0, vacc1));
-      for (; k < 251; ++k) {
-        acc += wav_norm[in_start + k] * filt[k];
-      }
-#else
-      for (size_t k = 0; k < 251; ++k) {
-        acc += wav_norm[in_start + k] * filt[k];
-      }
-#endif
-      out_row[t] = acc;
-    }
-  }
-  if (debug_cb) debug_cb(pfx + "conv1d_0", conv0_out.data(), {1, 80, OUT0_LEN});
-
-  // 3. abs -> pool1d_0 (k=3, s=3) -> 5325
-  for (float &val : conv0_out) val = std::abs(val);
-
+  // 2. conv1d_0 fused with abs and max_pool1d (k=3, s=3) -> pool0_out: 80 x 5325
+  // Eliminates 5.1 MB intermediate buffer (conv0_out) and two redundant memory passes
   constexpr size_t POOL0_LEN = 5325;
   std::vector<float> pool0_out(80 * POOL0_LEN);
-  max_pool_1d(conv0_out.data(), pool0_out.data(), 80, OUT0_LEN, 3, 3);
+
+  if (debug_cb) {
+    constexpr size_t OUT0_LEN = 15975;
+    std::vector<float> conv0_out(80 * OUT0_LEN);
+    for (size_t oc = 0; oc < 80; ++oc) {
+      const float *filt = conv1d_0_w_ + oc * 251;
+      float *out_row = conv0_out.data() + oc * OUT0_LEN;
+      for (size_t t = 0; t < OUT0_LEN; ++t) {
+        size_t in_start = t * 10;
+        float acc = 0.0f;
+        for (size_t k = 0; k < 251; ++k) acc += wav_norm[in_start + k] * filt[k];
+        out_row[t] = acc;
+      }
+    }
+    debug_cb(pfx + "conv1d_0", conv0_out.data(), {1, 80, OUT0_LEN});
+    for (float &val : conv0_out) val = std::abs(val);
+    max_pool_1d(conv0_out.data(), pool0_out.data(), 80, OUT0_LEN, 3, 3);
+  } else {
+    #pragma omp parallel for schedule(static)
+    for (size_t oc = 0; oc < 80; ++oc) {
+      const float *filt = conv1d_0_w_ + oc * 251;
+      float *pool_row = pool0_out.data() + oc * POOL0_LEN;
+
+      for (size_t pt = 0; pt < POOL0_LEN; ++pt) {
+        float max_val = 0.0f;
+
+        for (size_t step = 0; step < 3; ++step) {
+          size_t t = pt * 3 + step;
+          size_t in_start = t * 10;
+          float acc = 0.0f;
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__))
+          float32x4_t vacc0 = vdupq_n_f32(0.0f);
+          float32x4_t vacc1 = vdupq_n_f32(0.0f);
+          size_t k = 0;
+          for (; k + 8 <= 251; k += 8) {
+            vacc0 = vfmaq_f32(vacc0, vld1q_f32(wav_norm.data() + in_start + k + 0), vld1q_f32(filt + k + 0));
+            vacc1 = vfmaq_f32(vacc1, vld1q_f32(wav_norm.data() + in_start + k + 4), vld1q_f32(filt + k + 4));
+          }
+          acc = vaddvq_f32(vaddq_f32(vacc0, vacc1));
+          for (; k < 251; ++k) {
+            acc += wav_norm[in_start + k] * filt[k];
+          }
+#else
+          for (size_t k = 0; k < 251; ++k) {
+            acc += wav_norm[in_start + k] * filt[k];
+          }
+#endif
+          float abs_val = std::abs(acc);
+          if (abs_val > max_val) max_val = abs_val;
+        }
+
+        pool_row[pt] = max_val;
+      }
+    }
+  }
 
   // 4. norm1d_0 -> leaky_relu(0.01)
   std::vector<float> norm0_out(80 * POOL0_LEN);
