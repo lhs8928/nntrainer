@@ -459,20 +459,15 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
 
   // Native W8A8 Quantized GEMM with Seungbaek Hong's YOLOv7 Indirect Conv architecture
   if (weights_i8_trans && scales && act_scale > 0.0f) {
-    // 1. Quantize input feature map once in-place: [in_h, in_w, in_c]
-    thread_local static std::vector<int8_t> in_i8;
-    size_t in_size = in_h * in_w * in_c;
-    if (in_i8.size() < in_size) in_i8.resize(in_size);
     float inv_act_scale = 1.0f / act_scale;
-    quantize_f32_to_i8(in, in_i8.data(), in_size, inv_act_scale);
-
-    const int8_t *a_gemm_i8 = in_i8.data();
     thread_local static std::vector<int8_t> a_i8;
 
     if (k_h == 1 && k_w == 1 && stride == 1 && pad == 0) {
+      // 1x1 stride-1: Quantize directly into a_i8 once (no im2col, identity matrix)
       if (a_i8.size() < M * in_c) a_i8.resize(M * in_c);
       quantize_f32_to_i8(in, a_i8.data(), M * in_c, inv_act_scale);
     } else if (k_h == 1 && k_w == 1 && stride > 1 && pad == 0) {
+      // 1x1 stride > 1: Subsample directly into a_i8 with one-shot quantization
       if (a_i8.size() < M * in_c) a_i8.resize(M * in_c);
       #pragma omp parallel for schedule(static)
       for (size_t oh = 0; oh < out_h; ++oh) {
@@ -483,6 +478,7 @@ void WeSpeakerResNet34::runConv2d(const float *in, float *out, size_t in_c, size
         }
       }
     } else {
+      // 3x3 conv: Single-pass fused im2col with direct INT8 quantization
       if (a_i8.size() < M * K) a_i8.resize(M * K);
       im2col_nhwc_i8(in, in_c, in_h, in_w, k_h, k_w, pad, stride, inv_act_scale, a_i8.data());
     }
