@@ -29,7 +29,7 @@ namespace discretion {
 struct SdOptions {
   std::string weights;      // speaker_diarization.bin
   double window_sec = 20.0; // diarization window
-  double step_sec = 10.0;   // slide step
+  double step_sec = 20.0;   // slide step (= window: no overlap, half the work)
   std::vector<int> cpus;    // CPUs for this lane (empty = no restriction)
   int threads = 0;          // OpenMP threads of this lane (0 = default)
 };

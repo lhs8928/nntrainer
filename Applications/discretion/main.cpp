@@ -51,7 +51,7 @@ void usage(const char *prog) {
     "\n"
     "ASR:   --segment-sec S (8)  --segment-min-sec S  --silence-rms R (0.005)\n"
     "       --language NAME (English, \"\" = automatic)  --max-backlog N (2)\n"
-    "SD:    --window S (20)  --step S (10)\n"
+    "SD:    --window S (20)  --step S (20)\n"
     "Cores: --asr-cpus LIST  --sd-cpus LIST (e.g. 0,1 / 2-3)\n"
     "       --asr-threads N  --sd-threads N\n"
     "       --no-word-timestamps (label whole segments instead of words)\n"
