@@ -14,6 +14,7 @@
 #define __DISCRETION_SD_LANE_H__
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -32,6 +33,7 @@ struct SdOptions {
   double step_sec = 20.0;   // slide step (= window: no overlap, half the work)
   std::vector<int> cpus;    // CPUs for this lane (empty = no restriction)
   int threads = 0;          // OpenMP threads of this lane (0 = default)
+  std::mutex *gate = nullptr; // serial mode: held around each model call
 };
 
 /**

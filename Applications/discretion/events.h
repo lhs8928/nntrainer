@@ -27,6 +27,15 @@
 
 namespace discretion {
 
+/**
+ * @brief Serial mode: holds the gate shared by both lanes for one model call.
+ *        Without a gate (parallel mode) it holds nothing.
+ */
+inline std::unique_lock<std::mutex> holdModelGate(std::mutex *gate) {
+  return gate ? std::unique_lock<std::mutex>(*gate)
+              : std::unique_lock<std::mutex>();
+}
+
 using Clock = std::chrono::steady_clock;
 
 /**

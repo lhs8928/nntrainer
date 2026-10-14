@@ -37,6 +37,7 @@ struct AsrOptions {
   unsigned max_backlog = 2;    // drop the oldest waiting segment beyond this
   std::vector<int> cpus;       // CPUs for this lane (empty = no restriction)
   int threads = 0;             // worker threads of the ASR (0 = default)
+  std::mutex *gate = nullptr;  // serial mode: held around each model call
   bool word_timestamps = true; // time every word, so a line can change speaker
 };
 

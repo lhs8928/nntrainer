@@ -200,11 +200,15 @@ void AsrLane::modelLoop(const StreamClock &clock, EventSink &sink) {
 
     it.pcm.resize(max_len_, 0.0f); // pad to the fixed model length with silence
     const double t0 = clock.now();
-    e.text = engine_->transcribe(std::move(it.pcm));
+    std::vector<std::pair<std::string, double>> words;
+    {
+      auto hold = holdModelGate(opt_.gate);
+      e.text = engine_->transcribe(std::move(it.pcm));
+      words = engine_->lastWords();
+    }
     // The model pads the segment with silence, so a word cannot be later than
     // the real end of the audio.
     const double seg_len = e.end_sec - e.start_sec;
-    const auto words = engine_->lastWords();
     std::vector<double> times;
     for (const auto &w : words)
       times.push_back(w.second);

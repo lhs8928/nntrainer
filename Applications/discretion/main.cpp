@@ -55,6 +55,8 @@ void usage(const char *prog) {
     "Cores: --asr-cpus LIST  --sd-cpus LIST (e.g. 0,1 / 2-3)\n"
     "       --asr-threads N  --sd-threads N\n"
     "       --no-word-timestamps (label whole segments instead of words)\n"
+    "Serial: default. ASR and SD take turns (each call uses all its threads);\n"
+    "        --parallel runs both lanes at once on their own cores instead\n"
     "Other: --seconds N (stop after N s of audio)  --verbose\n",
     prog);
 }
@@ -65,6 +67,7 @@ struct Args {
   discretion::SdOptions sd;
   discretion::AudioFanout::Options audio;
   bool verbose = false;
+  bool serial = true; // one model call at a time (--parallel to turn off)
 };
 
 /** @brief parse the command line; false (after printing why) on error */
@@ -123,6 +126,10 @@ bool parseArgs(int argc, char **argv, Args &a) {
         a.asr.word_timestamps = false;
       else if (k == "--verbose")
         a.verbose = true;
+      else if (k == "--serial")
+        a.serial = true;
+      else if (k == "--parallel")
+        a.serial = false;
       else
         throw std::invalid_argument("unknown option " + k);
     }
@@ -157,8 +164,18 @@ std::string cpuText(const std::vector<int> &cpus) {
 
 } // namespace
 
+#if defined(USE_BLAS)
+extern "C" void openblas_set_num_threads(int num_threads) __attribute__((weak));
+#endif
+
 int main(int argc, char **argv) {
-  // One OpenBLAS thread: both lanes manage their own parallelism.
+  // One OpenBLAS thread: both lanes manage their own parallelism. The library
+  // is already loaded, so the environment variable alone is not enough.
+#if defined(USE_BLAS)
+  if (openblas_set_num_threads) {
+    openblas_set_num_threads(1);
+  }
+#endif
   setenv("OPENBLAS_NUM_THREADS", "1", 0);
 
   Args args;
@@ -180,6 +197,13 @@ int main(int argc, char **argv) {
     cpuText(args.asr.cpus).c_str(), args.asr.threads,
     cpuText(args.sd.cpus).c_str(), args.sd.threads);
   std::fflush(stdout);
+
+  // Serial mode: the same gate is held by both lanes around each model call.
+  std::mutex gate;
+  if (args.serial) {
+    args.asr.gate = &gate;
+    args.sd.gate = &gate;
+  }
 
   // Load both models first: stream time zero is the start of the audio feed.
   const auto t_load = discretion::Clock::now();

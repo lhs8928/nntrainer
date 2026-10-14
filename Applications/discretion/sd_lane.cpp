@@ -65,9 +65,20 @@ void SdLane::run(BlockQueue &in, const StreamClock &clock, EventSink &sink) {
   };
 
   AudioBlock b;
-  while (in.pop(b))
-    publish(diarizer_->push(b.pcm.data(), b.pcm.size()));
-  publish(diarizer_->finish());
+  while (in.pop(b)) {
+    speaker_diarization::StreamingResult r;
+    {
+      auto hold = holdModelGate(opt_.gate);
+      r = diarizer_->push(b.pcm.data(), b.pcm.size());
+    }
+    publish(r);
+  }
+  speaker_diarization::StreamingResult last;
+  {
+    auto hold = holdModelGate(opt_.gate);
+    last = diarizer_->finish();
+  }
+  publish(last);
 
   stats_.model_ms = diarizer_->totalModelMs();
   stats_.speakers = diarizer_->numSpeakers();
