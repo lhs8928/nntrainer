@@ -493,7 +493,7 @@ int main(int argc, char *argv[]) {
       quick_ai::AudioPreprocessor preprocessor;
       std::vector<float> pcm;
       if (!audio_path.empty())
-        pcm = preprocessor.loadWav(audio_path);
+        pcm = preprocessor.loadAudio(audio_path);
       unsigned int audio_frames = pcm.size() / 160;
       constexpr unsigned int MAX_AUDIO_FRAMES = 1200 * 100; // 20 minutes (1200s * 100fps)
       if (audio_frames > MAX_AUDIO_FRAMES) {
@@ -589,7 +589,7 @@ int main(int argc, char *argv[]) {
         quick_ai::AudioPreprocessor preprocessor;
         std::vector<float> pcm;
         if (!audio_path.empty())
-          pcm = preprocessor.loadWav(audio_path);
+          pcm = preprocessor.loadAudio(audio_path);
         unsigned int audio_frames = pcm.size() / 160;
         constexpr unsigned int MAX_AUDIO_FRAMES = 1200 * 100; // 20 minutes (1200s * 100fps)
         if (audio_frames > MAX_AUDIO_FRAMES) {
@@ -640,7 +640,7 @@ int main(int argc, char *argv[]) {
       if (!stream_file.empty()) {
         quick_ai::AudioPreprocessor sp;
         source = std::make_unique<quick_ai::WavRealtimeSource>(
-          sp.loadWav(stream_file), stream_speed);
+          sp.loadAudio(stream_file), stream_speed);
       } else if (stream_mic) {
 #if defined(_WIN32)
         throw std::invalid_argument(
@@ -661,7 +661,7 @@ int main(int argc, char *argv[]) {
                !audio_path.empty()) {
       // ---- segment mode: one resident model, many segments ----------------
       quick_ai::AudioPreprocessor seg_pre;
-      std::vector<float> all = seg_pre.loadWav(audio_path);
+      std::vector<float> all = seg_pre.loadAudio(audio_path);
       const size_t seg_samples =
         static_cast<size_t>(asr_seg_model->getAudioSeqLen()) * 160;
       const size_t num_segs = (all.size() + seg_samples - 1) / seg_samples;

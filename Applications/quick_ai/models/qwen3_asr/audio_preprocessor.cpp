@@ -9,6 +9,8 @@
  */
 
 #include "audio_preprocessor.h"
+#define MINIMP3_IMPLEMENTATION
+#include "minimp3_ex.h"
 #include <fstream>
 #include <cmath>
 #include <iostream>
@@ -128,6 +130,104 @@ std::vector<float> AudioPreprocessor::loadWav(const std::string &file_path) {
   }
 
   return pcm_mono_16k;
+}
+
+std::vector<float> AudioPreprocessor::loadMp3(const std::string &file_path) {
+  mp3dec_t mp3d;
+  mp3dec_file_info_t info;
+
+  if (mp3dec_load(&mp3d, file_path.c_str(), &info, NULL, NULL)) {
+    throw std::runtime_error("Failed to decode MP3 file: " + file_path);
+  }
+
+  if (info.samples == 0 || info.channels == 0 || info.hz == 0) {
+    if (info.buffer) free(info.buffer);
+    throw std::runtime_error("Invalid or empty MP3 stream in: " + file_path);
+  }
+
+  size_t total_frames = info.samples / info.channels;
+  std::vector<float> pcm_mono(total_frames);
+
+  // Convert to Mono float in [-1.0, 1.0]
+  if (info.channels == 1) {
+    for (size_t i = 0; i < total_frames; ++i) {
+      pcm_mono[i] = static_cast<float>(info.buffer[i]) / 32768.0f;
+    }
+  } else if (info.channels == 2) {
+    for (size_t i = 0; i < total_frames; ++i) {
+      float left = static_cast<float>(info.buffer[2 * i]) / 32768.0f;
+      float right = static_cast<float>(info.buffer[2 * i + 1]) / 32768.0f;
+      pcm_mono[i] = 0.5f * (left + right);
+    }
+  } else {
+    float inv_ch = 1.0f / static_cast<float>(info.channels);
+    for (size_t i = 0; i < total_frames; ++i) {
+      float sum = 0.0f;
+      for (int c = 0; c < info.channels; ++c) {
+        sum += static_cast<float>(info.buffer[i * info.channels + c]);
+      }
+      pcm_mono[i] = (sum * inv_ch) / 32768.0f;
+    }
+  }
+
+  int orig_hz = info.hz;
+  int orig_ch = info.channels;
+  free(info.buffer);
+
+  // Resample to 16,000 Hz if necessary
+  if (orig_hz == 16000) {
+    return pcm_mono;
+  }
+
+  double ratio = 16000.0 / static_cast<double>(orig_hz);
+  size_t target_samples = static_cast<size_t>(std::round(static_cast<double>(total_frames) * ratio));
+  std::vector<float> resampled(target_samples);
+
+  double step = static_cast<double>(orig_hz) / 16000.0;
+  for (size_t i = 0; i < target_samples; ++i) {
+    double src_pos = static_cast<double>(i) * step;
+    size_t idx0 = static_cast<size_t>(src_pos);
+    size_t idx1 = std::min(idx0 + 1, total_frames - 1);
+    double frac = src_pos - static_cast<double>(idx0);
+
+    resampled[i] = static_cast<float>((1.0 - frac) * pcm_mono[idx0] + frac * pcm_mono[idx1]);
+  }
+
+  std::cout << "[AudioPreprocessor] MP3 decoded: " << file_path << " (" << orig_hz << " Hz, "
+            << orig_ch << " ch) -> Resampled to 16000 Hz (" << target_samples << " samples, "
+            << (static_cast<double>(target_samples) / 16000.0) << " s)" << std::endl;
+
+  return resampled;
+}
+
+std::vector<float> AudioPreprocessor::loadAudio(const std::string &file_path) {
+  std::ifstream file(file_path, std::ios::binary);
+  if (!file.is_open()) {
+    throw std::runtime_error("Failed to open audio file: " + file_path);
+  }
+  char magic[4] = {0};
+  file.read(magic, 4);
+  file.close();
+
+  if (std::strncmp(magic, "RIFF", 4) == 0) {
+    return loadWav(file_path);
+  } else if (std::strncmp(magic, "ID3", 3) == 0 ||
+             (static_cast<uint8_t>(magic[0]) == 0xFF && (static_cast<uint8_t>(magic[1]) & 0xE0) == 0xE0)) {
+    return loadMp3(file_path);
+  }
+
+  // Fallback to extension check
+  std::string ext = "";
+  size_t dot_pos = file_path.rfind('.');
+  if (dot_pos != std::string::npos) {
+    ext = file_path.substr(dot_pos);
+    for (auto &c : ext) c = std::tolower(c);
+  }
+
+  if (ext == ".mp3") {
+    return loadMp3(file_path);
+  }
+  return loadWav(file_path);
 }
 
 void AudioPreprocessor::applyHannWindow(const float *input, float *output, unsigned int N) {

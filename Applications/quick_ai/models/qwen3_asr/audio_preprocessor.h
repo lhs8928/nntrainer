@@ -35,6 +35,20 @@ public:
   std::vector<float> loadWav(const std::string &file_path);
 
   /**
+   * @brief Load and decode an MP3 file, downmixing to mono and resampling to 16kHz if necessary.
+   * @param file_path Local path to MP3 file.
+   * @return std::vector<float> Normalized audio samples [-1.0, 1.0] at 16kHz.
+   */
+  std::vector<float> loadMp3(const std::string &file_path);
+
+  /**
+   * @brief Load and decode an audio file (automatically detects WAV or MP3).
+   * @param file_path Local path to audio file.
+   * @return std::vector<float> Normalized audio samples [-1.0, 1.0] at 16kHz.
+   */
+  std::vector<float> loadAudio(const std::string &file_path);
+
+  /**
    * @brief Compute the Log-Mel Spectrogram matching Whisper/Qwen feature extractor.
    * @param waveform Input 16kHz audio samples.
    * @param num_mel_bins Number of Mel filters (e.g. 128 for Qwen3-ASR).
