@@ -18,10 +18,10 @@
   "fc_layer_dtype": "Q4_0",
   "lmhead_dtype": "Q4_0",
   "subsampler": {
-    "model_file_name": "nntr_qwen3_asr_1.7b_subsampler_mtt_fp32-fp32_conv_qint8_fc_fp32.bin",
+    "model_file_name": "nntr_qwen3_asr_1.7b_subsampler_mtt_fp32-fp32_conv_qint8_fc_qint8.bin",
     "model_tensor_type": "FP32-FP32",
     "conv_layer_dtype": "QINT8",
-    "fc_layer_dtype": "FP32"
+    "fc_layer_dtype": "QINT8"
   },
   "rms_norm_eps": 1e-06,
   "rope_theta": 1000000,

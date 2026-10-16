@@ -83,6 +83,13 @@ void WeightLayer::forwarding(RunLayerContext &context, bool training) {
   Tensor &output = context.getOutput(SINGLE_INOUT_IDX);
   if (output.getDim() == weight.getDim()) {
     output.copy(weight);
+  } else if (output.getDim().batch() > 1 && weight.getDim().batch() == 1 &&
+             output.getDim().getFeatureLen() == weight.getDim().getFeatureLen()) {
+    const size_t batch = output.getDim().batch();
+    const size_t b_bytes = weight.bytes();
+    for (size_t b = 0; b < batch; ++b) {
+      std::memcpy((char *)output.getData() + b * b_bytes, weight.getData(), b_bytes);
+    }
   } else {
     size_t copy_bytes = output.bytes();
     NNTR_THROW_IF(copy_bytes > weight.bytes(), std::invalid_argument)
