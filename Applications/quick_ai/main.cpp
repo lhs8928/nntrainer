@@ -33,6 +33,7 @@
 
 #include "audio_preprocessor.h"
 #include "audio_stream.h"
+#include "audio_vad.h"
 #include "ced/ced_transformer.h"
 #include "qwen3_asr_causallm.h"
 #include <atomic>
@@ -368,6 +369,7 @@ int main(int argc, char *argv[]) {
   float segment_sec = 0.0f;
   float segment_min_sec = 0.0f;
   float silence_rms = 0.005f;
+  bool use_vad = false;
   std::string stream_file, mic_device;
   // --language <Name>: force the output language (e.g. Korean, English) by
   // appending "language <Name><asr_text>" to the prompt, so the model does not
@@ -400,6 +402,8 @@ int main(int argc, char *argv[]) {
     std::string v;
     if (take_opt("--segment-sec", true, v))
       segment_sec = std::stof(v);
+    if (take_opt("--vad", false, v))
+      use_vad = true;
     if (take_opt("--segment-min-sec", true, v))
       segment_min_sec = std::stof(v);
     if (take_opt("--silence-rms", true, v))
@@ -424,6 +428,8 @@ int main(int argc, char *argv[]) {
       max_backlog_opt = static_cast<unsigned int>(std::stoul(v));
   }
   const bool stream_mode = !stream_file.empty() || stream_mic || stream_stdin;
+  if (use_vad && segment_sec <= 0.0f)
+    segment_sec = 15.0f;
   if (stream_mode && segment_sec <= 0.0f)
     segment_sec = 10.0f;
   if (stream_mode && segment_min_sec <= 0.0f)
@@ -664,19 +670,46 @@ int main(int argc, char *argv[]) {
       std::vector<float> all = seg_pre.loadAudio(audio_path);
       const size_t seg_samples =
         static_cast<size_t>(asr_seg_model->getAudioSeqLen()) * 160;
-      const size_t num_segs = (all.size() + seg_samples - 1) / seg_samples;
+
+      struct WorkSeg {
+        double b_s;
+        double e_s;
+        std::vector<float> pcm;
+      };
+      std::vector<WorkSeg> work_segs;
+
+      if (use_vad) {
+        quick_ai::AudioVAD::Config vcfg;
+        vcfg.sample_rate = 16000;
+        vcfg.max_segment_sec = segment_sec;
+        vcfg.min_silence_rms = silence_rms;
+        auto vad_res = quick_ai::AudioVAD::segment(all, vcfg);
+        work_segs.reserve(vad_res.size());
+        for (auto &v : vad_res) {
+          v.pcm.resize(seg_samples, 0.0f); // pad segment to model input length
+          work_segs.push_back({v.start_sec, v.end_sec, std::move(v.pcm)});
+        }
+      } else {
+        const size_t num_segs = (all.size() + seg_samples - 1) / seg_samples;
+        work_segs.reserve(num_segs);
+        for (size_t k = 0; k < num_segs; ++k) {
+          const size_t b = k * seg_samples;
+          const size_t e = std::min(all.size(), b + seg_samples);
+          std::vector<float> seg(all.begin() + b, all.begin() + e);
+          seg.resize(seg_samples, 0.0f);
+          work_segs.push_back({b / 16000.0, e / 16000.0, std::move(seg)});
+        }
+      }
+
       std::cout << "[Segment] " << all.size() / 16000.0 << " s of audio, "
-                << num_segs << " segment(s) of " << seg_samples / 16000.0
-                << " s" << std::endl;
+                << work_segs.size() << " segment(s) (mode: " << (use_vad ? "VAD" : "Fixed")
+                << ", max_seg: " << seg_samples / 16000.0 << " s)" << std::endl;
       double total_proc_ms = 0.0;
       std::string full_text;
       quick_ai::ContextCarry ctx_carry(context_chars);
-      for (size_t k = 0; k < num_segs; ++k) {
-        const size_t b = k * seg_samples;
-        const size_t e = std::min(all.size(), b + seg_samples);
-        std::vector<float> seg(all.begin() + b, all.begin() + e);
-        seg.resize(seg_samples, 0.0f); // pad the last segment with silence
-        asr_seg_model->setAudioPcm(std::move(seg));
+      for (size_t k = 0; k < work_segs.size(); ++k) {
+        auto &ws = work_segs[k];
+        asr_seg_model->setAudioPcm(std::move(ws.pcm));
         auto t0 = std::chrono::high_resolution_clock::now();
         model->run(make_prompt(ctx_carry.get()), do_sample, system_head_prompt,
                    system_tail_prompt);
@@ -686,8 +719,9 @@ int main(int argc, char *argv[]) {
         total_proc_ms += ms;
         const std::string &txt = asr_seg_model->getLastTranscription();
         ctx_carry.add(txt);
-        std::cout << "[SEG " << k << "] " << b / 16000.0 << "s-" << e / 16000.0
-                  << "s processed in " << ms << " ms: " << txt << std::endl;
+        std::cout << "[" << (use_vad ? "VAD-SEG " : "SEG ") << k << "] "
+                  << ws.b_s << "s-" << ws.e_s << "s processed in "
+                  << ms << " ms: " << txt << std::endl;
         if (!full_text.empty() && !txt.empty())
           full_text += " ";
         full_text += txt;
