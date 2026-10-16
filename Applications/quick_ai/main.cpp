@@ -230,7 +230,7 @@ struct CoutMute {
  */
 void runStreamMode(
   quick_ai::Qwen3ASRCausalLM &asr, quick_ai::PcmSource &src, float seg_min_sec,
-  float silence_rms,
+  float silence_rms, bool use_vad,
   const std::function<std::string(const std::string &)> &make_prompt,
   quick_ai::ContextCarry &ctx_carry, bool do_sample, const std::string &head,
   const std::string &tail, bool verbose, unsigned int max_waiting) {
@@ -250,7 +250,7 @@ void runStreamMode(
   const auto t_begin = clk::now();
 
   std::thread capture([&] {
-    quick_ai::Segmenter seg(min_len, max_len);
+    quick_ai::Segmenter seg(min_len, max_len, silence_rms, use_vad);
     std::vector<float> buf(1600);
     size_t n;
     auto enqueue = [&](std::vector<float> &&s, size_t st) {
@@ -288,7 +288,8 @@ void runStreamMode(
   std::signal(SIGTERM, onStreamSignal);
   std::cout << "[Stream] segment length " << seg_min_sec << "-"
             << max_len / 16000.0 << " s, silence threshold " << silence_rms
-            << " (RMS). Speak now; Ctrl-C to stop." << std::endl;
+            << " (RMS)" << (use_vad ? " [VAD mode]" : "")
+            << ". Speak now; Ctrl-C to stop." << std::endl;
 
   double audio_s = 0.0, proc_s = 0.0, max_delay_s = 0.0;
   size_t n_seg = 0, n_skipped = 0;
@@ -433,7 +434,7 @@ int main(int argc, char *argv[]) {
   if (stream_mode && segment_sec <= 0.0f)
     segment_sec = 10.0f;
   if (stream_mode && segment_min_sec <= 0.0f)
-    segment_min_sec = 0.9f * segment_sec;
+    segment_min_sec = use_vad ? 1.5f : 0.9f * segment_sec;
 
   auto start_time = std::chrono::high_resolution_clock::now();
 
@@ -661,8 +662,9 @@ int main(int argc, char *argv[]) {
       }
       quick_ai::ContextCarry ctx_carry(context_chars);
       runStreamMode(*asr_seg_model, *source, segment_min_sec, silence_rms,
-                    make_prompt, ctx_carry, do_sample, system_head_prompt,
-                    system_tail_prompt, stream_verbose, max_backlog_opt);
+                    use_vad, make_prompt, ctx_carry, do_sample,
+                    system_head_prompt, system_tail_prompt, stream_verbose,
+                    max_backlog_opt);
     } else if (segment_sec > 0.0f && asr_seg_model != nullptr &&
                !audio_path.empty()) {
       // ---- segment mode: one resident model, many segments ----------------
