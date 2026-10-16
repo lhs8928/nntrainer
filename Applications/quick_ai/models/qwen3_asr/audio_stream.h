@@ -72,8 +72,8 @@ private:
  */
 class Segmenter {
 public:
-  Segmenter(size_t min_len, size_t max_len) :
-    min_len_(min_len), max_len_(max_len) {}
+  Segmenter(size_t min_len, size_t max_len, float silence_rms = 0.005f, bool use_vad = false) :
+    min_len_(min_len), max_len_(max_len), silence_rms_(silence_rms), use_vad_(use_vad) {}
 
   /** @brief append samples */
   void push(const float *x, size_t n);
@@ -92,8 +92,17 @@ public:
 
 private:
   size_t min_len_, max_len_;
+  float silence_rms_;
+  bool use_vad_;
   std::vector<float> buf_;
   size_t buf_start_ = 0; /**< stream index of buf_[0] */
+
+  // VAD streaming state
+  bool in_speech_ = false;
+  size_t speech_samples_ = 0;
+  size_t silence_samples_ = 0;
+  float noise_floor_ = 0.003f;
+  float peak_rms_ = 0.01f;
 };
 
 /**
