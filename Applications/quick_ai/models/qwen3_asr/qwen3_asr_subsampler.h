@@ -36,6 +36,7 @@ public:
                       const std::string &subsampler_fc_dtype = "");
   void load_weight(const std::string &weight_path);
   std::vector<float *> inference(float *input_data);
+  std::vector<float *> inference(unsigned int batch_size, float *input_data);
 
   ml::train::Model *getModel() { return model.get(); }
 

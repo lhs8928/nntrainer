@@ -32,29 +32,41 @@ void NHWCToNCHWLayer::forwarding(nntrainer::RunLayerContext &context, bool train
   const auto &in = context.getInput(0);
   auto &out = context.getOutput(0);
 
+  const size_t B = in.batch();
   const size_t H = in.height();
   const size_t W = in.width();
   const size_t C = in.channel();
+  const size_t spatial_c = H * W * C;
 
   if (in.getDataType() == nntrainer::TensorDim::DataType::FP32) {
-    const float *s = in.getData<float>();
-    float *d = out.getData<float>();
+    const float *s_base = in.getData<float>();
+    float *d_base = out.getData<float>();
 
-    for (size_t h = 0; h < H; ++h) {
-      for (size_t w = 0; w < W; ++w) {
-        for (size_t c = 0; c < C; ++c) {
-          d[(c * H + h) * W + w] = s[(h * W + w) * C + c];
+    for (size_t b = 0; b < B; ++b) {
+      const float *s = s_base + b * spatial_c;
+      float *d = d_base + b * spatial_c;
+
+      for (size_t h = 0; h < H; ++h) {
+        for (size_t w = 0; w < W; ++w) {
+          for (size_t c = 0; c < C; ++c) {
+            d[(c * H + h) * W + w] = s[(h * W + w) * C + c];
+          }
         }
       }
     }
   } else if (in.getDataType() == nntrainer::TensorDim::DataType::FP16) {
-    const _FP16 *s = in.getData<_FP16>();
-    _FP16 *d = out.getData<_FP16>();
+    const _FP16 *s_base = in.getData<_FP16>();
+    _FP16 *d_base = out.getData<_FP16>();
 
-    for (size_t h = 0; h < H; ++h) {
-      for (size_t w = 0; w < W; ++w) {
-        for (size_t c = 0; c < C; ++c) {
-          d[(c * H + h) * W + w] = s[(h * W + w) * C + c];
+    for (size_t b = 0; b < B; ++b) {
+      const _FP16 *s = s_base + b * spatial_c;
+      _FP16 *d = d_base + b * spatial_c;
+
+      for (size_t h = 0; h < H; ++h) {
+        for (size_t w = 0; w < W; ++w) {
+          for (size_t c = 0; c < C; ++c) {
+            d[(c * H + h) * W + w] = s[(h * W + w) * C + c];
+          }
         }
       }
     }

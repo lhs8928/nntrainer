@@ -375,7 +375,7 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
       audio_duration_sec = static_cast<double>(pcm.size()) / 16000.0;
       mel_features = preprocessor.computeMelSpectrogram(pcm);
     } else if (!audio_path.empty()) {
-      std::cout << "[Qwen3-ASR] Loading and preprocessing audio WAV: " << audio_path << std::endl;
+      std::cout << "[Qwen3-ASR] Loading and preprocessing audio: " << audio_path << std::endl;
       std::vector<float> pcm = preprocessor.loadWav(audio_path);
       audio_duration_sec = static_cast<double>(pcm.size()) / 16000.0;
       mel_features = preprocessor.computeMelSpectrogram(pcm);
@@ -427,32 +427,32 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
     fused_audio_embeds_fp16.resize(static_cast<size_t>(downsampled_len) * 1024, static_cast<_FP16>(0.0f));
   }
 
-  nntrainer::Tensor chunk_tensor(nntrainer::TensorDim(1, 1, 128, 100, nntrainer::TensorDim::Format::NCHW, nntrainer::TensorDim::DataType::FP32));
-  float *chunk_ptr = chunk_tensor.getData<float>();
-
-  auto t_sub_start = std::chrono::high_resolution_clock::now();
-
-  size_t out_token_idx = 0;
+  std::vector<float> all_chunks(static_cast<size_t>(num_chunks) * 128 * 100, 0.0f);
   for (unsigned int c = 0; c < num_chunks; ++c) {
     unsigned int start_frame = c * 100;
     unsigned int chunk_frames = std::min<unsigned int>(100, audio_seq_len - start_frame);
-
-    // Extract chunk [128, 100] (0-padded on right)
-    std::fill_n(chunk_ptr, 128 * 100, 0.0f);
+    float *c_ptr = all_chunks.data() + static_cast<size_t>(c) * (128 * 100);
     for (unsigned int m = 0; m < 128; ++m) {
       for (unsigned int f = 0; f < chunk_frames; ++f) {
-        chunk_ptr[m * 100 + f] = mel_features_transposed[m * audio_seq_len + start_frame + f];
+        c_ptr[m * 100 + f] = mel_features_transposed[m * audio_seq_len + start_frame + f];
       }
     }
+  }
 
-    // Forward through Subsampler sub-model (runs in FP32)
-    auto chunk_out = subsampler.inference(chunk_ptr);
-    const float *cout_ptr = chunk_out[0];
+  auto t_sub_start = std::chrono::high_resolution_clock::now();
+
+  // Forward all chunks simultaneously through Subsampler sub-model
+  auto batch_out = subsampler.inference(num_chunks, all_chunks.data());
+  const float *cout_ptr = batch_out[0];
+
+  size_t out_token_idx = 0;
+  for (unsigned int c = 0; c < num_chunks; ++c) {
+    const float *c_chunk_out = cout_ptr + static_cast<size_t>(c) * (13 * 1024);
 
     // Copy valid tokens into fused_audio_embeds
     unsigned int valid_tokens = (c + 1 < num_chunks) ? 13 : (downsampled_len - out_token_idx);
     for (unsigned int t = 0; t < valid_tokens; ++t) {
-      const float *src = cout_ptr + t * 1024;
+      const float *src = c_chunk_out + t * 1024;
       if (act_dtype == "FP32") {
         float *dst = fused_audio_embeds_fp32.data() + out_token_idx * 1024;
         std::copy_n(src, 1024, dst);

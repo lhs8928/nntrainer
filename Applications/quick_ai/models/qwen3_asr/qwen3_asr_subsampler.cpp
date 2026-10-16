@@ -172,4 +172,8 @@ std::vector<float *> Qwen3ASRSubsampler::inference(float *input_data) {
   return model->inference(1, {input_data});
 }
 
+std::vector<float *> Qwen3ASRSubsampler::inference(unsigned int batch_size, float *input_data) {
+  return model->inference(batch_size, {input_data});
+}
+
 } // namespace quick_ai
