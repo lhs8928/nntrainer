@@ -83,6 +83,29 @@ void ReshapedRMSNormLayer::incremental_forwarding(
 
   unsigned int b_size = in_dim.batch();
 
+  // Cache gamma once in out_step datatype to avoid per-step heap allocation & conversions
+  if (use_gamma) {
+    nntrainer::Tensor &gamma = context.getWeight(wt_idx[RMSParams::gamma]);
+    if (cached_gamma.empty() || cached_gamma.getDataType() != out_step_dim.getDataType()) {
+      nntrainer::TensorDim g_dim = gamma.getDim();
+      g_dim.setDataType(out_step_dim.getDataType());
+      cached_gamma = nntrainer::Tensor(g_dim, true);
+      if (gamma.getDataType() != out_step_dim.getDataType()) {
+        if (out_step_dim.getDataType() == ml::train::TensorDim::DataType::FP16) {
+          float *src = gamma.getData<float>();
+          _FP16 *dst = cached_gamma.getData<_FP16>();
+          for (unsigned int i = 0; i < gamma.getDim().getDataLen(); ++i) dst[i] = (_FP16)src[i];
+        } else {
+          _FP16 *src = gamma.getData<_FP16>();
+          float *dst = cached_gamma.getData<float>();
+          for (unsigned int i = 0; i < gamma.getDim().getDataLen(); ++i) dst[i] = (float)src[i];
+        }
+      } else {
+        cached_gamma.copy(gamma);
+      }
+    }
+  }
+
   for (unsigned int b = 0; b < b_size; ++b) {
     nntrainer::Tensor in_step =
       in.getSharedDataTensor(in_step_dim, b * in_dim.getFeatureLen(), true);
@@ -101,12 +124,6 @@ void ReshapedRMSNormLayer::incremental_forwarding(
       nntrainer::rms_norm_wrt_width_fp32_intrinsic(
         in_step.getData<float>(), out_step.getData<float>(),
         in_step.getDim().height(), in_step.getDim().width(), epsilon);
-
-      // DO NOT USE rms_norm_wrt_width_fp16_intrinsic. It causes overflow!
-
-      // nntrainer::rms_norm_wrt_width_fp16_intrinsic(
-      //   in_step.getData<float>(), out_step.getData<float>(),
-      //   in_step.getDim().height(), in_step.getDim().width(), epsilon);
 #else
       nntrainer::rms_norm_wrt_width_fp32_intrinsic(
         in_step.getData<float>(), out_step.getData<float>(),
@@ -114,22 +131,72 @@ void ReshapedRMSNormLayer::incremental_forwarding(
 #endif
 #ifdef ENABLE_FP16
     } else if (in_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
-      _FP16* in_data = in_step.getData<_FP16>();
-      _FP16* out_data = out_step.getData<_FP16>();
+      const _FP16 *in_data = in_step.getData<_FP16>();
+      _FP16 *out_data = out_step.getData<_FP16>();
+      const _FP16 *g_ptr = use_gamma ? cached_gamma.getData<_FP16>() : nullptr;
       unsigned int H = step_reshaped_dim.height();
       unsigned int W = step_reshaped_dim.width();
 
       for (unsigned int h = 0; h < H; ++h) {
-        float sum_sq = 0.0f;
-        for (unsigned int w = 0; w < W; ++w) {
-          float val = (float)in_data[h * W + w];
-          sum_sq += val * val;
-        }
-        float rms = std::sqrt(sum_sq / W + epsilon);
-        float inv_rms = 1.0f / rms;
+        const _FP16 *rowX = in_data + h * W;
+        _FP16 *rowY = out_data + h * W;
 
-        for (unsigned int w = 0; w < W; ++w) {
-          out_data[h * W + w] = (_FP16)((float)in_data[h * W + w] * inv_rms);
+        size_t i = 0;
+        float32x4_t acc0 = vdupq_n_f32(0.F);
+        float32x4_t acc1 = vdupq_n_f32(0.F);
+
+        for (; i + 8 <= W; i += 8) {
+          float16x8_t h8 = vld1q_f16(rowX + i);
+          float32x4_t f0 = vcvt_f32_f16(vget_low_f16(h8));
+          float32x4_t f1 = vcvt_f32_f16(vget_high_f16(h8));
+          acc0 = vfmaq_f32(acc0, f0, f0);
+          acc1 = vfmaq_f32(acc1, f1, f1);
+        }
+        if (i + 4 <= W) {
+          float16x4_t h4 = vld1_f16(rowX + i);
+          float32x4_t f = vcvt_f32_f16(h4);
+          acc0 = vfmaq_f32(acc0, f, f);
+          i += 4;
+        }
+        float sum = vaddvq_f32(vaddq_f32(acc0, acc1));
+        for (; i < W; ++i) {
+          float x = (float)rowX[i];
+          sum += x * x;
+        }
+
+        float scale_single = 1.F / std::sqrt(sum / (float)W + epsilon);
+        float16x8_t scale_v = vdupq_n_f16((__fp16)scale_single);
+        float16x4_t scale_v4 = vdup_n_f16((__fp16)scale_single);
+
+        i = 0;
+        if (g_ptr) {
+          for (; i + 8 <= W; i += 8) {
+            float16x8_t xh = vld1q_f16(rowX + i);
+            float16x8_t gh = vld1q_f16(g_ptr + i);
+            vst1q_f16(rowY + i, vmulq_f16(vmulq_f16(xh, scale_v), gh));
+          }
+          if (i + 4 <= W) {
+            float16x4_t xh4 = vld1_f16(rowX + i);
+            float16x4_t gh4 = vld1_f16(g_ptr + i);
+            vst1_f16(rowY + i, vmul_f16(vmul_f16(xh4, scale_v4), gh4));
+            i += 4;
+          }
+          for (; i < W; ++i) {
+            rowY[i] = (__fp16)((float)rowX[i] * scale_single * (float)g_ptr[i]);
+          }
+        } else {
+          for (; i + 8 <= W; i += 8) {
+            float16x8_t xh = vld1q_f16(rowX + i);
+            vst1q_f16(rowY + i, vmulq_f16(xh, scale_v));
+          }
+          if (i + 4 <= W) {
+            float16x4_t xh4 = vld1_f16(rowX + i);
+            vst1_f16(rowY + i, vmul_f16(xh4, scale_v4));
+            i += 4;
+          }
+          for (; i < W; ++i) {
+            rowY[i] = (__fp16)((float)rowX[i] * scale_single);
+          }
         }
       }
 #endif
@@ -137,44 +204,13 @@ void ReshapedRMSNormLayer::incremental_forwarding(
       throw std::invalid_argument(
         "Error: not yet implemented for this data type");
     }
-    if (use_gamma) {
-      nntrainer::Tensor &gamma = context.getWeight(wt_idx[RMSParams::gamma]);
-      nntrainer::Tensor gamma_cast;
-      if (gamma.getDataType() != out_step.getDataType()) {
-        nntrainer::TensorDim g_dim = gamma.getDim();
-        g_dim.setDataType(out_step.getDataType());
-        gamma_cast = nntrainer::Tensor(g_dim, true);
-        if (out_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
-          float *src = gamma.getData<float>();
-          _FP16 *dst = gamma_cast.getData<_FP16>();
-          for (unsigned int i = 0; i < gamma.getDim().getDataLen(); ++i) dst[i] = (_FP16)src[i];
-        } else {
-          _FP16 *src = gamma.getData<_FP16>();
-          float *dst = gamma_cast.getData<float>();
-          for (unsigned int i = 0; i < gamma.getDim().getDataLen(); ++i) dst[i] = (float)src[i];
-        }
-      } else {
-        gamma_cast = gamma;
-      }
+    if (use_gamma && in_step.getDataType() != ml::train::TensorDim::DataType::FP16) {
+      ml::train::TensorDim row_dim = out_step.getDim();
+      row_dim.height(1); // exactly [1, 1, 1, 128]
 
-      if (out_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
-    #ifdef ENABLE_FP16
-        _FP16 *out_data = out_step.getData<_FP16>();
-        _FP16 *g_ptr = gamma_cast.getData<_FP16>();
-        unsigned int total_len = step_reshaped_dim.height() * feature_size;
-        for (unsigned int i = 0; i < total_len; ++i) {
-          unsigned int g_idx = i % feature_size;
-          out_data[i] = (_FP16)((float)out_data[i] * (float)g_ptr[g_idx]);
-        }
-    #endif
-      } else {
-        ml::train::TensorDim row_dim = out_step.getDim();
-        row_dim.height(1); // exactly [1, 1, 1, 128]
-
-        for (unsigned int r = 0; r < step_reshaped_dim.height(); ++r) {
-          nntrainer::Tensor out_row = out_step.getSharedDataTensor(row_dim, r * feature_size, false);
-          out_row.multiply_i(gamma_cast);
-        }
+      for (unsigned int r = 0; r < step_reshaped_dim.height(); ++r) {
+        nntrainer::Tensor out_row = out_step.getSharedDataTensor(row_dim, r * feature_size, false);
+        out_row.multiply_i(cached_gamma);
       }
     }
 

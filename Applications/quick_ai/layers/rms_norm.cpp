@@ -80,6 +80,26 @@ void RMSNormLayer::incremental_forwarding(nntrainer::RunLayerContext &context,
 
   unsigned int b_size = in_dim.batch();
 
+  // Cache gamma once in out_step datatype to avoid per-step heap allocation & conversions
+  if (cached_gamma.empty() || cached_gamma.getDataType() != out_step_dim.getDataType()) {
+    nntrainer::TensorDim g_dim = gamma.getDim();
+    g_dim.setDataType(out_step_dim.getDataType());
+    cached_gamma = nntrainer::Tensor(g_dim, true);
+    if (gamma.getDataType() != out_step_dim.getDataType()) {
+      if (out_step_dim.getDataType() == ml::train::TensorDim::DataType::FP16) {
+        const float *src = gamma.getData<float>();
+        _FP16 *dst = cached_gamma.getData<_FP16>();
+        for (unsigned int i = 0; i < gamma.getDim().getDataLen(); ++i) dst[i] = (_FP16)src[i];
+      } else {
+        const _FP16 *src = gamma.getData<_FP16>();
+        float *dst = cached_gamma.getData<float>();
+        for (unsigned int i = 0; i < gamma.getDim().getDataLen(); ++i) dst[i] = (float)src[i];
+      }
+    } else {
+      cached_gamma.copy(gamma);
+    }
+  }
+
   for (unsigned int b = 0; b < b_size; ++b) {
     nntrainer::Tensor in_step =
       in.getSharedDataTensor(in_step_dim, b * in_dim.getFeatureLen(), true);
@@ -88,54 +108,71 @@ void RMSNormLayer::incremental_forwarding(nntrainer::RunLayerContext &context,
 
     if (in_step.getDataType() == ml::train::TensorDim::DataType::FP32) {
       const auto &dim = in_step.getDim();
-#ifdef ENABLE_FP16
       nntrainer::rms_norm_wrt_width_fp32_intrinsic(
         in_step.getData<float>(), out_step.getData<float>(), dim.height(),
         dim.width(), epsilon);
-
-      // DO NOT USE rms_norm_wrt_width_fp16_intrinsic. It causes overflow!
-
-      // nntrainer::rms_norm_wrt_width_fp16_intrinsic(
-      //   in_step.getData<float>(), out_step.getData<float>(), dim.height(),
-      //   dim.width(), epsilon);
-#else
-
-      nntrainer::rms_norm_wrt_width_fp32_intrinsic(
-        in_step.getData<float>(), out_step.getData<float>(), dim.height(),
-        dim.width(), epsilon);
-#endif
+      out_step.multiply_i(cached_gamma);
 #ifdef ENABLE_FP16
     } else if (in_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
       const auto &dim = in_step.getDim();
-      // FP16 activation: this kernel accumulates the sum-of-squares in FP32
-      // (so a wide residual row cannot overflow FP16) and reads/writes FP16.
-      nntrainer::rms_norm_wrt_width_fp16_intrinsic(
-        in_step.getData<_FP16>(), out_step.getData<_FP16>(), dim.height(),
-        dim.width(), epsilon);
+      const size_t H = dim.height();
+      const size_t W = dim.width();
+      const _FP16 *in_ptr = in_step.getData<_FP16>();
+      _FP16 *out_ptr = out_step.getData<_FP16>();
+      const _FP16 *g_ptr = cached_gamma.getData<_FP16>();
+
+      for (size_t h = 0; h < H; ++h) {
+        const _FP16 *rowX = in_ptr + h * W;
+        _FP16 *rowY = out_ptr + h * W;
+
+        size_t i = 0;
+        float32x4_t acc0 = vdupq_n_f32(0.F);
+        float32x4_t acc1 = vdupq_n_f32(0.F);
+
+        for (; i + 8 <= W; i += 8) {
+          float16x8_t h8 = vld1q_f16(rowX + i);
+          float32x4_t f0 = vcvt_f32_f16(vget_low_f16(h8));
+          float32x4_t f1 = vcvt_f32_f16(vget_high_f16(h8));
+          acc0 = vfmaq_f32(acc0, f0, f0);
+          acc1 = vfmaq_f32(acc1, f1, f1);
+        }
+        if (i + 4 <= W) {
+          float16x4_t h4 = vld1_f16(rowX + i);
+          float32x4_t f = vcvt_f32_f16(h4);
+          acc0 = vfmaq_f32(acc0, f, f);
+          i += 4;
+        }
+        float sum = vaddvq_f32(vaddq_f32(acc0, acc1));
+        for (; i < W; ++i) {
+          float x = (float)rowX[i];
+          sum += x * x;
+        }
+
+        float mean_single = sum / (float)W;
+        float scale_single = 1.F / std::sqrt(mean_single + epsilon);
+        float16x8_t scale_v = vdupq_n_f16((__fp16)scale_single);
+        float16x4_t scale_v4 = vdup_n_f16((__fp16)scale_single);
+
+        i = 0;
+        for (; i + 8 <= W; i += 8) {
+          float16x8_t xh = vld1q_f16(rowX + i);
+          float16x8_t gh = vld1q_f16(g_ptr + i);
+          vst1q_f16(rowY + i, vmulq_f16(vmulq_f16(xh, scale_v), gh));
+        }
+        if (i + 4 <= W) {
+          float16x4_t xh4 = vld1_f16(rowX + i);
+          float16x4_t gh4 = vld1_f16(g_ptr + i);
+          vst1_f16(rowY + i, vmul_f16(vmul_f16(xh4, scale_v4), gh4));
+          i += 4;
+        }
+        for (; i < W; ++i) {
+          rowY[i] = (__fp16)((float)rowX[i] * scale_single * (float)g_ptr[i]);
+        }
+      }
 #endif
     } else {
       throw std::invalid_argument(
         "Error: not yet implemented for this data type");
-    }
-    // gamma (unquantized) may be stored at a different dtype than the FP16
-    // activation; cast it to match before the elementwise multiply.
-    if (gamma.getDataType() != out_step.getDataType()) {
-      nntrainer::Tensor gamma_cast;
-      nntrainer::TensorDim g_dim = gamma.getDim();
-      g_dim.setDataType(out_step.getDataType());
-      gamma_cast = nntrainer::Tensor(g_dim, true);
-      if (out_step.getDataType() == ml::train::TensorDim::DataType::FP16) {
-        float *src = gamma.getData<float>();
-        _FP16 *dst = gamma_cast.getData<_FP16>();
-        for (unsigned int i = 0; i < gamma.getDim().getDataLen(); ++i) dst[i] = (_FP16)src[i];
-      } else {
-        _FP16 *src = gamma.getData<_FP16>();
-        float *dst = gamma_cast.getData<float>();
-        for (unsigned int i = 0; i < gamma.getDim().getDataLen(); ++i) dst[i] = (float)src[i];
-      }
-      out_step.multiply_i(gamma_cast);
-    } else {
-      out_step.multiply_i(gamma);
     }
 
     if (context.getName() == "output_norm") {
