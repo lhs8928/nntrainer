@@ -376,7 +376,7 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
       mel_features = preprocessor.computeMelSpectrogram(pcm);
     } else if (!audio_path.empty()) {
       std::cout << "[Qwen3-ASR] Loading and preprocessing audio: " << audio_path << std::endl;
-      std::vector<float> pcm = preprocessor.loadWav(audio_path);
+      std::vector<float> pcm = preprocessor.loadAudio(audio_path);
       audio_duration_sec = static_cast<double>(pcm.size()) / 16000.0;
       mel_features = preprocessor.computeMelSpectrogram(pcm);
       std::cout << "[Qwen3-ASR] Raw extracted Mel features: " << mel_features.size() / 128 << " frames" << std::endl;
@@ -385,7 +385,7 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
       std::string fallback = "asr_en_short.wav";
       if (std::filesystem::exists(fallback)) {
         audio_path = fallback;
-        std::vector<float> pcm = preprocessor.loadWav(audio_path);
+        std::vector<float> pcm = preprocessor.loadAudio(audio_path);
         audio_duration_sec = static_cast<double>(pcm.size()) / 16000.0;
         mel_features = preprocessor.computeMelSpectrogram(pcm);
       } else {
