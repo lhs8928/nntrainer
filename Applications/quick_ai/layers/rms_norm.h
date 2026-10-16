@@ -119,6 +119,7 @@ private:
              nntrainer::props::SkipPrefill>
     rms_props;
   bool skip_prefill = false;
+  nntrainer::Tensor cached_gamma;
 };
 
 } // namespace quick_ai

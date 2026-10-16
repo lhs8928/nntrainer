@@ -128,6 +128,7 @@ private:
   unsigned int feature_size;
   bool skip_prefill = false;
   bool use_gamma;
+  nntrainer::Tensor cached_gamma;
 };
 
 } // namespace quick_ai
