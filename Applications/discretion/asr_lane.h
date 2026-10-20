@@ -32,6 +32,7 @@ struct AsrOptions {
   float segment_sec = 8.0f;     // longest segment (the model is built for it)
   float segment_min_sec = 0.0f; // shortest segment, 0 = 0.9 * segment_sec
   float silence_rms = 0.005f;   // segments quieter than this are skipped
+  bool vad = false; // cut at pauses (energy VAD), not only at the limit
   std::string language =
     "English";                 // forced language, "" = let the model decide
   unsigned max_backlog = 2;    // drop the oldest waiting segment beyond this
@@ -54,6 +55,15 @@ public:
   /** @brief build and load the model (call before start()); false on error */
   bool init(const AsrOptions &opt, std::string &error);
 
+  /**
+   * @brief use a model that is already loaded (serve mode). The engine is
+   *        shared, so the lane can be discarded without unloading the model.
+   */
+  void adopt(std::shared_ptr<AsrEngine> engine, const AsrOptions &opt);
+
+  /** @brief the loaded model, for lanes that come after this one */
+  std::shared_ptr<AsrEngine> engine() const { return engine_; }
+
   void start(BlockQueue &in, const StreamClock &clock, EventSink &sink);
   void join();
 
@@ -71,7 +81,7 @@ private:
   void modelLoop(const StreamClock &clock, EventSink &sink);
 
   AsrOptions opt_;
-  std::unique_ptr<AsrEngine> engine_;
+  std::shared_ptr<AsrEngine> engine_;
   size_t max_len_ = 0; // samples of the longest segment
   size_t min_len_ = 0;
 

@@ -23,11 +23,14 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <iostream>
+#include <memory>
 #include <string>
 
 #if defined(__linux__)
 #include <sys/resource.h>
+#include <unistd.h>
 #endif
 
 #include "asr_lane.h"
@@ -50,14 +53,21 @@ void usage(const char *prog) {
     "--stdin-pcm)\n"
     "\n"
     "ASR:   --segment-sec S (8)  --segment-min-sec S  --silence-rms R (0.005)\n"
+    "       --vad (cut segments at pauses too; min length 1.5 s)\n"
     "       --language NAME (English, \"\" = automatic)  --max-backlog N (2)\n"
     "SD:    --window S (20)  --step S (20)\n"
+    "       --no-sd (ASR only: no speaker labels, no SD weights needed)\n"
     "Cores: --asr-cpus LIST  --sd-cpus LIST (e.g. 0,1 / 2-3)\n"
     "       --asr-threads N  --sd-threads N\n"
     "       --no-word-timestamps (label whole segments instead of words)\n"
     "Serial: default. ASR and SD take turns (each call uses all its threads);\n"
     "        --parallel runs both lanes at once on their own cores instead\n"
-    "Other: --seconds N (stop after N s of audio)  --verbose\n",
+    "Other: --seconds N (stop after N s of audio)  --verbose\n"
+    "Output: --jsonl FILE (also write each merged line as one JSON object)\n"
+    "Serve: --serve keeps the ASR model loaded and reads requests from stdin,\n"
+    "        one per line: WAV<TAB>JSONL<TAB>0|1 (1 = with speaker labels).\n"
+    "        Replies on stdout: READY, then OK or ERR <reason> per request.\n"
+    "        The language is fixed at start-up; the banner goes to stderr.\n",
     prog);
 }
 
@@ -67,7 +77,10 @@ struct Args {
   discretion::SdOptions sd;
   discretion::AudioFanout::Options audio;
   bool verbose = false;
-  bool serial = true; // one model call at a time (--parallel to turn off)
+  bool no_sd = false;     // --no-sd: skip the diarization lane entirely
+  bool serve = false;     // --serve: resident model, requests on stdin
+  bool serial = true;     // one model call at a time (--parallel to turn off)
+  std::string jsonl_path; // --jsonl: JSON Lines copy of the merged lines
 };
 
 /** @brief parse the command line; false (after printing why) on error */
@@ -106,6 +119,8 @@ bool parseArgs(int argc, char **argv, Args &a) {
         a.asr.segment_min_sec = std::stof(next());
       else if (k == "--silence-rms")
         a.asr.silence_rms = std::stof(next());
+      else if (k == "--vad")
+        a.asr.vad = true;
       else if (k == "--language")
         a.asr.language = next();
       else if (k == "--max-backlog")
@@ -124,8 +139,14 @@ bool parseArgs(int argc, char **argv, Args &a) {
         a.sd.threads = std::stoi(next());
       else if (k == "--no-word-timestamps")
         a.asr.word_timestamps = false;
+      else if (k == "--no-sd")
+        a.no_sd = true;
+      else if (k == "--serve")
+        a.serve = true;
       else if (k == "--verbose")
         a.verbose = true;
+      else if (k == "--jsonl")
+        a.jsonl_path = next();
       else if (k == "--serial")
         a.serial = true;
       else if (k == "--parallel")
@@ -138,8 +159,8 @@ bool parseArgs(int argc, char **argv, Args &a) {
     usage(argv[0]);
     return false;
   }
-  if (a.sd.weights.empty()) {
-    std::fprintf(stderr, "error: --sd-weights is required\n");
+  if (!a.no_sd && a.sd.weights.empty()) {
+    std::fprintf(stderr, "error: --sd-weights is required (or use --no-sd)\n");
     return false;
   }
   if (a.sd.step_sec <= 0.0 || a.sd.window_sec < a.sd.step_sec) {
@@ -160,6 +181,130 @@ std::string cpuText(const std::vector<int> &cpus) {
   for (size_t i = 0; i < cpus.size(); ++i)
     s += (i ? "," : "") + std::to_string(cpus[i]);
   return s;
+}
+
+/**
+ * @brief one --serve request: transcribe one WAV with the resident ASR model,
+ *        writing the merged lines to a JSONL file. Lanes, merger and (when
+ *        diarizing) the diarizer are made per request, so no state carries
+ * over.
+ */
+bool serveRequest(const Args &args,
+                  const std::shared_ptr<discretion::AsrEngine> &engine,
+                  const std::string &wav, const std::string &jsonl_path,
+                  bool diarize, std::string &error) {
+  discretion::AudioFanout::Options audio = args.audio;
+  audio.file = wav;
+  discretion::AudioFanout fanout;
+  if (!fanout.open(audio, error))
+    return false;
+  std::FILE *jsonl = std::fopen(jsonl_path.c_str(), "w");
+  if (!jsonl) {
+    error = "cannot open " + jsonl_path;
+    return false;
+  }
+
+  discretion::StreamClock clock;
+  discretion::BlockQueue asr_in, sd_in;
+  discretion::Merger merger(clock, stderr, args.verbose);
+  char session[32];
+  const std::time_t now = std::time(nullptr);
+  std::strftime(session, sizeof(session), "%Y-%m-%dT%H:%M:%S",
+                std::localtime(&now));
+  merger.setJsonl(jsonl, session);
+
+  discretion::AsrLane asr;
+  asr.adopt(engine, args.asr);
+  std::unique_ptr<discretion::SdLane> sd;
+  if (diarize) {
+    sd = std::make_unique<discretion::SdLane>();
+    if (!sd->init(args.sd)) {
+      error = "cannot initialize the diarization models";
+      std::fclose(jsonl);
+      return false;
+    }
+  } else {
+    // Nothing to wait for: see the one-shot path in main().
+    merger.onSdFinished(0.0);
+  }
+
+  asr.start(asr_in, clock, merger);
+  if (sd) {
+    sd->start(sd_in, clock, merger);
+    fanout.start(clock, {&asr_in, &sd_in});
+  } else {
+    fanout.start(clock, {&asr_in});
+  }
+  fanout.join();
+  asr.join();
+  if (sd)
+    sd->join();
+  std::fclose(jsonl);
+  return true;
+}
+
+/** @brief --serve: load the ASR model once, then answer requests from stdin */
+int serveMain(Args &args) {
+  // The model prints its log to stdout. Point stdout at stderr so the log stays
+  // out of the protocol, and keep the protocol on a copy of the original
+  // stdout.
+  const int proto_fd = dup(STDOUT_FILENO);
+  dup2(STDERR_FILENO, STDOUT_FILENO);
+  std::FILE *proto = fdopen(proto_fd, "w");
+  if (!proto) {
+    std::fprintf(stderr, "error: cannot open the reply channel\n");
+    return EXIT_FAILURE;
+  }
+
+  // Same gate as the one-shot path: one model call at a time.
+  std::mutex gate;
+  if (args.serial) {
+    args.asr.gate = &gate;
+    args.sd.gate = &gate;
+  }
+  discretion::AsrLane boot;
+  std::string error;
+  if (!boot.init(args.asr, error)) {
+    std::fprintf(stderr, "error: cannot initialize the ASR model: %s\n",
+                 error.c_str());
+    return EXIT_FAILURE;
+  }
+  const auto engine = boot.engine();
+  std::fprintf(stderr, "serving with %s (language '%s'%s)\n",
+               args.model_dir.c_str(), args.asr.language.c_str(),
+               args.no_sd ? ", no speaker labels" : "");
+  std::fprintf(proto, "READY\n");
+  std::fflush(proto);
+
+  std::string line;
+  while (std::getline(std::cin, line)) {
+    if (line.empty())
+      continue;
+    // request: WAV<TAB>JSONL<TAB>0|1
+    const size_t t1 = line.find('\t');
+    const size_t t2 = t1 == std::string::npos ? t1 : line.find('\t', t1 + 1);
+    std::string reply;
+    if (t2 == std::string::npos) {
+      reply = "ERR bad request (expected WAV<TAB>JSONL<TAB>0|1)";
+    } else {
+      const std::string wav = line.substr(0, t1);
+      const std::string jsonl = line.substr(t1 + 1, t2 - t1 - 1);
+      const bool diarize = line.substr(t2 + 1) == "1";
+      std::string err;
+      if (diarize && args.no_sd)
+        err = "speaker labels requested but the server runs with --no-sd";
+      else if (!serveRequest(args, engine, wav, jsonl, diarize, err))
+        err = err.empty() ? "failed" : err;
+      reply = err.empty() ? "OK" : "ERR " + err;
+      for (char &c : reply)
+        if (c == '\n' || c == '\r')
+          c = ' ';
+    }
+    std::fprintf(proto, "%s\n", reply.c_str());
+    std::fflush(proto);
+  }
+  std::fclose(proto);
+  return EXIT_SUCCESS;
 }
 
 } // namespace
@@ -185,17 +330,21 @@ int main(int argc, char **argv) {
   std::signal(SIGINT, onSignal);
   std::signal(SIGTERM, onSignal);
 
+  if (args.serve)
+    return serveMain(args);
+
   std::printf(
     "==============================================================\n"
     "  NNTrainer ASR + Speaker Diarization (discretion)\n"
-    "  ASR model : %s  (segments up to %.1f s, language '%s')\n"
+    "  ASR model : %s  (segments up to %.1f s%s, language '%s')\n"
     "  SD weights: %s  (window %.0f s, step %.0f s)\n"
     "  cores     : ASR %s (threads %d)  |  SD %s (threads %d)\n"
     "==============================================================\n",
-    args.model_dir.c_str(), args.asr.segment_sec, args.asr.language.c_str(),
-    args.sd.weights.c_str(), args.sd.window_sec, args.sd.step_sec,
-    cpuText(args.asr.cpus).c_str(), args.asr.threads,
-    cpuText(args.sd.cpus).c_str(), args.sd.threads);
+    args.model_dir.c_str(), args.asr.segment_sec,
+    args.asr.vad ? ", VAD: cut at pauses" : "", args.asr.language.c_str(),
+    args.no_sd ? "off (--no-sd)" : args.sd.weights.c_str(), args.sd.window_sec,
+    args.sd.step_sec, cpuText(args.asr.cpus).c_str(), args.asr.threads,
+    args.no_sd ? "off" : cpuText(args.sd.cpus).c_str(), args.sd.threads);
   std::fflush(stdout);
 
   // Serial mode: the same gate is held by both lanes around each model call.
@@ -205,10 +354,20 @@ int main(int argc, char **argv) {
     args.sd.gate = &gate;
   }
 
+  // Opened before the models load, so a bad --jsonl path fails at once.
+  std::FILE *jsonl = nullptr;
+  if (!args.jsonl_path.empty()) {
+    jsonl = std::fopen(args.jsonl_path.c_str(), "w");
+    if (!jsonl) {
+      std::fprintf(stderr, "error: cannot open %s\n", args.jsonl_path.c_str());
+      return EXIT_FAILURE;
+    }
+  }
+
   // Load both models first: stream time zero is the start of the audio feed.
   const auto t_load = discretion::Clock::now();
   discretion::SdLane sd;
-  if (!sd.init(args.sd)) {
+  if (!args.no_sd && !sd.init(args.sd)) {
     std::fprintf(stderr, "error: cannot initialize the diarization models\n");
     return EXIT_FAILURE;
   }
@@ -232,10 +391,24 @@ int main(int argc, char **argv) {
   discretion::StreamClock clock;
   discretion::BlockQueue asr_in, sd_in;
   discretion::Merger merger(clock, stdout, args.verbose);
+  if (jsonl) {
+    char session[32];
+    const std::time_t now = std::time(nullptr);
+    std::strftime(session, sizeof(session), "%Y-%m-%dT%H:%M:%S",
+                  std::localtime(&now));
+    merger.setJsonl(jsonl, session);
+  }
 
   asr.start(asr_in, clock, merger);
-  sd.start(sd_in, clock, merger);
-  fanout.start(clock, {&asr_in, &sd_in});
+  if (args.no_sd) {
+    // Nothing to wait for: the merger otherwise holds text until the diarizer
+    // has confirmed it. Lines then carry the label "(no speaker)".
+    merger.onSdFinished(0.0);
+    fanout.start(clock, {&asr_in});
+  } else {
+    sd.start(sd_in, clock, merger);
+    fanout.start(clock, {&asr_in, &sd_in});
+  }
 
   fanout.join();
   const double audio_end = clock.now();
@@ -280,5 +453,7 @@ int main(int argc, char **argv) {
     audio > 0 ? ss.model_ms / 1000.0 / audio : 0.0, ms.lines, ms.mean_lag,
     ms.max_lag, ms.mean_asr_lag, cpu, done > 0 ? cpu / done : 0.0, done,
     peak_kb / 1024.0);
+  if (jsonl)
+    std::fclose(jsonl);
   return EXIT_SUCCESS;
 }

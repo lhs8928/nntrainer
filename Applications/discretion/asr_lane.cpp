@@ -79,18 +79,26 @@ bool AsrLane::init(const AsrOptions &opt, std::string &error) {
     nntrainer::ThreadManager::setConfig(cfg);
   }
 
-  engine_ = std::make_unique<AsrEngine>();
+  auto engine = std::make_shared<AsrEngine>();
   {
     // Worker threads created while the model is built inherit this CPU set.
     ScopedAffinity pin(opt_.cpus);
-    if (!engine_->init(opt_, error))
+    if (!engine->init(opt_, error))
       return false;
   }
-  max_len_ = engine_->segmentSamples();
-  const float min_sec = opt_.segment_min_sec > 0.0f ? opt_.segment_min_sec
-                                                    : 0.9f * opt_.segment_sec;
-  min_len_ = static_cast<size_t>(min_sec * SAMPLE_RATE);
+  adopt(std::move(engine), opt_);
   return true;
+}
+
+void AsrLane::adopt(std::shared_ptr<AsrEngine> engine, const AsrOptions &opt) {
+  opt_ = opt;
+  engine_ = std::move(engine);
+  max_len_ = engine_->segmentSamples();
+  // With VAD a pause may come early, so the shortest cut is a short utterance.
+  const float default_min_sec = opt_.vad ? 1.5f : 0.9f * opt_.segment_sec;
+  const float min_sec =
+    opt_.segment_min_sec > 0.0f ? opt_.segment_min_sec : default_min_sec;
+  min_len_ = static_cast<size_t>(min_sec * SAMPLE_RATE);
 }
 
 void AsrLane::start(BlockQueue &in, const StreamClock &clock, EventSink &sink) {
@@ -109,7 +117,7 @@ void AsrLane::join() {
 void AsrLane::segmenterLoop(BlockQueue &in, const StreamClock &clock,
                             EventSink &sink) {
   ScopedAffinity pin(opt_.cpus);
-  quick_ai::Segmenter segmenter(min_len_, max_len_);
+  quick_ai::Segmenter segmenter(min_len_, max_len_, opt_.silence_rms, opt_.vad);
   size_t next_index = 0;
 
   auto handle = [&](std::vector<float> &&pcm, size_t start_sample,
