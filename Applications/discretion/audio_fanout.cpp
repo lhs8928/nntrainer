@@ -36,7 +36,7 @@ bool AudioFanout::open(const Options &opt, std::string &error) {
     if (!opt.file.empty()) {
       quick_ai::AudioPreprocessor pre;
       source_ = std::make_unique<quick_ai::WavRealtimeSource>(
-        pre.loadWav(opt.file), opt.speed);
+        pre.loadAudio(opt.file), opt.speed);
     } else if (opt.mic) {
       const std::string dev =
         opt.mic_device.empty() ? "default" : opt.mic_device;
