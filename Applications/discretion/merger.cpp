@@ -14,12 +14,81 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <string>
 
 namespace discretion {
 
+namespace {
+
+/** @brief append s as a JSON string literal (quoted, escaped) to dst */
+void appendJsonString(std::string &dst, const std::string &s) {
+  dst += '"';
+  for (unsigned char c : s) {
+    switch (c) {
+    case '"':
+      dst += "\\\"";
+      break;
+    case '\\':
+      dst += "\\\\";
+      break;
+    case '\n':
+      dst += "\\n";
+      break;
+    case '\r':
+      dst += "\\r";
+      break;
+    case '\t':
+      dst += "\\t";
+      break;
+    default:
+      if (c < 0x20) {
+        char buf[8];
+        std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+        dst += buf;
+      } else {
+        dst += static_cast<char>(c); // UTF-8 bytes pass through unchanged
+      }
+    }
+  }
+  dst += '"';
+}
+
+} // namespace
+
 Merger::Merger(const StreamClock &clock, std::FILE *out, bool verbose) :
   clock_(clock), out_(out), verbose_(verbose) {}
+
+void Merger::setJsonl(std::FILE *out, const std::string &session) {
+  std::lock_guard<std::mutex> lk(m_);
+  jsonl_ = out;
+  session_ = session;
+}
+
+void Merger::emitLine(double start, double end, const std::string &primary,
+                      const std::string &label, double lag, double asr_lag,
+                      const std::string &text) {
+  std::fprintf(out_, "[%5.1f-%5.1fs] %-34s lag %5.1fs (asr %4.1fs)  %s\n",
+               start, end, label.c_str(), lag, asr_lag, text.c_str());
+  std::fflush(out_);
+  if (!jsonl_)
+    return;
+  char nums[128];
+  std::string j = "{\"session\":";
+  appendJsonString(j, session_);
+  j += ",\"seq\":" + std::to_string(seq_++);
+  std::snprintf(nums, sizeof(nums),
+                ",\"start\":%.3f,\"end\":%.3f,\"speaker\":", start, end);
+  j += nums;
+  appendJsonString(j, primary);
+  std::snprintf(nums, sizeof(nums),
+                ",\"lag\":%.2f,\"asr_lag\":%.2f,\"text\":", lag, asr_lag);
+  j += nums;
+  appendJsonString(j, text);
+  j += "}\n";
+  std::fputs(j.c_str(), jsonl_);
+  std::fflush(jsonl_);
+}
 
 void Merger::onAsrEvent(const AsrEvent &e) {
   std::lock_guard<std::mutex> lk(m_);
@@ -119,6 +188,7 @@ void Merger::emitText(const AsrEvent &e) {
   std::sort(who.begin(), who.end(),
             [](const auto &a, const auto &b) { return a.second > b.second; });
   std::string label;
+  const std::string primary = who.empty() ? "(no speaker)" : who[0].first;
   if (total <= 0.0) {
     label = "(no speaker)";
   } else {
@@ -139,10 +209,7 @@ void Merger::emitText(const AsrEvent &e) {
   asr_lags_.push_back(asr_lag);
   last_print_sec_ = now;
 
-  std::fprintf(out_, "[%5.1f-%5.1fs] %-34s lag %5.1fs (asr %4.1fs)  %s\n",
-               e.start_sec, e.end_sec, label.c_str(), lag, asr_lag,
-               e.text.c_str());
-  std::fflush(out_);
+  emitLine(e.start_sec, e.end_sec, primary, label, lag, asr_lag, e.text);
 }
 
 std::string Merger::speakerAt(double t) const {
@@ -207,11 +274,9 @@ void Merger::emitWords(const AsrEvent &e) {
 
   for (size_t i = 0; i < runs.size(); ++i) {
     const double end = i + 1 < runs.size() ? runs[i + 1].start : e.end_sec;
-    std::fprintf(out_, "[%5.1f-%5.1fs] %-34s lag %5.1fs (asr %4.1fs)  %s\n",
-                 runs[i].start, end, runs[i].speaker.c_str(), lag, asr_lag,
-                 runs[i].text.c_str());
+    emitLine(runs[i].start, end, runs[i].speaker, runs[i].speaker, lag, asr_lag,
+             runs[i].text);
   }
-  std::fflush(out_);
 }
 
 void Merger::flushAll() {

@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <map>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include "events.h"
@@ -56,10 +57,21 @@ public:
   };
   Summary summary() const;
 
+  /**
+   * @brief Also write every merged line as one JSON object per line (JSON
+   * Lines).
+   * @param out JSON Lines file, not owned (the caller opens and closes it)
+   * @param session identifier written into every object
+   */
+  void setJsonl(std::FILE *out, const std::string &session);
+
 private:
   void tryEmit();
   void emitText(const AsrEvent &e);
   void emitWords(const AsrEvent &e);
+  void emitLine(double start, double end, const std::string &primary,
+                const std::string &label, double lag, double asr_lag,
+                const std::string &text);
   std::string speakerAt(double t) const;
   void flushAll();
 
@@ -76,6 +88,10 @@ private:
 
   std::vector<double> lags_, asr_lags_;
   double last_print_sec_ = 0.0;
+
+  std::FILE *jsonl_ = nullptr;
+  std::string session_;
+  size_t seq_ = 0; // sequence number of the next JSON object
 };
 
 } // namespace discretion
