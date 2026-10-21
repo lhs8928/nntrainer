@@ -66,6 +66,13 @@ private:
   size_t samples_ = 0;
 };
 
+/**
+ * @brief decode a whole WAV or MP3 file to 16 kHz mono float samples
+ * @return false (and `error` set) when the file cannot be read
+ */
+bool loadAudioFile(const std::string &path, std::vector<float> &pcm,
+                   std::string &error);
+
 } // namespace discretion
 
 #endif // __DISCRETION_AUDIO_FANOUT_H__

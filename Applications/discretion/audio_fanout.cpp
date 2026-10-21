@@ -85,4 +85,20 @@ void AudioFanout::join() {
     thread_.join();
 }
 
+bool loadAudioFile(const std::string &path, std::vector<float> &pcm,
+                   std::string &error) {
+  try {
+    quick_ai::AudioPreprocessor pre;
+    pcm = pre.loadAudio(path);
+  } catch (const std::exception &e) {
+    error = e.what();
+    return false;
+  }
+  if (pcm.empty()) {
+    error = "no audio in " + path;
+    return false;
+  }
+  return true;
+}
+
 } // namespace discretion

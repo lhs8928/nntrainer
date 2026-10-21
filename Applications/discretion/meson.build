@@ -23,6 +23,7 @@ if host_machine.system() == 'linux' and get_option('platform') == 'none' and get
     'sd_lane.cpp',
     'audio_fanout.cpp',
     'merger.cpp',
+    'batch_pipeline.cpp',
     sd_models / 'weight_loader.cpp',
     sd_models / 'audio_preprocessor.cpp',
     sd_models / 'pyannet.cpp',
@@ -31,6 +32,7 @@ if host_machine.system() == 'linux' and get_option('platform') == 'none' and get
     sd_models / 'online_speaker_tracker.cpp',
     sd_models / 'audio_stream_buffer.cpp',
     sd_models / 'streaming_diarizer.cpp',
+    sd_models / 'batch_diarizer.cpp',
   ]
 
   discretion_dependencies = [

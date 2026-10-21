@@ -23,6 +23,9 @@
 
 namespace discretion {
 
+/** @brief append s as a JSON string literal (quoted, escaped) to dst */
+void appendJsonString(std::string &dst, const std::string &s);
+
 /**
  * @brief Receives the results of both lanes (from their threads) and prints one
  *        line per ASR segment, in stream order, as soon as its text exists and

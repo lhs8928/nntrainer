@@ -19,9 +19,6 @@
 
 namespace discretion {
 
-namespace {
-
-/** @brief append s as a JSON string literal (quoted, escaped) to dst */
 void appendJsonString(std::string &dst, const std::string &s) {
   dst += '"';
   for (unsigned char c : s) {
@@ -53,8 +50,6 @@ void appendJsonString(std::string &dst, const std::string &s) {
   }
   dst += '"';
 }
-
-} // namespace
 
 Merger::Merger(const StreamClock &clock, std::FILE *out, bool verbose) :
   clock_(clock), out_(out), verbose_(verbose) {}

@@ -35,6 +35,7 @@
 
 #include "asr_lane.h"
 #include "audio_fanout.h"
+#include "batch_pipeline.h"
 #include "cpu_affinity.h"
 #include "events.h"
 #include "merger.h"
@@ -64,6 +65,12 @@ void usage(const char *prog) {
     "        --parallel runs both lanes at once on their own cores instead\n"
     "Other: --seconds N (stop after N s of audio)  --verbose\n"
     "Output: --jsonl FILE (also write each merged line as one JSON object)\n"
+    "Batch: --batch transcribes a whole file the WhisperX way: PyanNet voice\n"
+    "        activity -> chunks of up to --chunk-sec S (30) -> one transcript\n"
+    "        per chunk -> sentences -> speaker of the longest overlap with a\n"
+    "        whole-file diarization. Needs --sd-weights even with --no-sd\n"
+    "        (voice activity). --vad-onset X (0.5) --vad-offset X (0.363)\n"
+    "        --vad-step S (1, PyanNet hop when not diarizing)\n"
     "Serve: --serve keeps the ASR model loaded and reads requests from stdin,\n"
     "        one per line: WAV<TAB>JSONL<TAB>0|1 (1 = with speaker labels).\n"
     "        Replies on stdout: READY, then OK or ERR <reason> per request.\n"
@@ -81,6 +88,8 @@ struct Args {
   bool serve = false;     // --serve: resident model, requests on stdin
   bool serial = true;     // one model call at a time (--parallel to turn off)
   std::string jsonl_path; // --jsonl: JSON Lines copy of the merged lines
+  bool batch = false;     // --batch: WhisperX-style whole-file pipeline
+  discretion::BatchOptions batch_opt;
 };
 
 /** @brief parse the command line; false (after printing why) on error */
@@ -151,6 +160,16 @@ bool parseArgs(int argc, char **argv, Args &a) {
         a.serial = true;
       else if (k == "--parallel")
         a.serial = false;
+      else if (k == "--batch")
+        a.batch = true;
+      else if (k == "--chunk-sec")
+        a.batch_opt.chunk_sec = std::stod(next());
+      else if (k == "--vad-onset")
+        a.batch_opt.onset = std::stof(next());
+      else if (k == "--vad-offset")
+        a.batch_opt.offset = std::stof(next());
+      else if (k == "--vad-step")
+        a.batch_opt.vad_step_sec = std::stod(next());
       else
         throw std::invalid_argument("unknown option " + k);
     }
@@ -162,6 +181,26 @@ bool parseArgs(int argc, char **argv, Args &a) {
   if (!a.no_sd && a.sd.weights.empty()) {
     std::fprintf(stderr, "error: --sd-weights is required (or use --no-sd)\n");
     return false;
+  }
+  if (a.batch) {
+    if (a.sd.weights.empty()) {
+      std::fprintf(stderr, "error: --batch needs --sd-weights (its voice "
+                           "activity runs on PyanNet)\n");
+      return false;
+    }
+    if (a.batch_opt.chunk_sec <= 0.0 || a.batch_opt.vad_step_sec <= 0.0 ||
+        a.batch_opt.offset > a.batch_opt.onset) {
+      std::fprintf(stderr, "error: need --chunk-sec > 0, --vad-step > 0 and "
+                           "--vad-offset <= --vad-onset\n");
+      return false;
+    }
+    if (!a.serve && a.audio.file.empty()) {
+      std::fprintf(stderr, "error: --batch needs --stream-file (or --serve)\n");
+      return false;
+    }
+    // The model is built for one chunk: the longest one.
+    a.asr.segment_sec = static_cast<float>(a.batch_opt.chunk_sec);
+    a.batch_opt.verbose = a.verbose;
   }
   if (a.sd.step_sec <= 0.0 || a.sd.window_sec < a.sd.step_sec) {
     std::fprintf(stderr, "error: need 0 < --step <= --window\n");
@@ -243,6 +282,38 @@ bool serveRequest(const Args &args,
   return true;
 }
 
+/**
+ * @brief one --serve --batch request: the WhisperX-style pipeline over one
+ *        file, with the models that stay loaded
+ */
+bool serveBatchRequest(discretion::BatchPipeline &batch, const std::string &wav,
+                       const std::string &jsonl_path, bool diarize,
+                       std::string &error) {
+  std::vector<float> pcm;
+  if (!discretion::loadAudioFile(wav, pcm, error))
+    return false;
+  std::FILE *jsonl = std::fopen(jsonl_path.c_str(), "w");
+  if (!jsonl) {
+    error = "cannot open " + jsonl_path;
+    return false;
+  }
+  char session[32];
+  const std::time_t now = std::time(nullptr);
+  std::strftime(session, sizeof(session), "%Y-%m-%dT%H:%M:%S",
+                std::localtime(&now));
+  discretion::BatchStats st;
+  const auto lines = batch.run(pcm, diarize, &st);
+  discretion::writeBatchLines(lines, stderr, jsonl, session);
+  std::fclose(jsonl);
+  std::fprintf(
+    stderr,
+    "batch: %.1f s audio, %zu regions, %zu chunks (%zu split again), "
+    "%zu lines | VAD %.1f s, SD %.1f s, ASR %.1f s\n",
+    st.audio_sec, st.regions, st.chunks, st.retries, lines.size(), st.vad_sec,
+    st.sd_sec, st.asr_sec);
+  return true;
+}
+
 /** @brief --serve: load the ASR model once, then answer requests from stdin */
 int serveMain(Args &args) {
   // The model prints its log to stdout. Point stdout at stderr so the log stays
@@ -270,6 +341,15 @@ int serveMain(Args &args) {
     return EXIT_FAILURE;
   }
   const auto engine = boot.engine();
+  std::unique_ptr<discretion::BatchPipeline> batch;
+  if (args.batch) {
+    batch = discretion::BatchPipeline::create(engine, args.sd.weights,
+                                              args.batch_opt, error);
+    if (!batch) {
+      std::fprintf(stderr, "error: %s\n", error.c_str());
+      return EXIT_FAILURE;
+    }
+  }
   std::fprintf(stderr, "serving with %s (language '%s'%s)\n",
                args.model_dir.c_str(), args.asr.language.c_str(),
                args.no_sd ? ", no speaker labels" : "");
@@ -293,7 +373,8 @@ int serveMain(Args &args) {
       std::string err;
       if (diarize && args.no_sd)
         err = "speaker labels requested but the server runs with --no-sd";
-      else if (!serveRequest(args, engine, wav, jsonl, diarize, err))
+      else if (batch ? !serveBatchRequest(*batch, wav, jsonl, diarize, err)
+                     : !serveRequest(args, engine, wav, jsonl, diarize, err))
         err = err.empty() ? "failed" : err;
       reply = err.empty() ? "OK" : "ERR " + err;
       for (char &c : reply)
@@ -304,6 +385,80 @@ int serveMain(Args &args) {
     std::fflush(proto);
   }
   std::fclose(proto);
+  return EXIT_SUCCESS;
+}
+
+/** @brief --batch without --serve: the WhisperX-style pipeline over one file */
+int batchMain(Args &args) {
+  std::printf(
+    "==============================================================\n"
+    "  NNTrainer ASR + Speaker Diarization (discretion, batch)\n"
+    "  ASR model : %s  (chunks up to %.1f s, language '%s')\n"
+    "  VAD       : onset %.3f, offset %.3f%s\n"
+    "==============================================================\n",
+    args.model_dir.c_str(), args.batch_opt.chunk_sec, args.asr.language.c_str(),
+    args.batch_opt.onset, args.batch_opt.offset,
+    args.no_sd ? " | no speaker labels (--no-sd)"
+               : " | whole-file diarization");
+  std::fflush(stdout);
+
+  std::FILE *jsonl = nullptr;
+  if (!args.jsonl_path.empty()) {
+    jsonl = std::fopen(args.jsonl_path.c_str(), "w");
+    if (!jsonl) {
+      std::fprintf(stderr, "error: cannot open %s\n", args.jsonl_path.c_str());
+      return EXIT_FAILURE;
+    }
+  }
+  const auto t_load = discretion::Clock::now();
+  discretion::AsrLane boot;
+  std::string error;
+  if (!boot.init(args.asr, error)) {
+    std::fprintf(stderr, "error: cannot initialize the ASR model: %s\n",
+                 error.c_str());
+    return EXIT_FAILURE;
+  }
+  auto batch = discretion::BatchPipeline::create(boot.engine(), args.sd.weights,
+                                                 args.batch_opt, error);
+  if (!batch) {
+    std::fprintf(stderr, "error: %s\n", error.c_str());
+    return EXIT_FAILURE;
+  }
+  std::vector<float> pcm;
+  if (!discretion::loadAudioFile(args.audio.file, pcm, error)) {
+    std::fprintf(stderr, "error: %s\n", error.c_str());
+    return EXIT_FAILURE;
+  }
+  std::printf(
+    "models loaded in %.1f s.\n\n",
+    std::chrono::duration<double>(discretion::Clock::now() - t_load).count());
+  std::fflush(stdout);
+
+  char session[32];
+  const std::time_t now = std::time(nullptr);
+  std::strftime(session, sizeof(session), "%Y-%m-%dT%H:%M:%S",
+                std::localtime(&now));
+  discretion::BatchStats st;
+  const auto t_run = discretion::Clock::now();
+  const auto lines = batch->run(pcm, !args.no_sd, &st);
+  const double took =
+    std::chrono::duration<double>(discretion::Clock::now() - t_run).count();
+  discretion::writeBatchLines(lines, stdout, jsonl, session);
+  if (jsonl)
+    std::fclose(jsonl);
+
+  std::printf(
+    "\n==============================================================\n"
+    "  Summary\n"
+    "==============================================================\n"
+    "  audio            : %.1f s | %zu speech regions -> %zu chunks (%zu split "
+    "again) -> %zu lines\n"
+    "  time             : VAD %.1f s, SD %.1f s (%zu speakers), ASR %.1f s | "
+    "total %.1f s (RTF %.2f)\n"
+    "==============================================================\n",
+    st.audio_sec, st.regions, st.chunks, st.retries, lines.size(), st.vad_sec,
+    st.sd_sec, st.speakers, st.asr_sec, took,
+    st.audio_sec > 0 ? took / st.audio_sec : 0.0);
   return EXIT_SUCCESS;
 }
 
@@ -332,6 +487,8 @@ int main(int argc, char **argv) {
 
   if (args.serve)
     return serveMain(args);
+  if (args.batch)
+    return batchMain(args);
 
   std::printf(
     "==============================================================\n"
