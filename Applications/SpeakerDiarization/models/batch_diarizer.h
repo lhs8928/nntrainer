@@ -69,8 +69,8 @@ public:
 
   /**
    * @brief speaker embedding (256 floats) of the audio in [start_sec, end_sec):
-   *        WeSpeaker over the 10 s window around the span, pooled over the
-   *        frames of the span only
+   *        WeSpeaker over a 10 s window of the span alone (a shorter span is
+   *        repeated to fill it, a longer one gives its middle 10 s)
    */
   std::vector<float> embed(const std::vector<float> &audio, double start_sec,
                            double end_sec);

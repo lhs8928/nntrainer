@@ -166,29 +166,32 @@ BatchResult BatchDiarizer::run(const std::vector<float> &audio, bool diarize,
 
 std::vector<float> BatchDiarizer::embed(const std::vector<float> &audio,
                                         double start_sec, double end_sec) {
-  // A 10 s window centred on the span (clamped to the recording)
-  const double total = audio.size() / 16000.0;
-  const double mid = (start_sec + end_sec) / 2;
-  const double win_start =
-    std::max(0.0, std::min(mid - 5.0, std::max(0.0, total - 10.0)));
-  const size_t first = static_cast<size_t>(win_start * 16000.0);
+  // The fbank is mean-normalized over the whole 10 s window, so the window must
+  // hold the span's speech only: zero padding around a short span drowns its
+  // features in silence. A span shorter than the window is repeated to fill it,
+  // a longer one gives its middle 10 s.
+  const size_t a = std::min(
+    audio.size(), static_cast<size_t>(std::max(0.0, start_sec) * 16000.0));
+  const size_t b = std::min(
+    audio.size(),
+    std::max(a, static_cast<size_t>(std::max(0.0, end_sec) * 16000.0)));
   std::vector<float> chunk(CHUNK_SAMPLES, 0.0f);
-  const size_t n = std::min(CHUNK_SAMPLES, audio.size() - first);
-  std::memcpy(chunk.data(), audio.data() + first, n * sizeof(float));
-
-  // Pool over the frames that belong to the span
-  std::vector<float> mask(FRAMES_PER_CHUNK, 0.0f);
-  for (size_t f = 0; f < FRAMES_PER_CHUNK; ++f) {
-    const double t = win_start + f * FRAME_STEP_SEC;
-    mask[f] = (t >= start_sec && t < end_sec) ? 1.0f : 0.0f;
+  const size_t n = b - a;
+  if (n >= CHUNK_SAMPLES) {
+    std::memcpy(chunk.data(), audio.data() + a + (n - CHUNK_SAMPLES) / 2,
+                CHUNK_SAMPLES * sizeof(float));
+  } else if (n > 0) {
+    for (size_t k = 0; k < CHUNK_SAMPLES; k += n)
+      std::memcpy(chunk.data() + k, audio.data() + a,
+                  std::min(n, CHUNK_SAMPLES - k) * sizeof(float));
   }
   auto fbank = preprocessor_.computeFbank(chunk.data(), chunk.size(),
                                           mel_banks_, fbank_window_);
   std::vector<float> feat(256 * 10 * 125);
   emb_model_.forwardBackbone(fbank.data(), feat.data(), 0, nullptr);
   std::vector<float> emb(256);
-  emb_model_.forwardPool(feat.data(), mask.data(), emb.data(),
-                         /*mask_stride=*/1, 0, 0, nullptr);
+  emb_model_.forwardPool(feat.data(), nullptr, emb.data(), /*mask_stride=*/1, 0,
+                         0, nullptr);
   return emb;
 }
 
