@@ -195,4 +195,33 @@ std::vector<float> BatchDiarizer::embed(const std::vector<float> &audio,
   return emb;
 }
 
+std::vector<std::vector<uint8_t>>
+BatchDiarizer::segment(const std::vector<float> &audio) {
+  constexpr size_t MIN_SAMPLES = 1600;
+  // PyanNet returns the multi-label form of the winning powerset class;
+  // speakers (a, b, c) map back to the class index uniquely.
+  auto powerset = [](const float *f) -> uint8_t {
+    const int a = f[0] > 0.5f, b = f[1] > 0.5f, c = f[2] > 0.5f;
+    if (a + b + c == 0)
+      return 0;
+    if (a + b + c == 1)
+      return a ? 1 : b ? 2 : 3;
+    return a && b ? 4 : a && c ? 5 : 6;
+  };
+  std::vector<std::vector<uint8_t>> out;
+  for (size_t start = 0; start < audio.size(); start += CHUNK_SAMPLES) {
+    const size_t n = std::min(CHUNK_SAMPLES, audio.size() - start);
+    if (n < MIN_SAMPLES)
+      break;
+    std::vector<float> chunk(CHUNK_SAMPLES, 0.0f);
+    std::memcpy(chunk.data(), audio.data() + start, n * sizeof(float));
+    const auto multi = seg_model_.forwardChunk(chunk.data(), 0, nullptr);
+    std::vector<uint8_t> classes(FRAMES_PER_CHUNK);
+    for (size_t f = 0; f < FRAMES_PER_CHUNK; ++f)
+      classes[f] = powerset(multi.data() + f * 3);
+    out.push_back(std::move(classes));
+  }
+  return out;
+}
+
 } // namespace speaker_diarization

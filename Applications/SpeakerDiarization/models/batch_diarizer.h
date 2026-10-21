@@ -20,6 +20,7 @@
 #define __BATCH_DIARIZER_H__
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -74,6 +75,14 @@ public:
    */
   std::vector<float> embed(const std::vector<float> &audio, double start_sec,
                            double end_sec);
+
+  /**
+   * @brief PyanNet over consecutive (not overlapping) 10 s windows: for every
+   *        window the powerset class of each of its 589 frames (0 = nobody,
+   *        1-3 = one local speaker, 4-6 = two). The last window is zero-padded;
+   *        one shorter than 0.1 s is left out.
+   */
+  std::vector<std::vector<uint8_t>> segment(const std::vector<float> &audio);
 
 private:
   WeightLoader loader_;

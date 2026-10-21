@@ -40,6 +40,7 @@
 #include "events.h"
 #include "merger.h"
 #include "sd_lane.h"
+#include "speech_ops.h"
 
 namespace {
 
@@ -75,6 +76,11 @@ void usage(const char *prog) {
     "        --line-speakers (split lines at speaker changes, then cluster "
     "one\n"
     "        embedding per line; --line-threshold X (0.5) cosine to merge)\n"
+    "Speech: --serve --speech --sd-weights W [--asr-sec 8,12.5] answers\n"
+    "        ASR|EMBED|SEGMENT<TAB>PCM16 file<TAB>JSON file per line: text "
+    "and\n"
+    "        word times, a speaker embedding, PyanNet frame classes per 10 s\n"
+    "        window. One ASR graph per length; longer audio is cut to fit.\n"
     "Serve: --serve keeps the ASR model loaded and reads requests from stdin,\n"
     "        one per line: WAV<TAB>JSONL<TAB>0|1 (1 = with speaker labels).\n"
     "        Replies on stdout: READY, then OK or ERR <reason> per request.\n"
@@ -93,6 +99,8 @@ struct Args {
   bool serial = true;     // one model call at a time (--parallel to turn off)
   std::string jsonl_path; // --jsonl: JSON Lines copy of the merged lines
   bool batch = false;     // --batch: WhisperX-style whole-file pipeline
+  bool speech = false;    // --serve --speech: ASR / EMBED / SEGMENT requests
+  std::vector<float> asr_secs; // --asr-sec: model graph lengths (speech)
   discretion::BatchOptions batch_opt;
 };
 
@@ -164,7 +172,16 @@ bool parseArgs(int argc, char **argv, Args &a) {
         a.serial = true;
       else if (k == "--parallel")
         a.serial = false;
-      else if (k == "--batch")
+      else if (k == "--speech")
+        a.speech = true;
+      else if (k == "--asr-sec") {
+        std::string list = next();
+        for (size_t p = 0; p < list.size();) {
+          const size_t q = list.find(',', p);
+          a.asr_secs.push_back(std::stof(list.substr(p, q - p)));
+          p = q == std::string::npos ? list.size() : q + 1;
+        }
+      } else if (k == "--batch")
         a.batch = true;
       else if (k == "--chunk-sec")
         a.batch_opt.chunk_sec = std::stod(next());
@@ -322,6 +339,53 @@ bool serveBatchRequest(discretion::BatchPipeline &batch, const std::string &wav,
     st.audio_sec, st.regions, st.chunks, st.retries, lines.size(), st.vad_sec,
     st.sd_sec, st.asr_sec);
   return true;
+}
+
+/**
+ * @brief --serve --speech: the speech models of another program's pipeline;
+ *        requests OP<TAB>PCM16<TAB>JSON on stdin, READY / OK / ERR on stdout
+ */
+int speechServeMain(Args &args) {
+  const int proto_fd = dup(STDOUT_FILENO);
+  dup2(STDERR_FILENO, STDOUT_FILENO);
+  std::FILE *proto = fdopen(proto_fd, "w");
+  if (!proto) {
+    std::fprintf(stderr, "error: cannot open the reply channel\n");
+    return EXIT_FAILURE;
+  }
+  discretion::SpeechOptions opt;
+  opt.asr = args.asr;
+  opt.asr_secs = args.asr_secs;
+  opt.sd_weights = args.sd.weights;
+  discretion::SpeechOps ops;
+  std::string error;
+  if (!ops.init(opt, error)) {
+    std::fprintf(stderr, "error: %s\n", error.c_str());
+    return EXIT_FAILURE;
+  }
+  std::fprintf(proto, "READY %s\n", ops.describe().c_str());
+  std::fflush(proto);
+  std::string line;
+  while (std::getline(std::cin, line)) {
+    if (line.empty())
+      continue;
+    const size_t t1 = line.find('\t');
+    const size_t t2 = t1 == std::string::npos ? t1 : line.find('\t', t1 + 1);
+    std::string reply = "OK";
+    if (t2 == std::string::npos) {
+      reply = "ERR bad request (expected OP<TAB>PCM16<TAB>JSON)";
+    } else if (!ops.handle(line.substr(0, t1), line.substr(t1 + 1, t2 - t1 - 1),
+                           line.substr(t2 + 1), error)) {
+      reply = "ERR " + error;
+      for (char &c : reply)
+        if (c == '\n' || c == '\r')
+          c = ' ';
+    }
+    std::fprintf(proto, "%s\n", reply.c_str());
+    std::fflush(proto);
+  }
+  std::fclose(proto);
+  return EXIT_SUCCESS;
 }
 
 /** @brief --serve: load the ASR model once, then answer requests from stdin */
@@ -495,6 +559,8 @@ int main(int argc, char **argv) {
   std::signal(SIGINT, onSignal);
   std::signal(SIGTERM, onSignal);
 
+  if (args.serve && args.speech)
+    return speechServeMain(args);
   if (args.serve)
     return serveMain(args);
   if (args.batch)

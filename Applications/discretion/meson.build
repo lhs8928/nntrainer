@@ -24,6 +24,7 @@ if host_machine.system() == 'linux' and get_option('platform') == 'none' and get
     'audio_fanout.cpp',
     'merger.cpp',
     'batch_pipeline.cpp',
+    'speech_ops.cpp',
     sd_models / 'weight_loader.cpp',
     sd_models / 'audio_preprocessor.cpp',
     sd_models / 'pyannet.cpp',
