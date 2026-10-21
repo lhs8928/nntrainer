@@ -384,7 +384,9 @@ void PyanNet::runLSTMLayer(const float *input, size_t seq_len, const LSTMLayerWe
   }
 }
 
-std::vector<float> PyanNet::forwardChunk(const float *chunk, size_t chunk_idx, DebugTensorCallback debug_cb) {
+std::vector<float> PyanNet::forwardChunk(const float *chunk, size_t chunk_idx,
+                                         DebugTensorCallback debug_cb,
+                                         float *speech_prob) {
   constexpr size_t IN_LEN = 160000;
   std::string pfx = "seg_chunk" + std::to_string(chunk_idx) + "_";
 
@@ -736,6 +738,12 @@ std::vector<float> PyanNet::forwardChunk(const float *chunk, size_t chunk_idx, D
     }
   }
   if (debug_cb) debug_cb(pfx + "activation_logsoftmax", logsoftmax_out.data(), {1, 589, 7});
+
+  // Voice activity: class 0 of the powerset is "nobody speaks"
+  if (speech_prob) {
+    for (size_t t = 0; t < 589; ++t)
+      speech_prob[t] = 1.0f - std::exp(logsoftmax_out[t * 7]);
+  }
 
   // 17. Powerset to multi-label: [589, 3]
   // Mapping:

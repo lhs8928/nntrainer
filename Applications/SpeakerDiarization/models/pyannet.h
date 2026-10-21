@@ -35,12 +35,17 @@ public:
   bool init(const WeightLoader &loader);
 
   /**
-   * @brief Forward pass of PyanNet on a 10.0-second audio chunk (160,000 samples).
+   * @brief Forward pass of PyanNet on a 10.0-second audio chunk (160,000
+   * samples).
    * @param chunk 160,000 float samples.
    * @param debug_cb Optional callback to report intermediate layer outputs.
+   * @param speech_prob Optional output of 589 floats: per-frame probability
+   *        that anyone speaks (1 - probability of the empty powerset class).
    * @return Multi-label speaker probabilities/activations of shape [589, 3].
    */
-  std::vector<float> forwardChunk(const float *chunk, size_t chunk_idx = 0, DebugTensorCallback debug_cb = nullptr);
+  std::vector<float> forwardChunk(const float *chunk, size_t chunk_idx = 0,
+                                  DebugTensorCallback debug_cb = nullptr,
+                                  float *speech_prob = nullptr);
 
   /**
    * @brief Run segmentation over all audio chunks and compute speaker counting and masks.
