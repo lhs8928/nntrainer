@@ -1313,6 +1313,10 @@ void WeSpeakerResNet34::forwardPool(const float *feat, const float *mask, float 
     stats[FEAT_DIM + d] = std_val;
   }
   if (debug_cb) debug_cb(pfx + "resnet_pool_tstp", stats.data(), {1, 5120});
+  // The loops below may run on other OpenMP threads (a call from outside a
+  // parallel region), whose own thread_local `stats` is empty: read this
+  // thread's statistics through a plain pointer.
+  const float *pooled = stats.data();
 
   // seg_1: Linear(5120 -> 256) W4 Quantized or FP32
   if (seg_1_w_i4_ && seg_1_s_) {
@@ -1323,7 +1327,7 @@ void WeSpeakerResNet34::forwardPool(const float *feat, const float *mask, float 
       float acc = 0.0f;
       #pragma omp simd reduction(+:acc)
       for (size_t ic = 0; ic < 5120; ++ic) {
-        acc += static_cast<float>(w_row_i4[ic]) * stats[ic];
+        acc += static_cast<float>(w_row_i4[ic]) * pooled[ic];
       }
       out_emb[oc] = acc * seg_1_s_[oc] + seg_1_b_[oc];
     }
@@ -1335,7 +1339,7 @@ void WeSpeakerResNet34::forwardPool(const float *feat, const float *mask, float 
       float acc = seg_1_b_[oc];
       #pragma omp simd reduction(+:acc)
       for (size_t ic = 0; ic < 5120; ++ic) {
-        acc += w_row[ic] * stats[ic];
+        acc += w_row[ic] * pooled[ic];
       }
       out_emb[oc] = acc;
     }
