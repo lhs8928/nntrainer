@@ -71,6 +71,10 @@ void usage(const char *prog) {
     "        whole-file diarization. Needs --sd-weights even with --no-sd\n"
     "        (voice activity). --vad-onset X (0.5) --vad-offset X (0.363)\n"
     "        --vad-step S (1, PyanNet hop when not diarizing)\n"
+    "        --pause-sec S (0: off; a pause this long always ends a chunk)\n"
+    "        --line-speakers (split lines at speaker changes, then cluster "
+    "one\n"
+    "        embedding per line; --line-threshold X (0.5) cosine to merge)\n"
     "Serve: --serve keeps the ASR model loaded and reads requests from stdin,\n"
     "        one per line: WAV<TAB>JSONL<TAB>0|1 (1 = with speaker labels).\n"
     "        Replies on stdout: READY, then OK or ERR <reason> per request.\n"
@@ -170,6 +174,12 @@ bool parseArgs(int argc, char **argv, Args &a) {
         a.batch_opt.offset = std::stof(next());
       else if (k == "--vad-step")
         a.batch_opt.vad_step_sec = std::stod(next());
+      else if (k == "--pause-sec")
+        a.batch_opt.pause_sec = std::stod(next());
+      else if (k == "--line-speakers")
+        a.batch_opt.line_speakers = true;
+      else if (k == "--line-threshold")
+        a.batch_opt.line_threshold = std::stof(next());
       else
         throw std::invalid_argument("unknown option " + k);
     }

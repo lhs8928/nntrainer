@@ -90,16 +90,21 @@ std::vector<Region> binarize(const std::vector<float> &scores, double step,
   return active;
 }
 
-/** @brief WhisperX merge_chunks: join regions while a chunk fits chunk_size */
+/**
+ * @brief WhisperX merge_chunks: join regions while a chunk fits chunk_size.
+ *        With pause > 0 a pause of that length also starts a new chunk.
+ */
 std::vector<Chunk> mergeChunks(const std::vector<Region> &regions,
-                               double chunk_size) {
+                               double chunk_size, double pause) {
   std::vector<Chunk> chunks;
   if (regions.empty())
     return chunks;
   Chunk cur;
   cur.start = regions[0].start;
   for (const auto &r : regions) {
-    if (r.end - cur.start > chunk_size && cur.end - cur.start > 0) {
+    const bool full = r.end - cur.start > chunk_size;
+    const bool paused = pause > 0.0 && r.start - cur.end >= pause;
+    if ((full || paused) && cur.end - cur.start > 0) {
       chunks.push_back(cur);
       cur = Chunk();
       cur.start = r.start;
@@ -183,6 +188,7 @@ splitSentences(const Chunk &chunk, const std::string &text,
       if (!line.text.empty())
         line.text += ' ';
       line.text += words[i].first;
+      line.words.emplace_back(words[i].first, chunk.start + words[i].second);
     }
     out.push_back(std::move(line));
   }
@@ -193,11 +199,15 @@ splitSentences(const Chunk &chunk, const std::string &text,
     if (out[k].end <= out[k].start && k + 1 < out.size()) {
       out[k + 1].start = out[k].start;
       out[k + 1].text = out[k].text + ' ' + out[k + 1].text;
+      out[k + 1].words.insert(out[k + 1].words.begin(), out[k].words.begin(),
+                              out[k].words.end());
       continue;
     }
     if (out[k].end <= out[k].start && !merged.empty()) {
       merged.back().end = std::max(merged.back().end, out[k].end);
       merged.back().text += ' ' + out[k].text;
+      merged.back().words.insert(merged.back().words.end(),
+                                 out[k].words.begin(), out[k].words.end());
       continue;
     }
     merged.push_back(std::move(out[k]));
@@ -324,6 +334,133 @@ splitChunk(const Chunk &c, const std::vector<float> &speech, double step) {
   return {a, b};
 }
 
+/**
+ * @brief split lines where the diarization changes speaker inside them. A
+ *        speaker run shorter than min_sec joins the run before it.
+ */
+std::vector<BatchLine>
+splitAtSpeakerChanges(std::vector<BatchLine> lines,
+                      const std::vector<speaker_diarization::SpeakerSegment> &t,
+                      double min_sec) {
+  std::vector<BatchLine> out;
+  for (auto &line : lines) {
+    const auto &w = line.words;
+    if (w.size() < 2) {
+      out.push_back(std::move(line));
+      continue;
+    }
+    struct Run {
+      std::string speaker;
+      size_t first, last;
+    };
+    std::vector<Run> runs;
+    for (size_t i = 0; i < w.size(); ++i) {
+      const double end = i + 1 < w.size() ? w[i + 1].second : line.end;
+      const std::string who = dominantSpeaker(t, w[i].second, end);
+      if (runs.empty() || (!who.empty() && who != runs.back().speaker))
+        runs.push_back({who, i, i});
+      else
+        runs.back().last = i;
+    }
+    auto run_end = [&](size_t r) {
+      return runs[r].last + 1 < w.size() ? w[runs[r].last + 1].second
+                                         : line.end;
+    };
+    std::vector<Run> kept;
+    for (size_t r = 0; r < runs.size(); ++r) {
+      const bool is_short = run_end(r) - w[runs[r].first].second < min_sec;
+      if (!kept.empty() && (is_short || runs[r].speaker == kept.back().speaker))
+        kept.back().last = runs[r].last;
+      else
+        kept.push_back(runs[r]);
+    }
+    for (size_t r = 0; r < kept.size(); ++r) {
+      BatchLine part;
+      part.start = r == 0 ? line.start : w[kept[r].first].second;
+      part.end = r + 1 < kept.size() ? w[kept[r + 1].first].second : line.end;
+      for (size_t i = kept[r].first; i <= kept[r].last; ++i) {
+        if (!part.text.empty())
+          part.text += ' ';
+        part.text += w[i].first;
+        part.words.push_back(w[i]);
+      }
+      out.push_back(std::move(part));
+    }
+  }
+  return out;
+}
+
+float cosine(const std::vector<float> &a, const std::vector<float> &b) {
+  double ab = 0.0, aa = 0.0, bb = 0.0;
+  for (size_t i = 0; i < a.size(); ++i) {
+    ab += a[i] * b[i];
+    aa += a[i] * a[i];
+    bb += b[i] * b[i];
+  }
+  return aa > 0.0 && bb > 0.0 ? static_cast<float>(ab / std::sqrt(aa * bb))
+                              : 0.0f;
+}
+
+/**
+ * @brief agglomerative clustering (average linkage, cosine similarity) that
+ *        stops when no two clusters are more similar than `threshold`
+ * @return cluster id per item, numbered by first appearance
+ */
+std::vector<int> clusterEmbeddings(const std::vector<std::vector<float>> &emb,
+                                   float threshold) {
+  const size_t n = emb.size();
+  std::vector<std::vector<size_t>> clusters(n);
+  for (size_t i = 0; i < n; ++i)
+    clusters[i] = {i};
+  std::vector<std::vector<float>> sim(n, std::vector<float>(n, 0.0f));
+  for (size_t i = 0; i < n; ++i)
+    for (size_t j = i + 1; j < n; ++j)
+      sim[i][j] = sim[j][i] = cosine(emb[i], emb[j]);
+  auto linkage = [&](const std::vector<size_t> &a,
+                     const std::vector<size_t> &b) {
+    double sum = 0.0;
+    for (size_t i : a)
+      for (size_t j : b)
+        sum += sim[i][j];
+    return sum / (a.size() * b.size());
+  };
+  while (clusters.size() > 1) {
+    double best = -2.0;
+    size_t bi = 0, bj = 0;
+    for (size_t i = 0; i < clusters.size(); ++i)
+      for (size_t j = i + 1; j < clusters.size(); ++j) {
+        const double v = linkage(clusters[i], clusters[j]);
+        if (v > best) {
+          best = v;
+          bi = i;
+          bj = j;
+        }
+      }
+    if (best < threshold)
+      break;
+    clusters[bi].insert(clusters[bi].end(), clusters[bj].begin(),
+                        clusters[bj].end());
+    clusters.erase(clusters.begin() + bj);
+  }
+  std::vector<int> id(n, -1);
+  for (size_t c = 0; c < clusters.size(); ++c)
+    for (size_t i : clusters[c])
+      id[i] = static_cast<int>(c);
+  std::map<int, int> order; // renumber by first appearance
+  for (size_t i = 0; i < n; ++i)
+    if (!order.count(id[i]))
+      order[id[i]] = static_cast<int>(order.size());
+  for (auto &v : id)
+    v = order[v];
+  return id;
+}
+
+std::string speakerName(int id) {
+  char buf[24];
+  std::snprintf(buf, sizeof(buf), "SPEAKER_%02d", id);
+  return buf;
+}
+
 } // namespace
 
 BatchPipeline::BatchPipeline(
@@ -363,7 +500,7 @@ std::vector<BatchLine> BatchPipeline::run(const std::vector<float> &pcm,
   // 2. speech regions -> chunks
   const auto regions = binarize(sd.speech, sd.frame_step_sec, opt_.onset,
                                 opt_.offset, opt_.chunk_sec);
-  const auto chunks = mergeChunks(regions, opt_.chunk_sec);
+  const auto chunks = mergeChunks(regions, opt_.chunk_sec, opt_.pause_sec);
   st.regions = regions.size();
   st.chunks = chunks.size();
   if (opt_.verbose) {
@@ -427,7 +564,44 @@ std::vector<BatchLine> BatchPipeline::run(const std::vector<float> &pcm,
   st.asr_sec = secondsSince(t0);
 
   // 5. speakers
-  if (diarize) {
+  if (diarize && opt_.line_speakers) {
+    // Lines short of this get the speaker of the most similar long line.
+    constexpr double MIN_LINE_SEC = 1.0;
+    lines = splitAtSpeakerChanges(std::move(lines), sd.segments, MIN_LINE_SEC);
+    std::vector<std::vector<float>> emb;
+    std::vector<size_t> long_lines;
+    for (size_t i = 0; i < lines.size(); ++i) {
+      emb.push_back(diarizer_->embed(pcm, lines[i].start, lines[i].end));
+      if (lines[i].end - lines[i].start >= MIN_LINE_SEC)
+        long_lines.push_back(i);
+    }
+    std::vector<std::vector<float>> long_emb;
+    for (size_t i : long_lines)
+      long_emb.push_back(emb[i]);
+    const auto id = clusterEmbeddings(long_emb, opt_.line_threshold);
+    std::vector<int> line_id(lines.size(), -1);
+    for (size_t k = 0; k < long_lines.size(); ++k)
+      line_id[long_lines[k]] = id[k];
+    for (size_t i = 0; i < lines.size(); ++i) {
+      if (line_id[i] < 0 && !long_lines.empty()) {
+        float best = -2.0f;
+        for (size_t k = 0; k < long_lines.size(); ++k) {
+          const float v = cosine(emb[i], long_emb[k]);
+          if (v > best) {
+            best = v;
+            line_id[i] = id[k];
+          }
+        }
+      }
+      if (line_id[i] >= 0)
+        lines[i].speaker = speakerName(line_id[i]);
+    }
+    std::map<int, int> distinct;
+    for (int v : line_id)
+      if (v >= 0)
+        distinct[v] = 1;
+    st.speakers = distinct.size();
+  } else if (diarize) {
     for (auto &line : lines)
       line.speaker = dominantSpeaker(sd.segments, line.start, line.end);
   }

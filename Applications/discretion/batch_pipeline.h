@@ -19,6 +19,11 @@
  *   4. split each chunk text into sentences, timed by the word timestamps
  *   5. diarize the whole recording once and give every sentence the speaker
  *      whose turns overlap it the longest (no overlap: no speaker)
+ *
+ * Two variants from another on-device project: --pause-sec ends a chunk at
+ * every pause of that length (instead of merging up to the chunk size), and
+ * --line-speakers splits sentences where the diarization changes speaker, takes
+ * one speaker embedding per line and clusters all lines of the recording.
  */
 
 #ifndef __DISCRETION_BATCH_PIPELINE_H__
@@ -38,10 +43,13 @@ namespace discretion {
 class AsrEngine;
 
 struct BatchOptions {
-  double chunk_sec = 30.0;   // longest chunk (WhisperX chunk_size)
-  float onset = 0.5f;        // WhisperX vad_onset
-  float offset = 0.363f;     // WhisperX vad_offset
-  double vad_step_sec = 1.0; // PyanNet hop when only voice activity is needed
+  double chunk_sec = 30.0;     // longest chunk (WhisperX chunk_size)
+  float onset = 0.5f;          // WhisperX vad_onset
+  float offset = 0.363f;       // WhisperX vad_offset
+  double vad_step_sec = 1.0;   // PyanNet hop when only voice activity is needed
+  double pause_sec = 0.0;      // > 0: a pause this long always ends a chunk
+  bool line_speakers = false;  // speakers by clustering per-line embeddings
+  float line_threshold = 0.5f; // cosine similarity that joins two clusters
   bool verbose = false; // print regions, chunks and voice activity to stderr
 };
 
@@ -50,6 +58,7 @@ struct BatchLine {
   double start = 0.0, end = 0.0;
   std::string speaker; // empty: no speaker (not diarized or no overlap)
   std::string text;
+  std::vector<std::pair<std::string, double>> words; // absolute word times
 };
 
 struct BatchStats {
