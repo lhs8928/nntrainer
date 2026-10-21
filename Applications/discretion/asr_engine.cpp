@@ -16,6 +16,7 @@
 
 #include "asr_engine.h"
 
+#include <algorithm>
 #include <exception>
 #include <filesystem>
 
@@ -88,7 +89,12 @@ bool AsrEngine::init(const AsrOptions &opt, std::string &error) {
     unsigned int base_seq_len = nntr_cfg.value("init_seq_len", 15);
     if (!opt.language.empty())
       base_seq_len += 8; // room for the "language X<asr_text>" prompt tokens
-    const unsigned int num_to_generate = nntr_cfg.value("num_to_generate", 5);
+    // The configured budget suits 8 s segments; longer chunks of fast speech
+    // need more tokens, or their transcript stops mid-sentence.
+    constexpr float TOKENS_PER_SEC = 10.0f;
+    const unsigned int num_to_generate =
+      std::max(nntr_cfg.value("num_to_generate", 5u),
+               static_cast<unsigned int>(opt.segment_sec * TOKENS_PER_SEC));
     nntr_cfg["init_seq_len"] = base_seq_len + audio_seq_len;
     nntr_cfg["max_seq_len"] = base_seq_len + audio_seq_len + num_to_generate;
     nntr_cfg["sliding_window"] = base_seq_len + audio_seq_len + num_to_generate;
