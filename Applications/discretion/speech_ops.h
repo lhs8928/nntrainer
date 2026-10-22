@@ -24,6 +24,7 @@
 #ifndef __DISCRETION_SPEECH_OPS_H__
 #define __DISCRETION_SPEECH_OPS_H__
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -42,6 +43,18 @@ struct SpeechOptions {
   AsrOptions asr;              // model, language, threads
   std::vector<float> asr_secs; // one model graph per length, ascending
   std::string sd_weights;      // speaker_diarization.bin
+};
+
+/** @brief one recognized segment: its text and the time of every word */
+struct AsrResult {
+  std::string text;
+  struct Word {
+    long start_ms, end_ms; // from the start of the segment
+    std::string text;
+  };
+  std::vector<Word> words;
+  size_t pieces = 0; // model calls (a segment longer than the graphs is cut)
+  double ms = 0.0;   // model time
 };
 
 class SpeechOps {
@@ -67,6 +80,15 @@ public:
    */
   bool run(const std::string &op, const std::string &pcm16, std::string &body,
            std::string &error);
+
+  /** @brief text and word times of 16 kHz samples (Qwen3-ASR) */
+  AsrResult recognize(const std::vector<float> &pcm);
+
+  /** @brief one WeSpeaker ResNet34 embedding of the samples */
+  std::vector<float> embedding(const std::vector<float> &pcm);
+
+  /** @brief PyanNet powerset class per frame, per consecutive 10 s window */
+  std::vector<std::vector<uint8_t>> segmentation(const std::vector<float> &pcm);
 
   /** @brief what is loaded, as one JSON object (the HTTP server's /health) */
   std::string describe() const;

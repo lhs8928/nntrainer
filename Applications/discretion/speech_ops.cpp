@@ -129,11 +129,10 @@ std::string SpeechOps::describe() const {
   return j.dump();
 }
 
-std::string SpeechOps::asr(const std::vector<float> &pcm) {
+AsrResult SpeechOps::recognize(const std::vector<float> &pcm) {
   const auto t0 = std::chrono::steady_clock::now();
+  AsrResult out;
   const size_t max_len = engines_.back()->segmentSamples();
-  json words = json::array();
-  std::string text;
   const auto parts = pieces(pcm.size(), max_len, pcm);
   for (const auto &[a, b] : parts) {
     // the shortest graph the piece fits: shorter graphs decode faster
@@ -148,9 +147,9 @@ std::string SpeechOps::asr(const std::vector<float> &pcm) {
     seg.resize(engine->segmentSamples(), 0.0f);
     const std::string t = engine->transcribe(std::move(seg));
     if (!t.empty()) {
-      if (!text.empty())
-        text += ' ';
-      text += t;
+      if (!out.text.empty())
+        out.text += ' ';
+      out.text += t;
     }
     const auto w = engine->lastWords();
     const double len_ms = (b - a) * 1000.0 / RATE, base = a * 1000.0 / RATE;
@@ -163,21 +162,40 @@ std::string SpeechOps::asr(const std::vector<float> &pcm) {
       const double e = i + 1 < w.size()
                          ? std::clamp(w[i + 1].second * 1000.0, s, len_ms)
                          : len_ms;
-      words.push_back(
+      out.words.push_back(
         {std::lround(base + s), std::lround(base + e), w[i].first});
     }
   }
+  out.pieces = parts.size();
+  out.ms = msSince(t0);
+  return out;
+}
+
+std::vector<float> SpeechOps::embedding(const std::vector<float> &pcm) {
+  return sd_->embed(pcm, 0.0, pcm.size() / RATE);
+}
+
+std::vector<std::vector<uint8_t>>
+SpeechOps::segmentation(const std::vector<float> &pcm) {
+  return sd_->segment(pcm);
+}
+
+std::string SpeechOps::asr(const std::vector<float> &pcm) {
+  const AsrResult r = recognize(pcm);
+  json words = json::array();
+  for (const auto &w : r.words)
+    words.push_back({w.start_ms, w.end_ms, w.text});
   json j;
-  j["text"] = text;
+  j["text"] = r.text;
   j["words"] = words;
-  j["pieces"] = parts.size();
-  j["ms"] = std::lround(msSince(t0));
+  j["pieces"] = r.pieces;
+  j["ms"] = std::lround(r.ms);
   return j.dump();
 }
 
 std::string SpeechOps::embed(const std::vector<float> &pcm) {
   const auto t0 = std::chrono::steady_clock::now();
-  const auto v = sd_->embed(pcm, 0.0, pcm.size() / RATE);
+  const auto v = embedding(pcm);
   json j;
   j["vector"] = v;
   j["ms"] = std::lround(msSince(t0));
@@ -188,7 +206,7 @@ std::string SpeechOps::segment(const std::vector<float> &pcm) {
   const auto t0 = std::chrono::steady_clock::now();
   json windows = json::array();
   size_t offset = 0;
-  for (const auto &classes : sd_->segment(pcm)) {
+  for (const auto &classes : segmentation(pcm)) {
     std::string digits(classes.size(), '0');
     for (size_t f = 0; f < classes.size(); ++f)
       digits[f] = static_cast<char>('0' + classes[f]);
