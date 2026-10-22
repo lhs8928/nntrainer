@@ -10,6 +10,12 @@
 # Needs the Android builds of nntrainer (builddir/android_build_result) and of
 # quick_ai (Applications/quick_ai/jni/libs, Applications/quick_ai/lib):
 # run Applications/quick_ai/build_android.sh first.
+#
+# Also builds libnntr_discretion_jni.so (the room recognizer of room_api.h and
+# its JNI methods, for ai.nntrainer.discretion.Recognizer) and nntr_room (a
+# test executable on that library). The Silero voice gate needs ONNX Runtime
+# for Android: ORT_ROOT is the extracted onnxruntime-android AAR (headers/,
+# jni/<abi>/libonnxruntime.so); without it the library uses the energy gate.
 ##
 
 LOCAL_PATH := $(call my-dir)
@@ -23,6 +29,11 @@ NNTRAINER_ROOT := $(LOCAL_PATH)/../../..
 endif
 
 QUICK_AI := $(NNTRAINER_ROOT)/Applications/quick_ai
+
+ifndef ORT_ROOT
+ORT_ROOT := $(NNTRAINER_ROOT)/../deps/onnxruntime-android-1.22.0
+endif
+HAVE_ORT := $(wildcard $(ORT_ROOT)/headers/onnxruntime_cxx_api.h)
 
 # The installed nntrainer headers, the nntrainer sources the diarization models
 # reach into (CPU backend), and the quick_ai headers. The diarization model
@@ -69,28 +80,24 @@ LOCAL_MODULE := tokenizers_c
 LOCAL_SRC_FILES := $(QUICK_AI)/lib/libtokenizers_android_c.a
 include $(PREBUILT_STATIC_LIBRARY)
 
+ifneq ($(HAVE_ORT),)
 include $(CLEAR_VARS)
-LOCAL_ARM_NEON := true
-LOCAL_ARM_MODE := arm
-LOCAL_MODULE := nntr_discretion
-LOCAL_CFLAGS += -O3 -pthread -fexceptions -fopenmp -DENABLE_FP16=1 -DUSE__FP16=1 \
-    -D__ARM_NEON__=1 -DUSE_NEON=1 -march=armv8.2-a+fp16+dotprod+i8mm \
-    -mtune=cortex-a76 -Wno-deprecated-literal-operator
-LOCAL_CXXFLAGS += -std=c++20 -frtti
-LOCAL_LDFLAGS += -fexceptions -fopenmp -static-openmp
-LOCAL_LDLIBS := -llog -landroid
+LOCAL_MODULE := onnxruntime
+LOCAL_SRC_FILES := $(ORT_ROOT)/jni/$(TARGET_ARCH_ABI)/libonnxruntime.so
+include $(PREBUILT_SHARED_LIBRARY)
+endif
+
+DISCRETION_CFLAGS := -O3 -pthread -fexceptions -fopenmp -DENABLE_FP16=1 \
+    -DUSE__FP16=1 -D__ARM_NEON__=1 -DUSE_NEON=1 \
+    -march=armv8.2-a+fp16+dotprod+i8mm -mtune=cortex-a76 \
+    -Wno-deprecated-literal-operator
+DISCRETION_LDFLAGS := -fexceptions -fopenmp -static-openmp
 
 SD_MODELS := ../../SpeakerDiarization/models
-LOCAL_SRC_FILES := \
-    ../main.cpp \
+SPEECH_SOURCES := \
     ../asr_engine.cpp \
     ../asr_lane.cpp \
-    ../sd_lane.cpp \
-    ../audio_fanout.cpp \
-    ../merger.cpp \
-    ../batch_pipeline.cpp \
     ../speech_ops.cpp \
-    ../speech_http.cpp \
     $(SD_MODELS)/weight_loader.cpp \
     $(SD_MODELS)/audio_preprocessor.cpp \
     $(SD_MODELS)/pyannet.cpp \
@@ -101,7 +108,58 @@ LOCAL_SRC_FILES := \
     $(SD_MODELS)/streaming_diarizer.cpp \
     $(SD_MODELS)/batch_diarizer.cpp
 
+include $(CLEAR_VARS)
+LOCAL_ARM_NEON := true
+LOCAL_ARM_MODE := arm
+LOCAL_MODULE := nntr_discretion
+LOCAL_CFLAGS += $(DISCRETION_CFLAGS)
+LOCAL_CXXFLAGS += -std=c++20 -frtti
+LOCAL_LDFLAGS += $(DISCRETION_LDFLAGS)
+LOCAL_LDLIBS := -llog -landroid
+LOCAL_SRC_FILES := \
+    ../main.cpp \
+    ../sd_lane.cpp \
+    ../audio_fanout.cpp \
+    ../merger.cpp \
+    ../batch_pipeline.cpp \
+    ../speech_http.cpp \
+    $(SPEECH_SOURCES)
 LOCAL_SHARED_LIBRARIES := quick_ai_core nntrainer ccapi-nntrainer
 LOCAL_STATIC_LIBRARIES := tokenizers_c
 LOCAL_C_INCLUDES += $(DISCRETION_INCLUDES)
+include $(BUILD_EXECUTABLE)
+
+include $(CLEAR_VARS)
+LOCAL_ARM_NEON := true
+LOCAL_ARM_MODE := arm
+LOCAL_MODULE := nntr_discretion_jni
+LOCAL_CFLAGS += $(DISCRETION_CFLAGS)
+LOCAL_CXXFLAGS += -std=c++20 -frtti
+LOCAL_LDFLAGS += $(DISCRETION_LDFLAGS)
+LOCAL_LDLIBS := -llog -landroid
+LOCAL_SRC_FILES := \
+    ../voice_gate.cpp \
+    ../room_diarizer.cpp \
+    ../room_pipeline.cpp \
+    ../room_api.cpp \
+    ../room_jni.cpp \
+    $(SPEECH_SOURCES)
+LOCAL_SHARED_LIBRARIES := quick_ai_core nntrainer ccapi-nntrainer
+LOCAL_STATIC_LIBRARIES := tokenizers_c
+LOCAL_C_INCLUDES += $(DISCRETION_INCLUDES)
+ifneq ($(HAVE_ORT),)
+LOCAL_CFLAGS += -DENABLE_ONNXRUNTIME=1
+LOCAL_C_INCLUDES += $(ORT_ROOT)/headers
+LOCAL_SHARED_LIBRARIES += onnxruntime
+endif
+include $(BUILD_SHARED_LIBRARY)
+
+include $(CLEAR_VARS)
+LOCAL_MODULE := nntr_room
+LOCAL_CFLAGS += -O2 -fexceptions
+LOCAL_CXXFLAGS += -std=c++20
+LOCAL_SRC_FILES := ../room_cli.cpp
+LOCAL_LDLIBS := -laaudio
+LOCAL_SHARED_LIBRARIES := nntr_discretion_jni
+LOCAL_C_INCLUDES += $(LOCAL_PATH)/..
 include $(BUILD_EXECUTABLE)

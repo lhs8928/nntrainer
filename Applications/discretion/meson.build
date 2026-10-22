@@ -55,6 +55,45 @@ if host_machine.system() == 'linux' and get_option('platform') == 'none' and get
   # quick_ai models both have an audio_preprocessor.h with the same include
   # guard. Each side's headers are only reached through the including file's own
   # directory, and no source file includes both.
+  # The room recognizer (room_api.h): ALICE's endpointing and whole-meeting
+  # speaker clustering on the speech models, and nntr_room to test it on a
+  # file. The Silero gate needs ONNX Runtime; without it the energy gate.
+  room_sources = [
+    'voice_gate.cpp',
+    'room_diarizer.cpp',
+    'room_pipeline.cpp',
+    'room_api.cpp',
+    'asr_engine.cpp',
+    'asr_lane.cpp',
+    'speech_ops.cpp',
+    sd_models / 'weight_loader.cpp',
+    sd_models / 'audio_preprocessor.cpp',
+    sd_models / 'pyannet.cpp',
+    sd_models / 'wespeaker_resnet34.cpp',
+    sd_models / 'plda_vbx.cpp',
+    sd_models / 'online_speaker_tracker.cpp',
+    sd_models / 'audio_stream_buffer.cpp',
+    sd_models / 'streaming_diarizer.cpp',
+    sd_models / 'batch_diarizer.cpp',
+  ]
+  room_dependencies = discretion_dependencies
+  room_args = []
+  room_ort_dep = dependency('libonnxruntime', required: false)
+  if room_ort_dep.found()
+    room_dependencies += room_ort_dep
+    room_args += '-DENABLE_ONNXRUNTIME=1'
+  endif
+
+  executable('nntr_room',
+    ['room_cli.cpp'] + room_sources,
+    include_directories: [include_directories('.')] + quick_ai_inc + quick_ai_external_incs,
+    dependencies: room_dependencies,
+    cpp_args: room_args,
+    install: get_option('install-app'),
+    install_dir: application_install_dir,
+    install_rpath: application_install_dir
+  )
+
   e_discretion = executable('nntr_discretion',
     discretion_sources,
     include_directories: [include_directories('.')] + quick_ai_inc + quick_ai_external_incs,
