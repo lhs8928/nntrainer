@@ -31,15 +31,8 @@ using json = nlohmann::json;
 constexpr double RATE = 16000.0;
 constexpr size_t WINDOW = 1600; // 100 ms
 
-bool readPcm(const std::string &path, std::vector<float> &pcm,
-             std::string &error) {
-  std::ifstream in(path, std::ios::binary);
-  if (!in) {
-    error = "cannot open " + path;
-    return false;
-  }
-  std::vector<char> raw((std::istreambuf_iterator<char>(in)),
-                        std::istreambuf_iterator<char>());
+bool decodePcm(const std::string &raw, std::vector<float> &pcm,
+               std::string &error) {
   if (raw.size() % 2) {
     error = "PCM16 file with an odd byte count";
     return false;
@@ -209,16 +202,15 @@ std::string SpeechOps::segment(const std::vector<float> &pcm) {
   return j.dump();
 }
 
-bool SpeechOps::handle(const std::string &op, const std::string &in,
-                       const std::string &out, std::string &error) {
+bool SpeechOps::run(const std::string &op, const std::string &pcm16,
+                    std::string &body, std::string &error) {
   std::vector<float> pcm;
-  if (!readPcm(in, pcm, error))
+  if (!decodePcm(pcm16, pcm, error))
     return false;
   if (pcm.empty()) {
     error = "no audio";
     return false;
   }
-  std::string body;
   try {
     if (op == "ASR")
       body = asr(pcm);
@@ -234,13 +226,28 @@ bool SpeechOps::handle(const std::string &op, const std::string &in,
     error = e.what();
     return false;
   }
-  std::ofstream f(out, std::ios::binary | std::ios::trunc);
+  return true;
+}
+
+bool SpeechOps::handle(const std::string &op, const std::string &in,
+                       const std::string &out, std::string &error) {
+  std::ifstream f(in, std::ios::binary);
   if (!f) {
+    error = "cannot open " + in;
+    return false;
+  }
+  const std::string raw((std::istreambuf_iterator<char>(f)),
+                        std::istreambuf_iterator<char>());
+  std::string body;
+  if (!run(op, raw, body, error))
+    return false;
+  std::ofstream o(out, std::ios::binary | std::ios::trunc);
+  if (!o) {
     error = "cannot open " + out;
     return false;
   }
-  f << body;
-  return static_cast<bool>(f);
+  o << body;
+  return static_cast<bool>(o);
 }
 
 } // namespace discretion

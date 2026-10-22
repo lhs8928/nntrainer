@@ -75,7 +75,7 @@ LOCAL_ARM_MODE := arm
 LOCAL_MODULE := nntr_discretion
 LOCAL_CFLAGS += -O3 -pthread -fexceptions -fopenmp -DENABLE_FP16=1 -DUSE__FP16=1 \
     -D__ARM_NEON__=1 -DUSE_NEON=1 -march=armv8.2-a+fp16+dotprod+i8mm \
-    -mtune=cortex-a76 -Wno-nan-infinity-disabled -Wno-deprecated-literal-operator
+    -mtune=cortex-a76 -Wno-deprecated-literal-operator
 LOCAL_CXXFLAGS += -std=c++20 -frtti
 LOCAL_LDFLAGS += -fexceptions -fopenmp -static-openmp
 LOCAL_LDLIBS := -llog -landroid
@@ -90,6 +90,7 @@ LOCAL_SRC_FILES := \
     ../merger.cpp \
     ../batch_pipeline.cpp \
     ../speech_ops.cpp \
+    ../speech_http.cpp \
     $(SD_MODELS)/weight_loader.cpp \
     $(SD_MODELS)/audio_preprocessor.cpp \
     $(SD_MODELS)/pyannet.cpp \

@@ -40,6 +40,7 @@
 #include "events.h"
 #include "merger.h"
 #include "sd_lane.h"
+#include "speech_http.h"
 #include "speech_ops.h"
 
 namespace {
@@ -81,6 +82,9 @@ void usage(const char *prog) {
     "and\n"
     "        word times, a speaker embedding, PyanNet frame classes per 10 s\n"
     "        window. One ASR graph per length; longer audio is cut to fit.\n"
+    "        --http PORT [--http-host 0.0.0.0] [--token T]: the same requests\n"
+    "        over HTTP (GET /health, POST /asr|/embed|/segment with PCM16),\n"
+    "        as speech_server.py does, for devices without Python\n"
     "Serve: --serve keeps the ASR model loaded and reads requests from stdin,\n"
     "        one per line: WAV<TAB>JSONL<TAB>0|1 (1 = with speaker labels).\n"
     "        Replies on stdout: READY, then OK or ERR <reason> per request.\n"
@@ -101,6 +105,8 @@ struct Args {
   bool batch = false;     // --batch: WhisperX-style whole-file pipeline
   bool speech = false;    // --serve --speech: ASR / EMBED / SEGMENT requests
   std::vector<float> asr_secs; // --asr-sec: model graph lengths (speech)
+  discretion::HttpOptions http; // --http PORT: answer over HTTP, not stdin
+  bool http_on = false;
   discretion::BatchOptions batch_opt;
 };
 
@@ -174,6 +180,13 @@ bool parseArgs(int argc, char **argv, Args &a) {
         a.serial = false;
       else if (k == "--speech")
         a.speech = true;
+      else if (k == "--http") {
+        a.http_on = true;
+        a.http.port = std::stoi(next());
+      } else if (k == "--http-host")
+        a.http.host = next();
+      else if (k == "--token")
+        a.http.token = next();
       else if (k == "--asr-sec") {
         std::string list = next();
         for (size_t p = 0; p < list.size();) {
@@ -362,6 +375,14 @@ int speechServeMain(Args &args) {
   if (!ops.init(opt, error)) {
     std::fprintf(stderr, "error: %s\n", error.c_str());
     return EXIT_FAILURE;
+  }
+  if (args.http_on) {
+    if (args.http.token.empty()) {
+      const char *t = std::getenv("NNTR_SPEECH_TOKEN");
+      args.http.token = t ? t : "";
+    }
+    std::fclose(proto);
+    return discretion::serveHttp(ops, args.http);
   }
   std::fprintf(proto, "READY %s\n", ops.describe().c_str());
   std::fflush(proto);

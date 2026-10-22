@@ -60,6 +60,14 @@ public:
   bool handle(const std::string &op, const std::string &in,
               const std::string &out, std::string &error);
 
+  /**
+   * @brief answer one request on samples already in memory
+   * @param pcm16 16 kHz mono little-endian PCM16 bytes
+   * @param body the JSON answer
+   */
+  bool run(const std::string &op, const std::string &pcm16, std::string &body,
+           std::string &error);
+
   /** @brief what is loaded, as one JSON object (the HTTP server's /health) */
   std::string describe() const;
 
