@@ -124,7 +124,7 @@ std::string SpeechOps::describe() const {
   j["language"] = opt_.asr.language;
   j["model"] = opt_.asr.model_dir;
   j["sd_weights"] = opt_.sd_weights;
-  j["embedding_dim"] = 256;
+  j["embedding_dim"] = EMBEDDING_DIM;
   j["frame_ms"] = 10000.0 / 589.0;
   return j.dump();
 }

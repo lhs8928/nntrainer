@@ -91,6 +91,37 @@ JNIEXPORT void JNICALL Java_ai_nntrainer_discretion_Recognizer_nativeEnroll(
     raise(env, err);
 }
 
+JNIEXPORT void JNICALL
+Java_ai_nntrainer_discretion_Recognizer_nativeEnrollVector(JNIEnv *env, jclass,
+                                                           jlong h,
+                                                           jstring person,
+                                                           jfloatArray vector) {
+  const jsize len = env->GetArrayLength(vector);
+  jfloat *x = env->GetFloatArrayElements(vector, nullptr);
+  char err[512] = {0};
+  const int rc = nntr_room_enroll_vector(room(h), str(env, person).c_str(), x,
+                                         len, err, sizeof(err));
+  env->ReleaseFloatArrayElements(vector, x, JNI_ABORT);
+  if (rc != 0)
+    raise(env, err);
+}
+
+JNIEXPORT jfloatArray JNICALL
+Java_ai_nntrainer_discretion_Recognizer_nativeVoiceOf(JNIEnv *env, jclass,
+                                                      jlong h, jstring person) {
+  const std::string who = str(env, person);
+  const int n = nntr_room_voice_of(room(h), who.c_str(), nullptr, 0);
+  if (n <= 0)
+    return nullptr;
+  std::vector<float> v(n);
+  if (nntr_room_voice_of(room(h), who.c_str(), v.data(), n) != n)
+    return nullptr;
+  jfloatArray out = env->NewFloatArray(n);
+  if (out)
+    env->SetFloatArrayRegion(out, 0, n, v.data());
+  return out;
+}
+
 JNIEXPORT jint JNICALL Java_ai_nntrainer_discretion_Recognizer_nativeMapSpeaker(
   JNIEnv *env, jclass, jlong h, jstring label, jstring person) {
   return nntr_room_map_speaker(room(h), str(env, label).c_str(),

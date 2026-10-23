@@ -25,6 +25,9 @@
  *   silero             silero_vad_v6.onnx path (energy gate when missing)
  *   silero_threshold   0.3
  *   speaker_threshold  0.6 (WeSpeaker ResNet34, ALICE's value for it)
+ *   labels_in_use      labels an earlier run of this meeting showed, e.g.
+ *                      ["화자 1","화자 2"]: a new voice never gets them
+ *                      (the app restarted mid-meeting)
  *
  * nntr_room_poll gives a JSON array of events, oldest first:
  *   {"type":"line","id":"audio-3","speaker":"화자 1"|null,"start_ms":..,
@@ -64,6 +67,23 @@ int nntr_room_feed(nntr_room *room, const int16_t *pcm, int n, double at_ms);
  */
 int nntr_room_enroll(nntr_room *room, const char *person, const int16_t *pcm,
                      int n, char *err, int err_cap);
+
+/**
+ * @brief a voice the server keeps (a profile or remembered voice): n numbers
+ *        of WeSpeaker ResNet34 (256), kept in memory only; 0 or -1 with the
+ *        reason in err
+ */
+int nntr_room_enroll_vector(nntr_room *room, const char *person,
+                            const float *vector, int n, char *err, int err_cap);
+
+/**
+ * @brief the person's voice over this meeting, to be remembered: the
+ *        duration-weighted mean of their lines (5 s or more), else their
+ *        enrolled voice (call after nntr_room_flush)
+ * @return its length (copied when cap is enough), 0 when there is none, -1
+ */
+int nntr_room_voice_of(nntr_room *room, const char *person, float *out,
+                       int cap);
 
 /** @brief "이건 나예요": a provisional label is this person; 0 or -1 */
 int nntr_room_map_speaker(nntr_room *room, const char *label,

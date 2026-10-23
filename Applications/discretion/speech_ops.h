@@ -59,6 +59,9 @@ struct AsrResult {
 
 class SpeechOps {
 public:
+  /** @brief length of a speaker embedding (WeSpeaker ResNet34) */
+  static constexpr int EMBEDDING_DIM = 256;
+
   SpeechOps();
   ~SpeechOps();
 

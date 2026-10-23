@@ -12,6 +12,7 @@
 
 #include "room_api.h"
 
+#include <algorithm>
 #include <cmath>
 #include <condition_variable>
 #include <cstring>
@@ -115,6 +116,9 @@ bool Room::init(const std::string &config, std::string &error) {
   models_ = std::make_unique<OpsModels>(ops_);
   DiarizerOptions d;
   d.same = d.threshold = c.value("speaker_threshold", .6);
+  if (c.contains("labels_in_use"))
+    for (const auto &l : c["labels_in_use"])
+      d.reserved.insert(l.get<std::string>());
   registry_ = std::make_unique<RoomDiarizer>(d);
   std::unique_ptr<VoiceGate> gate;
   if (c.value("vad", "silero") == "silero")
@@ -203,6 +207,19 @@ void Room::enroll(const std::string &person, const int16_t *pcm, size_t n) {
 
 void Room::mapSpeaker(const std::string &label, const std::string &person) {
   registry_->mapSpeaker(label, person);
+}
+
+void Room::enrollVector(const std::string &person,
+                        const std::vector<float> &vector) {
+  if (vector.size() != static_cast<size_t>(SpeechOps::EMBEDDING_DIM))
+    throw std::invalid_argument("목소리 벡터는 " +
+                                std::to_string(SpeechOps::EMBEDDING_DIM) +
+                                "개 숫자여야 합니다 (WeSpeaker ResNet34).");
+  registry_->enroll(person, vector);
+}
+
+std::optional<std::vector<float>> Room::voiceOf(const std::string &person) {
+  return registry_->voiceOf(person);
 }
 
 bool Room::pin(const std::string &line,
@@ -341,6 +358,39 @@ int nntr_room_map_speaker(nntr_room *room, const char *label,
   try {
     room->room.mapSpeaker(label, person);
     return 0;
+  } catch (const std::exception &) {
+    return -1;
+  }
+}
+
+int nntr_room_enroll_vector(nntr_room *room, const char *person,
+                            const float *vector, int n, char *err,
+                            int err_cap) {
+  if (!room || !person || !vector || n <= 0) {
+    setError(err, err_cap, "bad arguments");
+    return -1;
+  }
+  try {
+    room->room.enrollVector(person, std::vector<float>(vector, vector + n));
+    return 0;
+  } catch (const std::exception &e) {
+    setError(err, err_cap, e.what());
+    return -1;
+  }
+}
+
+int nntr_room_voice_of(nntr_room *room, const char *person, float *out,
+                       int cap) {
+  if (!room || !person)
+    return -1;
+  try {
+    const auto v = room->room.voiceOf(person);
+    if (!v)
+      return 0;
+    const int n = static_cast<int>(v->size());
+    if (out && cap >= n)
+      std::copy(v->begin(), v->end(), out);
+    return n;
   } catch (const std::exception &) {
     return -1;
   }

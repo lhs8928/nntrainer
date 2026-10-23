@@ -47,6 +47,22 @@ public final class Recognizer implements AutoCloseable {
     nativeEnroll(check(), person, pcm);
   }
 
+  /**
+   * @brief a voice the server keeps (256 numbers, WeSpeaker ResNet34), kept
+   *        in memory only; throws IllegalStateException with why
+   */
+  public void enrollVector(String person, float[] vector) {
+    nativeEnrollVector(check(), person, vector);
+  }
+
+  /**
+   * @brief the person's voice over this meeting, to be remembered (call
+   *        after flush); null when there is none
+   */
+  public float[] voiceOf(String person) {
+    return nativeVoiceOf(check(), person);
+  }
+
   /** @brief "이건 나예요": a provisional label (화자 N) is this person */
   public boolean mapSpeaker(String label, String person) {
     return nativeMapSpeaker(check(), label, person) == 0;
@@ -85,6 +101,9 @@ public final class Recognizer implements AutoCloseable {
   private static native long nativeCreate(String config);
   private static native int nativeFeed(long h, short[] pcm, int n, double atMs);
   private static native void nativeEnroll(long h, String person, short[] pcm);
+  private static native void nativeEnrollVector(long h, String person,
+                                                float[] vector);
+  private static native float[] nativeVoiceOf(long h, String person);
   private static native int nativeMapSpeaker(long h, String label,
                                              String person);
   private static native int nativePin(long h, String lineId, String person);

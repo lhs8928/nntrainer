@@ -29,6 +29,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -42,6 +43,9 @@ struct DiarizerOptions {
   double min_cluster_ms = 4000, far = .4, distinct = .12, one_voice = .75;
   double keep_score = .6, keep_margin = .1;
   int max_voices = 12;
+  // labels an earlier run of this meeting showed: a new voice never gets one
+  // (the app restarted, the server still names lines by them)
+  std::set<std::string> reserved;
 };
 
 /** @brief why a line has its label (ALICE's line info) */
@@ -78,6 +82,13 @@ public:
   void mapSpeaker(const std::string &label, const std::string &person);
   /** @brief a corrected line: its person, or nobody (leaves clustering) */
   void pin(const std::string &turn, const std::optional<std::string> &person);
+  /**
+   * @brief the person's voice over this meeting (the duration-weighted mean
+   *        of their lines), to be remembered; their enrolled voice when the
+   *        meeting heard less than least_ms of them; nullopt when neither
+   */
+  std::optional<std::vector<float>> voiceOf(const std::string &person,
+                                            double least_ms = 5000) const;
   /** @brief provisional labels and how many lines each has */
   std::map<std::string, int> unknown() const;
   double same() const { return opt_.same; }

@@ -49,6 +49,11 @@ public:
   /** @brief throws with the reason */
   void enroll(const std::string &person, const int16_t *pcm, size_t n);
   void mapSpeaker(const std::string &label, const std::string &person);
+  /** @brief a voice the server keeps (WeSpeaker ResNet34); throws why not */
+  void enrollVector(const std::string &person,
+                    const std::vector<float> &vector);
+  /** @brief the person's voice over this meeting (ALICE's voice_of) */
+  std::optional<std::vector<float>> voiceOf(const std::string &person);
   /**
    * @brief a line a person corrected: every diarizer turn it holds stays
    *        theirs (nullopt: nobody); false when the line is unknown

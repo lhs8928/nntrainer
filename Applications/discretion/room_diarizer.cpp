@@ -157,6 +157,30 @@ void RoomDiarizer::pin(const std::string &turn,
   }
 }
 
+// voice_of
+std::optional<std::vector<float>>
+RoomDiarizer::voiceOf(const std::string &person, double least_ms) const {
+  std::lock_guard<std::recursive_mutex> lk(m_);
+  Vec sum;
+  double heard = 0.0;
+  for (const auto &id : order_) {
+    const Turn &t = turns_.at(id);
+    if (t.label != person || t.v.empty() || t.example || t.pin == Pin::Nobody)
+      continue;
+    const double w = std::max(1000.0, t.ms);
+    heard += w;
+    addScaled(sum, t.v, w);
+  }
+  Vec v;
+  if (heard >= least_ms)
+    v = unit(sum);
+  else if (auto p = profiles_.find(person); p != profiles_.end())
+    v = p->second;
+  else
+    return std::nullopt;
+  return std::vector<float>(v.begin(), v.end());
+}
+
 std::map<std::string, int> RoomDiarizer::unknown() const {
   std::lock_guard<std::recursive_mutex> lk(m_);
   std::map<std::string, int> out;
@@ -809,6 +833,7 @@ void RoomDiarizer::name(const std::vector<Cluster> &clusters,
       used.insert(nm);
     for (const auto &[label, person] : aliases_)
       used.insert(label);
+    used.insert(opt_.reserved.begin(), opt_.reserved.end());
     for (const auto &[id, t] : turns_)
       if (!t.label.empty())
         used.insert(t.label);

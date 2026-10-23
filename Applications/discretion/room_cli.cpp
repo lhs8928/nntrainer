@@ -13,7 +13,8 @@
  * does, and writes every event as one JSON line on stdout:
  *
  *   nntr_room --config '{"model_dir":..,"sd_weights":..,"silero":..}'
- *             [--enroll NAME=voice.wav ...] [--pin LINE=NAME ...]
+ *             [--enroll NAME=voice.wav ...] [--enroll-vector NAME=v.json ...]
+ *             [--pin LINE=NAME ...] [--voices NAME,NAME]
  *             [--realtime] [--seconds S] INPUT
  *
  * INPUT is a 16 kHz mono PCM16 WAV file, '-' for raw PCM16 on stdin (a live
@@ -23,16 +24,22 @@
  * --seconds, or on SIGINT / SIGTERM / SIGHUP; what was heard is still
  * recognized and written before the program exits. --pin corrects a line as a
  * person would, as soon as it is written (NAME '-' = nobody), to see what the
- * diarizer makes of the lines after it.
+ * diarizer makes of the lines after it. --enroll-vector enrolls a voice the
+ * server keeps (a JSON array of 256 numbers, or an object with "vector");
+ * --voices writes, at the end, {"type":"voice","person","vector"} for each
+ * name (the voice to remember, nothing when there is none).
  */
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <string>
 #include <thread>
@@ -221,11 +228,34 @@ void print(const std::string &array) {
   std::fflush(events);
 }
 
+/** @brief the numbers of the first JSON array in a file */
+bool readVector(const std::string &path, std::vector<float> &v) {
+  std::ifstream in(path);
+  const std::string s((std::istreambuf_iterator<char>(in)),
+                      std::istreambuf_iterator<char>());
+  const size_t a = s.find('['), b = s.find(']', a);
+  if (a == std::string::npos || b == std::string::npos)
+    return false;
+  const char *p = s.c_str() + a + 1, *end = s.c_str() + b;
+  while (p < end) {
+    char *q = nullptr;
+    const float x = std::strtof(p, &q);
+    if (q == p) {
+      ++p;
+      continue;
+    }
+    v.push_back(x);
+    p = q;
+  }
+  return !v.empty();
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
   std::string config, input;
-  std::vector<std::pair<std::string, std::string>> enroll;
+  std::vector<std::pair<std::string, std::string>> enroll, vectors;
+  std::vector<std::string> voices;
   bool realtime = false;
   double seconds = 0;
   for (int i = 1; i < argc; ++i) {
@@ -240,6 +270,22 @@ int main(int argc, char **argv) {
         return 2;
       }
       enroll.emplace_back(v.substr(0, eq), v.substr(eq + 1));
+    } else if (a == "--enroll-vector" && i + 1 < argc) {
+      const std::string v = argv[++i];
+      const size_t eq = v.find('=');
+      if (eq == std::string::npos) {
+        std::fprintf(stderr, "--enroll-vector NAME=vector.json\n");
+        return 2;
+      }
+      vectors.emplace_back(v.substr(0, eq), v.substr(eq + 1));
+    } else if (a == "--voices" && i + 1 < argc) {
+      std::string v = argv[++i];
+      for (size_t at = 0; at <= v.size();) {
+        const size_t c = std::min(v.find(',', at), v.size());
+        if (c > at)
+          voices.push_back(v.substr(at, c - at));
+        at = c + 1;
+      }
     } else if (a == "--pin" && i + 1 < argc) {
       const std::string v = argv[++i];
       const size_t eq = v.find('=');
@@ -256,9 +302,10 @@ int main(int argc, char **argv) {
       input = a;
   }
   if (config.empty() || input.empty()) {
-    std::fprintf(
-      stderr, "usage: nntr_room --config JSON [--enroll NAME=WAV] "
-              "[--pin LINE=NAME] [--realtime] [--seconds S] INPUT.wav|-|mic\n");
+    std::fprintf(stderr,
+                 "usage: nntr_room --config JSON [--enroll NAME=WAV] "
+                 "[--enroll-vector NAME=JSON] [--pin LINE=NAME] [--voices A,B] "
+                 "[--realtime] [--seconds S] INPUT.wav|-|mic\n");
     return 2;
   }
   // the models log to stdout: the events keep stdout to themselves
@@ -290,6 +337,18 @@ int main(int argc, char **argv) {
                          static_cast<int>(pcm.size()), err, sizeof(err)) != 0) {
       std::fprintf(stderr, "enroll %s: %s\n", name.c_str(),
                    error.empty() ? err : error.c_str());
+      nntr_room_destroy(room);
+      return 1;
+    }
+  }
+  for (const auto &[name, path] : vectors) {
+    std::vector<float> v;
+    if (!readVector(path, v) ||
+        nntr_room_enroll_vector(room, name.c_str(), v.data(),
+                                static_cast<int>(v.size()), err,
+                                sizeof(err)) != 0) {
+      std::fprintf(stderr, "enroll-vector %s: %s\n", name.c_str(),
+                   v.empty() ? "no numbers in the file" : err);
       nntr_room_destroy(room);
       return 1;
     }
@@ -379,6 +438,22 @@ int main(int argc, char **argv) {
   }
   nntr_room_flush(room);
   print(text(room, nntr_room_poll));
+  for (const auto &who : voices) {
+    std::vector<float> v(256);
+    const int n = nntr_room_voice_of(room, who.c_str(), v.data(),
+                                     static_cast<int>(v.size()));
+    if (n <= 0 || n > static_cast<int>(v.size()))
+      continue;
+    std::string e =
+      "{\"person\":\"" + who + "\",\"type\":\"voice\",\"vector\":[";
+    for (int i = 0; i < n; ++i) {
+      char b[32];
+      std::snprintf(b, sizeof(b), "%s%.6g", i ? "," : "", v[i]);
+      e += b;
+    }
+    std::fprintf(events, "%s]}\n", e.c_str());
+  }
+  std::fflush(events);
   const double wall =
     std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
       .count();
