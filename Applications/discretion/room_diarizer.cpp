@@ -20,6 +20,7 @@
 #include <numeric>
 #include <set>
 #include <stdexcept>
+#include <tuple>
 
 namespace discretion {
 
@@ -703,12 +704,13 @@ RoomDiarizer::settle(std::vector<Cluster> clusters) {
   return clusters;
 }
 
-// _name: pins, kept voices and enrolled voices name clusters; provisional
-// labels stay with the cluster holding most of their earlier turns; the rest
-// get the smallest number no line shows
+// _name: pins, kept voices and enrolled voices name clusters (an enrolled
+// voice at most one); provisional labels stay with the cluster holding most of
+// their earlier turns; the rest get the smallest number no line shows
 void RoomDiarizer::name(const std::vector<Cluster> &clusters,
                         std::map<size_t, std::string> &names,
                         std::map<size_t, std::string> &source) {
+  std::vector<std::tuple<double, size_t, std::string>> matches;
   for (size_t k = 0; k < clusters.size(); ++k) {
     const Cluster &c = clusters[k];
     std::set<std::string> pins;
@@ -748,10 +750,21 @@ void RoomDiarizer::name(const std::vector<Cluster> &clusters,
     if (!scores.empty() && scores[0].first >= opt_.threshold &&
         (scores.size() == 1 ||
          scores[0].first - scores[1].first >= opt_.margin)) {
-      names[k] = scores[0].second;
-      source[k] = "enrolled";
+      matches.emplace_back(scores[0].first, k, scores[0].second);
     }
   }
+  // one enrolled person names one cluster: when the voices of two clusters
+  // the cut kept apart both match them, the nearer is them and the other stays
+  // provisional (a look-alike voice is not given an enrolled person's name)
+  std::set<std::string> given;
+  for (const auto &[k, nm] : names)
+    given.insert(nm);
+  std::sort(matches.rbegin(), matches.rend());
+  for (const auto &[score, k, nm] : matches)
+    if (given.insert(nm).second) {
+      names[k] = nm;
+      source[k] = "enrolled";
+    }
   struct Vote {
     int count;
     size_t k;
