@@ -14,7 +14,7 @@
  *
  *   nntr_room --config '{"model_dir":..,"sd_weights":..,"silero":..}'
  *             [--enroll NAME=voice.wav ...] [--enroll-vector NAME=v.json ...]
- *             [--pin LINE=NAME ...] [--voices NAME,NAME]
+ *             [--pin LINE=NAME ...] [--voices NAME,NAME] [--commands]
  *             [--realtime] [--seconds S] INPUT
  *
  * INPUT is a 16 kHz mono PCM16 WAV file, '-' for raw PCM16 on stdin (a live
@@ -28,6 +28,15 @@
  * server keeps (a JSON array of 256 numbers, or an object with "vector");
  * --voices writes, at the end, {"type":"voice","person","vector"} for each
  * name (the voice to remember, nothing when there is none).
+ *
+ * --commands reads corrections from stdin while it listens (not with '-'),
+ * one JSON object per line, as an app gets them from the server:
+ *   {"op":"pin","line":"audio-20","person":"홍길동"|null}
+ *   {"op":"map_speaker","label":"화자 2","person":"홍길동"}
+ *   {"op":"enroll","person":"홍길동","vector":[256 numbers]}
+ *   {"op":"remember","person":"홍길동","on":true}   its voice at the end
+ * and answers each with {"type":"ack","op":..,"rc":..} (rc as the C function;
+ * "k" is copied when given).
  */
 
 #include <algorithm>
@@ -39,8 +48,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <map>
+#include <mutex>
+#include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -51,6 +64,7 @@
 #include <aaudio/AAudio.h>
 #endif
 
+#include "json.hpp"
 #include "room_api.h"
 
 namespace {
@@ -177,9 +191,74 @@ std::FILE *events = stdout;
 /** @brief --pin: line id -> person ("-" = nobody), applied once written */
 std::map<std::string, std::string> pins;
 nntr_room *pinned_room = nullptr;
+/** @brief events come from the main thread and the command reader */
+std::mutex events_m;
+/** @brief people whose voice is written at the end (--voices, remember) */
+std::set<std::string> remembered;
+std::mutex remembered_m;
+
+void writeEvent(const nlohmann::json &e) {
+  std::lock_guard<std::mutex> lk(events_m);
+  std::fprintf(events, "%s\n", e.dump().c_str());
+  std::fflush(events);
+}
+
+/** @brief --commands: corrections from stdin, one JSON object per line */
+void readCommands(nntr_room *room) {
+  using nlohmann::json;
+  std::string line;
+  while (std::getline(std::cin, line)) {
+    if (line.find_first_not_of(" \t\r") == std::string::npos)
+      continue;
+    json ack = {{"type", "ack"}, {"rc", -1}};
+    try {
+      const json c = json::parse(line);
+      const std::string op = c.value("op", "");
+      ack["op"] = op;
+      if (c.contains("k"))
+        ack["k"] = c["k"];
+      const bool someone = c.contains("person") && c["person"].is_string();
+      const std::string person = someone ? c["person"].get<std::string>() : "";
+      if (op == "pin") {
+        const std::string id = c.value("line", "");
+        ack["line"] = id;
+        ack["rc"] =
+          nntr_room_pin(room, id.c_str(), someone ? person.c_str() : nullptr);
+      } else if (op == "map_speaker" && someone) {
+        const std::string label = c.value("label", "");
+        ack["label"] = label;
+        ack["rc"] = nntr_room_map_speaker(room, label.c_str(), person.c_str());
+      } else if (op == "enroll" && someone) {
+        const auto v = c.at("vector").get<std::vector<float>>();
+        char err[512] = {0};
+        const int rc =
+          nntr_room_enroll_vector(room, person.c_str(), v.data(),
+                                  static_cast<int>(v.size()), err, sizeof(err));
+        ack["rc"] = rc;
+        if (rc != 0)
+          ack["error"] = err;
+      } else if (op == "remember" && someone) {
+        std::lock_guard<std::mutex> lk(remembered_m);
+        if (c.value("on", true))
+          remembered.insert(person);
+        else
+          remembered.erase(person);
+        ack["rc"] = 0;
+      }
+      if (someone)
+        ack["person"] = person;
+    } catch (const std::exception &e) {
+      ack["error"] = e.what();
+    }
+    writeEvent(ack);
+  }
+}
 
 void write(const std::string &event) {
-  std::fprintf(events, "%s\n", event.c_str());
+  {
+    std::lock_guard<std::mutex> lk(events_m);
+    std::fprintf(events, "%s\n", event.c_str());
+  }
   for (auto it = pins.begin(); it != pins.end(); ++it)
     if (event.find("\"type\":\"line\"") != std::string::npos &&
         event.find("\"id\":\"" + it->first + "\"") != std::string::npos) {
@@ -256,6 +335,7 @@ int main(int argc, char **argv) {
   std::string config, input;
   std::vector<std::pair<std::string, std::string>> enroll, vectors;
   std::vector<std::string> voices;
+  bool commands = false;
   bool realtime = false;
   double seconds = 0;
   for (int i = 1; i < argc; ++i) {
@@ -286,6 +366,8 @@ int main(int argc, char **argv) {
           voices.push_back(v.substr(at, c - at));
         at = c + 1;
       }
+    } else if (a == "--commands") {
+      commands = true;
     } else if (a == "--pin" && i + 1 < argc) {
       const std::string v = argv[++i];
       const size_t eq = v.find('=');
@@ -305,7 +387,7 @@ int main(int argc, char **argv) {
     std::fprintf(stderr,
                  "usage: nntr_room --config JSON [--enroll NAME=WAV] "
                  "[--enroll-vector NAME=JSON] [--pin LINE=NAME] [--voices A,B] "
-                 "[--realtime] [--seconds S] INPUT.wav|-|mic\n");
+                 "[--commands] [--realtime] [--seconds S] INPUT.wav|-|mic\n");
     return 2;
   }
   // the models log to stdout: the events keep stdout to themselves
@@ -353,6 +435,10 @@ int main(int argc, char **argv) {
       return 1;
     }
   }
+  if (commands && input != "-")
+    std::thread(readCommands, room).detach();
+  else if (commands)
+    std::fprintf(stderr, "--commands: stdin carries the audio, ignored\n");
 
   std::signal(SIGINT, onSignal);
   std::signal(SIGTERM, onSignal);
@@ -438,22 +524,24 @@ int main(int argc, char **argv) {
   }
   nntr_room_flush(room);
   print(text(room, nntr_room_poll));
-  for (const auto &who : voices) {
+  {
+    std::lock_guard<std::mutex> lk(remembered_m);
+    remembered.insert(voices.begin(), voices.end());
+  }
+  std::set<std::string> people;
+  {
+    std::lock_guard<std::mutex> lk(remembered_m);
+    people = remembered;
+  }
+  for (const auto &who : people) {
     std::vector<float> v(256);
     const int n = nntr_room_voice_of(room, who.c_str(), v.data(),
                                      static_cast<int>(v.size()));
     if (n <= 0 || n > static_cast<int>(v.size()))
       continue;
-    std::string e =
-      "{\"person\":\"" + who + "\",\"type\":\"voice\",\"vector\":[";
-    for (int i = 0; i < n; ++i) {
-      char b[32];
-      std::snprintf(b, sizeof(b), "%s%.6g", i ? "," : "", v[i]);
-      e += b;
-    }
-    std::fprintf(events, "%s]}\n", e.c_str());
+    v.resize(n);
+    writeEvent({{"type", "voice"}, {"person", who}, {"vector", v}});
   }
-  std::fflush(events);
   const double wall =
     std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
       .count();
