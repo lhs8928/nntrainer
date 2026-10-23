@@ -149,7 +149,7 @@ bool readWav(const std::string &path, std::vector<int16_t> &pcm,
   return false;
 }
 
-std::string text(nd_room *room, int (*get)(nd_room *, char *, int)) {
+std::string text(nntr_room *room, int (*get)(nntr_room *, char *, int)) {
   std::vector<char> buf(1 << 16);
   while (true) {
     const int n = get(room, buf.data(), static_cast<int>(buf.size()));
@@ -161,7 +161,7 @@ std::string text(nd_room *room, int (*get)(nd_room *, char *, int)) {
   }
 }
 
-/** @brief one JSON line per event of the array nd_poll gave */
+/** @brief one JSON line per event of the array nntr_room_poll gave */
 std::FILE *events = stdout;
 
 void print(const std::string &array) {
@@ -240,7 +240,7 @@ int main(int argc, char **argv) {
   }
   char err[512] = {0};
   const auto t0 = std::chrono::steady_clock::now();
-  nd_room *room = nd_create(config.c_str(), err, sizeof(err));
+  nntr_room *room = nntr_room_create(config.c_str(), err, sizeof(err));
   if (!room) {
     std::fprintf(stderr, "error: %s\n", err);
     return 1;
@@ -249,16 +249,16 @@ int main(int argc, char **argv) {
     stderr, "loaded in %.1f s: %s\n",
     std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
       .count(),
-    text(room, nd_status).c_str());
+    text(room, nntr_room_status).c_str());
   for (const auto &[name, path] : enroll) {
     std::vector<int16_t> pcm;
     std::string error;
     if (!readWav(path, pcm, error) ||
-        nd_enroll(room, name.c_str(), pcm.data(), static_cast<int>(pcm.size()),
-                  err, sizeof(err)) != 0) {
+        nntr_room_enroll(room, name.c_str(), pcm.data(),
+                         static_cast<int>(pcm.size()), err, sizeof(err)) != 0) {
       std::fprintf(stderr, "enroll %s: %s\n", name.c_str(),
                    error.empty() ? err : error.c_str());
-      nd_destroy(room);
+      nntr_room_destroy(room);
       return 1;
     }
   }
@@ -276,12 +276,12 @@ int main(int argc, char **argv) {
   };
   size_t fed = 0;
   auto give = [&](const int16_t *x, size_t n) {
-    while (nd_feed(room, x, static_cast<int>(n), -1) == 1) {
-      print(text(room, nd_poll));
+    while (nntr_room_feed(room, x, static_cast<int>(n), -1) == 1) {
+      print(text(room, nntr_room_poll));
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     fed += n;
-    print(text(room, nd_poll));
+    print(text(room, nntr_room_poll));
   };
   if (input == "mic") {
 #ifdef __ANDROID__
@@ -289,7 +289,7 @@ int main(int argc, char **argv) {
     std::string error;
     if (!mic.open(error)) {
       std::fprintf(stderr, "error: %s\n", error.c_str());
-      nd_destroy(room);
+      nntr_room_destroy(room);
       return 1;
     }
     std::fprintf(stderr, "listening (stop with Ctrl+C or SIGINT)\n");
@@ -318,7 +318,7 @@ int main(int argc, char **argv) {
       std::fprintf(stderr, "stopped by signal %d\n", stop_signal.load());
 #else
     std::fprintf(stderr, "error: 'mic' is for Android only\n");
-    nd_destroy(room);
+    nntr_room_destroy(room);
     return 1;
 #endif
   } else if (input == "-") {
@@ -335,7 +335,7 @@ int main(int argc, char **argv) {
     std::string error;
     if (!readWav(input, pcm, error)) {
       std::fprintf(stderr, "error: %s\n", error.c_str());
-      nd_destroy(room);
+      nntr_room_destroy(room);
       return 1;
     }
     for (size_t i = 0; i < pcm.size() && !over(); i += CHUNK) {
@@ -345,14 +345,14 @@ int main(int argc, char **argv) {
       give(pcm.data() + i, std::min(CHUNK, pcm.size() - i));
     }
   }
-  nd_flush(room);
-  print(text(room, nd_poll));
+  nntr_room_flush(room);
+  print(text(room, nntr_room_poll));
   const double wall =
     std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
       .count();
   std::fprintf(stderr, "audio %.1f s, wall %.1f s (RTF %.2f)\nstatus: %s\n",
                fed / 16000.0, wall, wall / std::max(1e-9, fed / 16000.0),
-               text(room, nd_status).c_str());
-  nd_destroy(room);
+               text(room, nntr_room_status).c_str());
+  nntr_room_destroy(room);
   return 0;
 }

@@ -271,14 +271,14 @@ using discretion::copyOut;
 using discretion::Room;
 using discretion::setError;
 
-struct nd_room {
+struct nntr_room {
   Room room;
 };
 
 extern "C" {
 
-nd_room *nd_create(const char *config_json, char *err, int err_cap) {
-  auto r = std::make_unique<nd_room>();
+nntr_room *nntr_room_create(const char *config_json, char *err, int err_cap) {
+  auto r = std::make_unique<nntr_room>();
   std::string error;
   try {
     if (!r->room.init(config_json ? config_json : "", error)) {
@@ -292,14 +292,14 @@ nd_room *nd_create(const char *config_json, char *err, int err_cap) {
   return r.release();
 }
 
-int nd_feed(nd_room *room, const int16_t *pcm, int n, double at_ms) {
+int nntr_room_feed(nntr_room *room, const int16_t *pcm, int n, double at_ms) {
   if (!room || !pcm || n < 0)
     return -1;
   return room->room.feed(pcm, static_cast<size_t>(n), at_ms);
 }
 
-int nd_enroll(nd_room *room, const char *person, const int16_t *pcm, int n,
-              char *err, int err_cap) {
+int nntr_room_enroll(nntr_room *room, const char *person, const int16_t *pcm,
+                     int n, char *err, int err_cap) {
   if (!room || !person || !pcm || n <= 0) {
     setError(err, err_cap, "bad arguments");
     return -1;
@@ -313,7 +313,8 @@ int nd_enroll(nd_room *room, const char *person, const int16_t *pcm, int n,
   }
 }
 
-int nd_map_speaker(nd_room *room, const char *label, const char *person) {
+int nntr_room_map_speaker(nntr_room *room, const char *label,
+                          const char *person) {
   if (!room || !label || !person)
     return -1;
   try {
@@ -324,7 +325,7 @@ int nd_map_speaker(nd_room *room, const char *label, const char *person) {
   }
 }
 
-int nd_poll(nd_room *room, char *out, int cap) {
+int nntr_room_poll(nntr_room *room, char *out, int cap) {
   if (!room)
     return -1;
   const std::string s = room->room.poll();
@@ -334,13 +335,13 @@ int nd_poll(nd_room *room, char *out, int cap) {
   return n;
 }
 
-int nd_status(nd_room *room, char *out, int cap) {
+int nntr_room_status(nntr_room *room, char *out, int cap) {
   if (!room)
     return -1;
   return copyOut(room->room.status(), out, cap);
 }
 
-int nd_flush(nd_room *room) {
+int nntr_room_flush(nntr_room *room) {
   if (!room)
     return -1;
   try {
@@ -351,6 +352,6 @@ int nd_flush(nd_room *room) {
   }
 }
 
-void nd_destroy(nd_room *room) { delete room; }
+void nntr_room_destroy(nntr_room *room) { delete room; }
 
 } // extern "C"
