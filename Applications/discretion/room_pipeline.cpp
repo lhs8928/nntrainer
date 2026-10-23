@@ -881,6 +881,7 @@ void RoomPipeline::complete(const Segment &seg) {
   const long base = static_cast<long>(seg.start * 1000 / RATE);
   struct Line {
     std::string id;
+    std::vector<std::string> parts;
     long start, end;
     std::string text, local;
     std::vector<float> vector;
@@ -890,6 +891,7 @@ void RoomPipeline::complete(const Segment &seg) {
   for (const auto &t : kept) {
     Line l;
     l.id = "audio-" + std::to_string(++counter_);
+    l.parts = {l.id};
     l.start = base + t.a;
     l.end = std::max(base + t.a, base + t.b);
     l.text = t.text;
@@ -921,6 +923,7 @@ void RoomPipeline::complete(const Segment &seg) {
     if (!joined.empty() && !label(l.id).empty() &&
         label(joined.back().id) == label(l.id)) {
       Line &j = joined.back();
+      j.parts.push_back(l.id);
       j.end = l.end;
       j.text += " " + l.text;
       j.hidden.overlap_ms += l.hidden.overlap_ms;
@@ -959,6 +962,7 @@ void RoomPipeline::complete(const Segment &seg) {
       info["shared"] = l.hidden.shared;
     RoomLine out;
     out.id = l.id;
+    out.parts = l.parts;
     out.speaker = label(l.id);
     out.start_ms = l.start;
     out.end_ms = l.end;

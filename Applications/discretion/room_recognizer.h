@@ -20,8 +20,10 @@
 #include <condition_variable>
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -47,6 +49,11 @@ public:
   /** @brief throws with the reason */
   void enroll(const std::string &person, const int16_t *pcm, size_t n);
   void mapSpeaker(const std::string &label, const std::string &person);
+  /**
+   * @brief a line a person corrected: every diarizer turn it holds stays
+   *        theirs (nullopt: nobody); false when the line is unknown
+   */
+  bool pin(const std::string &line, const std::optional<std::string> &person);
   /** @brief waits until everything fed is recognized */
   void flush();
   /** @brief the pending events as a JSON array, kept until consumed() */
@@ -69,6 +76,9 @@ private:
   std::unique_ptr<RoomDiarizer> registry_;
   std::unique_ptr<RoomPipeline> pipeline_;
   std::string gate_, gate_error_;
+
+  std::mutex parts_m_;
+  std::map<std::string, std::vector<std::string>> parts_; // line -> turns
 
   std::mutex m_;
   std::condition_variable cv_;

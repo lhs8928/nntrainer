@@ -126,6 +126,10 @@ bool Room::init(const std::string &config, std::string &error) {
   pipeline_ = std::make_unique<RoomPipeline>(
     *models_, *registry_, std::move(gate),
     [this](const RoomLine &l) {
+      {
+        std::lock_guard<std::mutex> lk(parts_m_);
+        parts_[l.id] = l.parts;
+      }
       json e;
       e["type"] = "line";
       e["id"] = l.id;
@@ -199,6 +203,23 @@ void Room::enroll(const std::string &person, const int16_t *pcm, size_t n) {
 
 void Room::mapSpeaker(const std::string &label, const std::string &person) {
   registry_->mapSpeaker(label, person);
+}
+
+bool Room::pin(const std::string &line,
+               const std::optional<std::string> &person) {
+  std::vector<std::string> parts;
+  {
+    std::lock_guard<std::mutex> lk(parts_m_);
+    auto it = parts_.find(line);
+    if (it == parts_.end())
+      return false;
+    parts = it->second;
+  }
+  // a joined line holds the turns of one segment the diarizer gave one voice:
+  // the person corrected all of it (ALICE pins only the line's first turn)
+  for (const auto &turn : parts)
+    registry_->pin(turn, person);
+  return true;
 }
 
 void Room::flush() {
@@ -320,6 +341,19 @@ int nntr_room_map_speaker(nntr_room *room, const char *label,
   try {
     room->room.mapSpeaker(label, person);
     return 0;
+  } catch (const std::exception &) {
+    return -1;
+  }
+}
+
+int nntr_room_pin(nntr_room *room, const char *line_id, const char *person) {
+  if (!room || !line_id)
+    return -1;
+  try {
+    return room->room.pin(line_id, person ? std::optional<std::string>(person)
+                                          : std::nullopt)
+             ? 0
+             : 1;
   } catch (const std::exception &) {
     return -1;
   }

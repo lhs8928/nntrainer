@@ -62,8 +62,9 @@ public:
 
 /** @brief one emitted line and how it was recognized and labelled */
 struct RoomLine {
-  std::string id;      // audio-N
-  std::string speaker; // "" = no speaker
+  std::string id;                 // audio-N
+  std::vector<std::string> parts; // the diarizer turns it holds (id first)
+  std::string speaker;            // "" = no speaker
   long start_ms = 0, end_ms = 0;
   std::string text;
   std::vector<std::string> doubt;

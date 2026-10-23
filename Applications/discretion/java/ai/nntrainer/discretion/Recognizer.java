@@ -52,6 +52,14 @@ public final class Recognizer implements AutoCloseable {
     return nativeMapSpeaker(check(), label, person) == 0;
   }
 
+  /**
+   * @brief a line a person corrected stays theirs (person null: nobody)
+   * @return false when the recognizer does not know the line
+   */
+  public boolean pin(String lineId, String person) {
+    return nativePin(check(), lineId, person) == 0;
+  }
+
   /** @brief events since the last poll, a JSON array */
   public String poll() { return nativePoll(check()); }
 
@@ -79,6 +87,7 @@ public final class Recognizer implements AutoCloseable {
   private static native void nativeEnroll(long h, String person, short[] pcm);
   private static native int nativeMapSpeaker(long h, String label,
                                              String person);
+  private static native int nativePin(long h, String lineId, String person);
   private static native String nativePoll(long h);
   private static native String nativeStatus(long h);
   private static native int nativeFlush(long h);

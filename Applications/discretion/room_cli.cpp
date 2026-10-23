@@ -13,14 +13,17 @@
  * does, and writes every event as one JSON line on stdout:
  *
  *   nntr_room --config '{"model_dir":..,"sd_weights":..,"silero":..}'
- *             [--enroll NAME=voice.wav ...] [--realtime] [--seconds S] INPUT
+ *             [--enroll NAME=voice.wav ...] [--pin LINE=NAME ...]
+ *             [--realtime] [--seconds S] INPUT
  *
  * INPUT is a 16 kHz mono PCM16 WAV file, '-' for raw PCM16 on stdin (a live
  * stream relayed from another machine), or 'mic' for the phone's microphone
  * (AAudio, voice recognition input). --realtime feeds a file at its own pace,
  * as a microphone would. Listening ends at the end of the input, after
  * --seconds, or on SIGINT / SIGTERM / SIGHUP; what was heard is still
- * recognized and written before the program exits.
+ * recognized and written before the program exits. --pin corrects a line as a
+ * person would, as soon as it is written (NAME '-' = nobody), to see what the
+ * diarizer makes of the lines after it.
  */
 
 #include <atomic>
@@ -30,6 +33,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <string>
 #include <thread>
 #include <vector>
@@ -163,6 +167,24 @@ std::string text(nntr_room *room, int (*get)(nntr_room *, char *, int)) {
 
 /** @brief one JSON line per event of the array nntr_room_poll gave */
 std::FILE *events = stdout;
+/** @brief --pin: line id -> person ("-" = nobody), applied once written */
+std::map<std::string, std::string> pins;
+nntr_room *pinned_room = nullptr;
+
+void write(const std::string &event) {
+  std::fprintf(events, "%s\n", event.c_str());
+  for (auto it = pins.begin(); it != pins.end(); ++it)
+    if (event.find("\"type\":\"line\"") != std::string::npos &&
+        event.find("\"id\":\"" + it->first + "\"") != std::string::npos) {
+      const int rc =
+        nntr_room_pin(pinned_room, it->first.c_str(),
+                      it->second == "-" ? nullptr : it->second.c_str());
+      std::fprintf(stderr, "pin %s -> %s: %d\n", it->first.c_str(),
+                   it->second.c_str(), rc);
+      pins.erase(it);
+      break;
+    }
+}
 
 void print(const std::string &array) {
   // the events are JSON objects: split at the top level
@@ -188,14 +210,14 @@ void print(const std::string &array) {
     if (c == '}')
       --depth;
     if (c == ',' && depth == 0) {
-      std::fprintf(events, "%s\n", cur.c_str());
+      write(cur);
       cur.clear();
       continue;
     }
     cur += c;
   }
   if (!cur.empty())
-    std::fprintf(events, "%s\n", cur.c_str());
+    write(cur);
   std::fflush(events);
 }
 
@@ -218,6 +240,14 @@ int main(int argc, char **argv) {
         return 2;
       }
       enroll.emplace_back(v.substr(0, eq), v.substr(eq + 1));
+    } else if (a == "--pin" && i + 1 < argc) {
+      const std::string v = argv[++i];
+      const size_t eq = v.find('=');
+      if (eq == std::string::npos) {
+        std::fprintf(stderr, "--pin LINE=NAME\n");
+        return 2;
+      }
+      pins[v.substr(0, eq)] = v.substr(eq + 1);
     } else if (a == "--realtime")
       realtime = true;
     else if (a == "--seconds" && i + 1 < argc)
@@ -226,8 +256,9 @@ int main(int argc, char **argv) {
       input = a;
   }
   if (config.empty() || input.empty()) {
-    std::fprintf(stderr, "usage: nntr_room --config JSON [--enroll NAME=WAV] "
-                         "[--realtime] [--seconds S] INPUT.wav|-|mic\n");
+    std::fprintf(
+      stderr, "usage: nntr_room --config JSON [--enroll NAME=WAV] "
+              "[--pin LINE=NAME] [--realtime] [--seconds S] INPUT.wav|-|mic\n");
     return 2;
   }
   // the models log to stdout: the events keep stdout to themselves
@@ -245,6 +276,7 @@ int main(int argc, char **argv) {
     std::fprintf(stderr, "error: %s\n", err);
     return 1;
   }
+  pinned_room = room;
   std::fprintf(
     stderr, "loaded in %.1f s: %s\n",
     std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)

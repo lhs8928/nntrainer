@@ -97,6 +97,13 @@ JNIEXPORT jint JNICALL Java_ai_nntrainer_discretion_Recognizer_nativeMapSpeaker(
                                str(env, person).c_str());
 }
 
+JNIEXPORT jint JNICALL Java_ai_nntrainer_discretion_Recognizer_nativePin(
+  JNIEnv *env, jclass, jlong h, jstring line, jstring person) {
+  const std::string who = str(env, person);
+  return nntr_room_pin(room(h), str(env, line).c_str(),
+                       person ? who.c_str() : nullptr);
+}
+
 JNIEXPORT jstring JNICALL Java_ai_nntrainer_discretion_Recognizer_nativePoll(
   JNIEnv *env, jclass, jlong h) {
   return text(env, room(h), nntr_room_poll);

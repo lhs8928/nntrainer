@@ -30,6 +30,8 @@
  *   {"type":"line","id":"audio-3","speaker":"화자 1"|null,"start_ms":..,
  *    "end_ms":..,"text":..,"doubt":[..],"info":{..}}
  *   {"type":"moved","moved":{"audio-1":"화자 2"}}   earlier lines relabelled
+ *     (only by nntr_room_map_speaker / nntr_room_pin: a label once shown
+ *     stays; an id may be a part inside a joined line)
  *   {"type":"error","message":..}
  */
 
@@ -66,6 +68,16 @@ int nntr_room_enroll(nntr_room *room, const char *person, const int16_t *pcm,
 /** @brief "이건 나예요": a provisional label is this person; 0 or -1 */
 int nntr_room_map_speaker(nntr_room *room, const char *label,
                           const char *person);
+
+/**
+ * @brief a line a person corrected ("이 말은 ○○", "내 말 아님"): it stays
+ *        theirs when the diarizer clusters again, and so do the parts a
+ *        joined line holds
+ * @param line_id the line's "id" from nntr_room_poll
+ * @param person the person, NULL = nobody (the line leaves clustering)
+ * @return 0 applied, 1 unknown line (ignored), -1 error
+ */
+int nntr_room_pin(nntr_room *room, const char *line_id, const char *person);
 
 /**
  * @brief the events since the last poll as a JSON array
