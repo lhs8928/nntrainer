@@ -273,7 +273,21 @@ bool Room::pin(const std::string &line,
 }
 
 void Room::flush() {
-  call([this] { pipeline_->flush(); });
+  call([this] {
+    pipeline_->flush();
+    // listening ended before the enrollment had its seconds: say so, the
+    // server must not wait for it
+    std::optional<Enrolling> left;
+    {
+      std::lock_guard<std::mutex> lk(m_);
+      left.swap(enrolling_);
+    }
+    if (left)
+      push({{"type", "enrolled"},
+            {"person", left->person},
+            {"ok", false},
+            {"error", "듣기가 끝나 목소리 등록을 마치지 못했어요."}});
+  });
 }
 
 std::string Room::poll() {

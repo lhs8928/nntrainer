@@ -36,7 +36,8 @@
  *     (only by nntr_room_map_speaker / nntr_room_pin: a label once shown
  *     stays; an id may be a part inside a joined line)
  *   {"type":"enrolled","person":..,"ok":true|false,"error":..}
- *     an enrollment from the room (nntr_room_begin_enrollment) is done
+ *     an enrollment from the room (nntr_room_begin_enrollment) is done, or
+ *     listening ended first (nntr_room_flush: ok false)
  *   {"type":"error","message":..}
  */
 
