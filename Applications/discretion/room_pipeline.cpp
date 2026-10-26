@@ -974,6 +974,16 @@ void RoomPipeline::complete(const Segment &seg) {
   }
 }
 
+// AudioRuntime._work while an enrollment records
+void RoomPipeline::skip(size_t n, double at_ms) {
+  if (at_ms >= 0)
+    align(at_ms);
+  active_.clear();
+  pending_.clear();
+  silent_ = 0;
+  cursor_ += static_cast<long long>(n);
+}
+
 // flush
 void RoomPipeline::flush() {
   if (!pending_.empty()) {

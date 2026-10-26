@@ -49,6 +49,12 @@ public:
   /** @brief throws with the reason */
   void enroll(const std::string &person, const int16_t *pcm, size_t n);
   void mapSpeaker(const std::string &label, const std::string &person);
+  /**
+   * @brief the next seconds of the room are this person's voice (ALICE's
+   *        begin_enrollment): not transcribed, an "enrolled" event when done;
+   *        false while another person's enrollment records
+   */
+  bool beginEnrollment(const std::string &person, double seconds);
   /** @brief a voice the server keeps (WeSpeaker ResNet34); throws why not */
   void enrollVector(const std::string &person,
                     const std::vector<float> &vector);
@@ -75,6 +81,9 @@ private:
   void run();
   void call(std::function<void()> task);
   void push(const nlohmann::json &event);
+  /** @brief enroll_pcm's checks and the embedding; throws why not */
+  std::vector<float> voiceOfRecording(const int16_t *pcm, size_t n);
+  void finishEnrollment();
 
   SpeechOps ops_;
   std::unique_ptr<SpeechModels> models_;
@@ -90,6 +99,12 @@ private:
   std::deque<Item> queue_;
   size_t queued_ = 0;
   bool stop_ = false;
+  struct Enrolling {
+    std::string person;
+    size_t samples = 0;
+    std::vector<int16_t> pcm;
+  };
+  std::optional<Enrolling> enrolling_; // guarded by m_
   std::thread worker_;
 
   std::mutex out_m_;

@@ -91,6 +91,14 @@ JNIEXPORT void JNICALL Java_ai_nntrainer_discretion_Recognizer_nativeEnroll(
     raise(env, err);
 }
 
+JNIEXPORT jint JNICALL
+Java_ai_nntrainer_discretion_Recognizer_nativeBeginEnrollment(JNIEnv *env,
+                                                              jclass, jlong h,
+                                                              jstring person,
+                                                              jdouble seconds) {
+  return nntr_room_begin_enrollment(room(h), str(env, person).c_str(), seconds);
+}
+
 JNIEXPORT void JNICALL
 Java_ai_nntrainer_discretion_Recognizer_nativeEnrollVector(JNIEnv *env, jclass,
                                                            jlong h,

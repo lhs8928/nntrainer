@@ -35,6 +35,8 @@
  *   {"type":"moved","moved":{"audio-1":"화자 2"}}   earlier lines relabelled
  *     (only by nntr_room_map_speaker / nntr_room_pin: a label once shown
  *     stays; an id may be a part inside a joined line)
+ *   {"type":"enrolled","person":..,"ok":true|false,"error":..}
+ *     an enrollment from the room (nntr_room_begin_enrollment) is done
  *   {"type":"error","message":..}
  */
 
@@ -67,6 +69,15 @@ int nntr_room_feed(nntr_room *room, const int16_t *pcm, int n, double at_ms);
  */
 int nntr_room_enroll(nntr_room *room, const char *person, const int16_t *pcm,
                      int n, char *err, int err_cap);
+
+/**
+ * @brief the next seconds (3-15, ALICE uses 6) of the room are this person's
+ *        voice: not transcribed (ask the others to be quiet), an "enrolled"
+ *        event tells how it went
+ * @return 0 started, 1 another person's enrollment is recording, -1 error
+ */
+int nntr_room_begin_enrollment(nntr_room *room, const char *person,
+                               double seconds);
 
 /**
  * @brief a voice the server keeps (a profile or remembered voice): n numbers

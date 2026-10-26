@@ -110,6 +110,12 @@ public:
    */
   void feed(const int16_t *pcm, size_t n, double at_ms = -1,
             bool exact = false);
+  /**
+   * @brief n samples someone's voice enrollment took: not meeting speech, the
+   *        open segment is dropped and the clock moves on (ALICE's
+   *        AudioRuntime while it enrolls)
+   */
+  void skip(size_t n, double at_ms = -1);
   /** @brief listening ends: what is still open is recognized and emitted */
   void flush();
   /** @brief audio missing for longer than GAP_MS is meeting time */

@@ -190,7 +190,7 @@ void Room::call(std::function<void()> task) {
   f.get();
 }
 
-void Room::enroll(const std::string &person, const int16_t *pcm, size_t n) {
+std::vector<float> Room::voiceOfRecording(const int16_t *pcm, size_t n) {
   // ALICE's AudioRuntime.enroll_pcm
   if (n < 3 * 16000 || n > 15 * 16000)
     throw std::invalid_argument("등록 음성은 3~15초여야 합니다.");
@@ -202,7 +202,40 @@ void Room::enroll(const std::string &person, const int16_t *pcm, size_t n) {
   std::vector<float> x(n);
   for (size_t i = 0; i < n; ++i)
     x[i] = pcm[i] / 32768.0f;
-  call([&] { registry_->enroll(person, models_->embed(x)); });
+  return models_->embed(x);
+}
+
+void Room::enroll(const std::string &person, const int16_t *pcm, size_t n) {
+  call([&] { registry_->enroll(person, voiceOfRecording(pcm, n)); });
+}
+
+bool Room::beginEnrollment(const std::string &person, double seconds) {
+  if (!(seconds >= 3 && seconds <= 15))
+    throw std::invalid_argument("등록 음성은 3~15초여야 합니다.");
+  std::lock_guard<std::mutex> lk(m_);
+  if (enrolling_)
+    return false;
+  enrolling_ = Enrolling{person, static_cast<size_t>(seconds * 16000), {}};
+  return true;
+}
+
+// on the worker, once the enrollment has its seconds
+void Room::finishEnrollment() {
+  Enrolling e;
+  {
+    std::lock_guard<std::mutex> lk(m_);
+    e = std::move(*enrolling_);
+    enrolling_.reset();
+  }
+  json ev = {{"type", "enrolled"}, {"person", e.person}};
+  try {
+    registry_->enroll(e.person, voiceOfRecording(e.pcm.data(), e.pcm.size()));
+    ev["ok"] = true;
+  } catch (const std::exception &ex) {
+    ev["ok"] = false;
+    ev["error"] = ex.what();
+  }
+  push(ev);
 }
 
 void Room::mapSpeaker(const std::string &label, const std::string &person) {
@@ -266,6 +299,7 @@ std::string Room::status() {
   {
     std::lock_guard<std::mutex> lk(m_);
     j["queued_seconds"] = std::round(queued_ / 1600.0) / 10.0;
+    j["enrolling"] = enrolling_ ? json(enrolling_->person) : json(nullptr);
   }
   j["gate"] = gate_;
   if (!gate_error_.empty())
@@ -292,8 +326,24 @@ void Room::run() {
       item.task();
       continue;
     }
+    bool taken = false, full = false;
+    {
+      std::lock_guard<std::mutex> lk(m_);
+      if (enrolling_) {
+        taken = true;
+        enrolling_->pcm.insert(enrolling_->pcm.end(), item.pcm.begin(),
+                               item.pcm.end());
+        full = enrolling_->pcm.size() >= enrolling_->samples;
+      }
+    }
     try {
-      pipeline_->feed(item.pcm.data(), item.pcm.size(), item.at_ms);
+      if (taken) {
+        pipeline_->skip(item.pcm.size(), item.at_ms);
+        if (full)
+          finishEnrollment();
+      } else {
+        pipeline_->feed(item.pcm.data(), item.pcm.size(), item.at_ms);
+      }
     } catch (const std::exception &e) {
       push({{"type", "error"},
             {"message", std::string("음성 처리 실패: ") + e.what()}});
@@ -358,6 +408,17 @@ int nntr_room_map_speaker(nntr_room *room, const char *label,
   try {
     room->room.mapSpeaker(label, person);
     return 0;
+  } catch (const std::exception &) {
+    return -1;
+  }
+}
+
+int nntr_room_begin_enrollment(nntr_room *room, const char *person,
+                               double seconds) {
+  if (!room || !person)
+    return -1;
+  try {
+    return room->room.beginEnrollment(person, seconds) ? 0 : 1;
   } catch (const std::exception &) {
     return -1;
   }

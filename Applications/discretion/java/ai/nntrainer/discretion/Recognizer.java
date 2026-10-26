@@ -48,6 +48,18 @@ public final class Recognizer implements AutoCloseable {
   }
 
   /**
+   * @brief the next seconds of the room are this person's voice (not
+   *        transcribed); an "enrolled" event tells how it went
+   * @return false while another person's enrollment is recording
+   */
+  public boolean beginEnrollment(String person, double seconds) {
+    final int rc = nativeBeginEnrollment(check(), person, seconds);
+    if (rc < 0)
+      throw new IllegalArgumentException("enrollment needs 3-15 s");
+    return rc == 0;
+  }
+
+  /**
    * @brief a voice the server keeps (256 numbers, WeSpeaker ResNet34), kept
    *        in memory only; throws IllegalStateException with why
    */
@@ -101,6 +113,8 @@ public final class Recognizer implements AutoCloseable {
   private static native long nativeCreate(String config);
   private static native int nativeFeed(long h, short[] pcm, int n, double atMs);
   private static native void nativeEnroll(long h, String person, short[] pcm);
+  private static native int nativeBeginEnrollment(long h, String person,
+                                                 double seconds);
   private static native void nativeEnrollVector(long h, String person,
                                                 float[] vector);
   private static native float[] nativeVoiceOf(long h, String person);

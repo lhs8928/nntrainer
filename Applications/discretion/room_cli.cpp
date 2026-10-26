@@ -35,6 +35,7 @@
  *   {"op":"map_speaker","label":"화자 2","person":"홍길동"}
  *   {"op":"enroll","person":"홍길동","vector":[256 numbers]}
  *   {"op":"remember","person":"홍길동","on":true}   its voice at the end
+ *   {"op":"record","person":"홍길동","seconds":6}  the next seconds are theirs
  * and answers each with {"type":"ack","op":..,"rc":..} (rc as the C function;
  * "k" is copied when given).
  */
@@ -237,6 +238,9 @@ void readCommands(nntr_room *room) {
         ack["rc"] = rc;
         if (rc != 0)
           ack["error"] = err;
+      } else if (op == "record" && someone) {
+        ack["rc"] = nntr_room_begin_enrollment(room, person.c_str(),
+                                               c.value("seconds", 6.0));
       } else if (op == "remember" && someone) {
         std::lock_guard<std::mutex> lk(remembered_m);
         if (c.value("on", true))
