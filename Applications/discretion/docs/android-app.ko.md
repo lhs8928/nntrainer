@@ -270,6 +270,29 @@ r.close();
 - 다시 시작하기 전 줄의 ID는 새 인식기가 모른다. 그 줄을 가리키는 `pin`은 버린다.
 - 회의 시계가 이어지게 첫 `feed`의 `atMs`에 회의 시작부터 지난 시간을 넣는다. 앱이 회의 시작 시각을 따로 저장해 둬야 한다.
 
+### 3.8 (선택) ASR 비교: 같은 소리를 서버에도 보내기
+
+ALICE의 **ASR 비교** 탭(ALICE Issue #58)을 쓸 때만 해당한다.
+폰이 소리를 서버로 보내 서버 ASR이 정식 전사를 맡고, 폰이 같은 소리로 인식한 줄은 비교용으로만 보낸다.
+서버가 소리를 인식하도록 설정돼 있어야 한다(`AMBIENT_ROOM_RECOGNITION=server`).
+
+```
+AudioRecord ─┬─▶ Recognizer.feed()  ─▶ line 이벤트 ─▶ POST /api/device/compare-lines (비교용)
+             └─▶ POST /api/device/audio/chunk (같은 표본, 서버 ASR이 정식 전사)
+```
+
+| 요청 | 내용 |
+|---|---|
+| `POST /api/device/audio/start` | `meeting/start` 뒤에 한 번. 앱은 소리 흐름 ID(예: UUID)를 하나 정한다. |
+| `POST /api/device/audio/chunk` | 본문은 PCM16 원본(5초 이하), 헤더 `X-Audio-Stream: <흐름 ID>`, `X-Audio-Position: <이 조각 첫 표본의 번호>` |
+| `POST /api/device/compare-lines` | `{"meeting_id","stream":"<흐름 ID>","lines":[{n,speaker,start_ms,end_ms,text,doubt?}]}`, 번호 규칙은 3.3과 같다. |
+| `POST /api/device/audio/stop` | 회의 끝, `meeting/end` 전에 |
+
+- `feed`에 넣은 표본과 `audio/chunk`로 보낸 표본이 같아야 한다. `line` 이벤트의 `start_ms`는 흐름의 0번째 표본부터 센 시간이고, 서버가 그 흐름의 회의 시계 원점만큼 옮겨 놓는다. 줄 경계와 화자 라벨은 맞추지 않는다.
+- 서버가 아직 그 흐름의 소리를 받지 못했으면 `compare-lines`가 409이고 응답의 `phase`는 `"meeting"`이다. 잠시 뒤 다시 보낸다. `phase`가 다르면 회의가 끝난 것이다.
+- 이 방식에서는 사람의 화자 수정이 폰에 오지 않는다(`speaker-ops` 없음).
+- 시험 도구: `nntr_room --pcm-out FIFO`가 인식하는 소리를 그대로 FIFO에 쓰고, ALICE `tools/phone_relay.py --compare`가 그것을 서버로 보낸다.
+
 ## 4. 성능과 확인된 범위
 
 시험 폰은 Galaxy S25+이다.

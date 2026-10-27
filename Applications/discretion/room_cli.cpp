@@ -15,7 +15,7 @@
  *   nntr_room --config '{"model_dir":..,"sd_weights":..,"silero":..}'
  *             [--enroll NAME=voice.wav ...] [--enroll-vector NAME=v.json ...]
  *             [--pin LINE=NAME ...] [--voices NAME,NAME] [--commands]
- *             [--realtime] [--seconds S] INPUT
+ *             [--pcm-out PATH] [--realtime] [--seconds S] INPUT
  *
  * INPUT is a 16 kHz mono PCM16 WAV file, '-' for raw PCM16 on stdin (a live
  * stream relayed from another machine), or 'mic' for the phone's microphone
@@ -27,7 +27,11 @@
  * diarizer makes of the lines after it. --enroll-vector enrolls a voice the
  * server keeps (a JSON array of 256 numbers, or an object with "vector");
  * --voices writes, at the end, {"type":"voice","person","vector"} for each
- * name (the voice to remember, nothing when there is none).
+ * name (the voice to remember, nothing when there is none). --pcm-out also
+ * writes the audio it recognizes, as raw PCM16 in the order it is fed, to PATH
+ * (a file or a FIFO another process reads): the app's job of sending the same
+ * audio to the server while the phone recognizes it (ALICE's ASR 비교 tab).
+ * Sample k of that output is time k / 16 ms of the line events.
  *
  * --commands reads corrections from stdin while it listens (not with '-'),
  * one JSON object per line, as an app gets them from the server:
@@ -341,6 +345,7 @@ int main(int argc, char **argv) {
   std::vector<std::string> voices;
   bool commands = false;
   bool realtime = false;
+  std::string pcm_out;
   double seconds = 0;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
@@ -372,6 +377,8 @@ int main(int argc, char **argv) {
       }
     } else if (a == "--commands") {
       commands = true;
+    } else if (a == "--pcm-out" && i + 1 < argc) {
+      pcm_out = argv[++i];
     } else if (a == "--pin" && i + 1 < argc) {
       const std::string v = argv[++i];
       const size_t eq = v.find('=');
@@ -391,7 +398,8 @@ int main(int argc, char **argv) {
     std::fprintf(stderr,
                  "usage: nntr_room --config JSON [--enroll NAME=WAV] "
                  "[--enroll-vector NAME=JSON] [--pin LINE=NAME] [--voices A,B] "
-                 "[--commands] [--realtime] [--seconds S] INPUT.wav|-|mic\n");
+                 "[--commands] [--pcm-out PATH] [--realtime] [--seconds S] "
+                 "INPUT.wav|-|mic\n");
     return 2;
   }
   // the models log to stdout: the events keep stdout to themselves
@@ -455,8 +463,25 @@ int main(int argc, char **argv) {
                              std::chrono::steady_clock::now() - start)
                                .count() >= seconds);
   };
+  // the audio as it is fed (a FIFO waits here until its reader opens it); a
+  // reader that goes away ends the copy, never the recognition
+  FILE *copy = nullptr;
+  if (!pcm_out.empty()) {
+    std::signal(SIGPIPE, SIG_IGN);
+    copy = std::fopen(pcm_out.c_str(), "wb");
+    if (!copy) {
+      std::fprintf(stderr, "error: cannot write %s\n", pcm_out.c_str());
+      nntr_room_destroy(room);
+      return 1;
+    }
+  }
   size_t fed = 0;
   auto give = [&](const int16_t *x, size_t n) {
+    if (copy && (std::fwrite(x, 2, n, copy) != n || std::fflush(copy) != 0)) {
+      std::fprintf(stderr, "pcm-out: the reader went away, copy stopped\n");
+      std::fclose(copy);
+      copy = nullptr;
+    }
     while (nntr_room_feed(room, x, static_cast<int>(n), -1) == 1) {
       print(text(room, nntr_room_poll));
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -526,6 +551,8 @@ int main(int argc, char **argv) {
       give(pcm.data() + i, std::min(CHUNK, pcm.size() - i));
     }
   }
+  if (copy)
+    std::fclose(copy);
   nntr_room_flush(room);
   print(text(room, nntr_room_poll));
   {
