@@ -164,8 +164,38 @@ BatchResult BatchDiarizer::run(const std::vector<float> &audio, bool diarize,
   return r;
 }
 
+bool BatchDiarizer::useERes2NetV2(const std::string &weights_path) {
+  if (!eres2_loader_.load(weights_path)) {
+    std::cerr << "BatchDiarizer: failed to load " << weights_path << "\n";
+    return false;
+  }
+  std::string missing;
+  if (!eres2_.init(eres2_loader_, &missing)) {
+    std::cerr << "BatchDiarizer: ERes2NetV2 weights lack " << missing << "\n";
+    return false;
+  }
+  use_eres2_ = true;
+  return true;
+}
+
+const char *BatchDiarizer::speakerModel() const {
+  return use_eres2_ ? "eres2netv2" : "wespeaker";
+}
+
+size_t BatchDiarizer::embeddingDim() const {
+  return use_eres2_ ? ERes2NetV2::DIM : 256;
+}
+
 std::vector<float> BatchDiarizer::embed(const std::vector<float> &audio,
                                         double start_sec, double end_sec) {
+  if (use_eres2_) {
+    const size_t a = std::min(
+      audio.size(), static_cast<size_t>(std::max(0.0, start_sec) * 16000.0));
+    const size_t b = std::min(
+      audio.size(),
+      std::max(a, static_cast<size_t>(std::max(0.0, end_sec) * 16000.0)));
+    return eres2_.embed(audio.data() + a, b - a);
+  }
   // The fbank is mean-normalized over the whole 10 s window, so the window must
   // hold the span's speech only: zero padding around a short span drowns its
   // features in silence. A span shorter than the window is repeated to fill it,

@@ -100,6 +100,8 @@ bool Room::init(const std::string &config, std::string &error) {
   SpeechOptions opt;
   opt.asr.model_dir = c.value("model_dir", "");
   opt.sd_weights = c.value("sd_weights", "");
+  opt.speaker_model = c.value("speaker_model", "wespeaker");
+  opt.speaker_weights = c.value("speaker_weights", "");
   opt.asr.language = c.value("language", "Korean");
   opt.asr.threads = c.value("threads", 0);
   // ALICE's segments run up to 12 s (more with the bridge): a 12.5 s graph
@@ -115,7 +117,10 @@ bool Room::init(const std::string &config, std::string &error) {
     return false;
   models_ = std::make_unique<OpsModels>(ops_);
   DiarizerOptions d;
-  d.same = d.threshold = c.value("speaker_threshold", .6);
+  // ALICE's thresholds: 0.66 for ERes2NetV2 (its default model), 0.6 for
+  // WeSpeaker ResNet34 (speech.config.speaker_threshold)
+  d.same = d.threshold = c.value(
+    "speaker_threshold", ops_.speakerModel() == "eres2netv2" ? .66 : .6);
   if (c.contains("labels_in_use"))
     for (const auto &l : c["labels_in_use"])
       d.reserved.insert(l.get<std::string>());
@@ -244,10 +249,10 @@ void Room::mapSpeaker(const std::string &label, const std::string &person) {
 
 void Room::enrollVector(const std::string &person,
                         const std::vector<float> &vector) {
-  if (vector.size() != static_cast<size_t>(SpeechOps::EMBEDDING_DIM))
-    throw std::invalid_argument("목소리 벡터는 " +
-                                std::to_string(SpeechOps::EMBEDDING_DIM) +
-                                "개 숫자여야 합니다 (WeSpeaker ResNet34).");
+  if (vector.size() != static_cast<size_t>(ops_.embeddingDim()))
+    throw std::invalid_argument(
+      "목소리 벡터는 " + std::to_string(ops_.embeddingDim()) +
+      "개 숫자여야 합니다 (" + ops_.speakerModel() + ").");
   registry_->enroll(person, vector);
 }
 

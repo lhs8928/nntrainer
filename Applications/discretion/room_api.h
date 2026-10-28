@@ -18,13 +18,18 @@
  * config_json (all optional but the two model paths):
  *   model_dir          Qwen3-ASR model directory
  *   sd_weights         speaker_diarization.bin (PyanNet + WeSpeaker)
+ *   speaker_model      "wespeaker" (default) or "eres2netv2": the voice model
+ *                      (ERes2NetV2 is the ALICE server's: the same samples
+ *                      give the server's 192 numbers)
+ *   speaker_weights    speaker_eres2netv2.bin, for "eres2netv2"
  *   language           "Korean" (default), "" = the model decides
  *   asr_secs           model graph lengths (default [8, 12.5])
  *   threads            worker threads of the models (0 = default)
  *   vad                "silero" (default) or "energy"
  *   silero             silero_vad_v6.onnx path (energy gate when missing)
  *   silero_threshold   0.3
- *   speaker_threshold  0.6 (WeSpeaker ResNet34, ALICE's value for it)
+ *   speaker_threshold  ALICE's value for the voice model: 0.6 (WeSpeaker),
+ *                      0.66 (ERes2NetV2)
  *   labels_in_use      labels an earlier run of this meeting showed, e.g.
  *                      ["화자 1","화자 2"]: a new voice never gets them
  *                      (the app restarted mid-meeting)
@@ -82,7 +87,8 @@ int nntr_room_begin_enrollment(nntr_room *room, const char *person,
 
 /**
  * @brief a voice the server keeps (a profile or remembered voice): n numbers
- *        of WeSpeaker ResNet34 (256), kept in memory only; 0 or -1 with the
+ *        of the voice model (256 WeSpeaker, 192 ERes2NetV2), kept in memory
+ *        only; 0 or -1 with the
  *        reason in err
  */
 int nntr_room_enroll_vector(nntr_room *room, const char *person,

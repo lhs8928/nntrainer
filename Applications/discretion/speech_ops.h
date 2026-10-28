@@ -13,7 +13,8 @@
  * 16 kHz mono PCM16 samples, writing JSON to an output file:
  *
  *   ASR      text and word timestamps of one segment (Qwen3-ASR)
- *   EMBED    one speaker embedding of the whole input (WeSpeaker ResNet34)
+ *   EMBED    one speaker embedding of the whole input (WeSpeaker ResNet34,
+ *            or ERes2NetV2 with --speaker-model eres2netv2)
  *   SEGMENT  PyanNet powerset classes per frame, per 10 s window
  *
  * A meeting program that keeps its own endpointing and speaker clustering
@@ -43,6 +44,10 @@ struct SpeechOptions {
   AsrOptions asr;              // model, language, threads
   std::vector<float> asr_secs; // one model graph per length, ascending
   std::string sd_weights;      // speaker_diarization.bin
+  // the voice model of EMBED: "wespeaker" (in sd_weights) or "eres2netv2"
+  // (the ALICE server's, in speaker_weights)
+  std::string speaker_model = "wespeaker";
+  std::string speaker_weights; // speaker_eres2netv2.bin
 };
 
 /** @brief one recognized segment: its text and the time of every word */
@@ -59,14 +64,17 @@ struct AsrResult {
 
 class SpeechOps {
 public:
-  /** @brief length of a speaker embedding (WeSpeaker ResNet34) */
-  static constexpr int EMBEDDING_DIM = 256;
-
   SpeechOps();
   ~SpeechOps();
 
   /** @brief load the ASR graphs and the diarization models */
   bool init(const SpeechOptions &opt, std::string &error);
+
+  /** @brief length of a speaker embedding: 256 (WeSpeaker) or 192 */
+  int embeddingDim() const;
+
+  /** @brief "wespeaker" or "eres2netv2" */
+  std::string speakerModel() const;
 
   /**
    * @brief answer one request
@@ -87,7 +95,7 @@ public:
   /** @brief text and word times of 16 kHz samples (Qwen3-ASR) */
   AsrResult recognize(const std::vector<float> &pcm);
 
-  /** @brief one WeSpeaker ResNet34 embedding of the samples */
+  /** @brief one embedding of the samples (the speaker_model's) */
   std::vector<float> embedding(const std::vector<float> &pcm);
 
   /** @brief PyanNet powerset class per frame, per consecutive 10 s window */

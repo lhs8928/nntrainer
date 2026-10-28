@@ -55,7 +55,7 @@ public:
    *        false while another person's enrollment records
    */
   bool beginEnrollment(const std::string &person, double seconds);
-  /** @brief a voice the server keeps (WeSpeaker ResNet34); throws why not */
+  /** @brief a voice the server keeps (of the voice model); throws why not */
   void enrollVector(const std::string &person,
                     const std::vector<float> &vector);
   /** @brief the person's voice over this meeting (ALICE's voice_of) */

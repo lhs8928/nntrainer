@@ -84,7 +84,10 @@ void usage(const char *prog) {
     "        window. One ASR graph per length; longer audio is cut to fit.\n"
     "        --http PORT [--http-host 0.0.0.0] [--token T]: the same requests\n"
     "        over HTTP (GET /health, POST /asr|/embed|/segment with PCM16),\n"
-    "        as speech_server.py does, for devices without Python\n"
+    "        as speech_server.py does, for devices without Python.\n"
+    "        --speaker-model eres2netv2 --speaker-weights B: EMBED with\n"
+    "        ERes2NetV2 (the ALICE server's voice model, 192 numbers) from\n"
+    "        speaker_eres2netv2.bin instead of WeSpeaker\n"
     "Serve: --serve keeps the ASR model loaded and reads requests from stdin,\n"
     "        one per line: WAV<TAB>JSONL<TAB>0|1 (1 = with speaker labels).\n"
     "        Replies on stdout: READY, then OK or ERR <reason> per request.\n"
@@ -105,6 +108,8 @@ struct Args {
   bool batch = false;     // --batch: WhisperX-style whole-file pipeline
   bool speech = false;    // --serve --speech: ASR / EMBED / SEGMENT requests
   std::vector<float> asr_secs; // --asr-sec: model graph lengths (speech)
+  std::string speaker_model = "wespeaker"; // --speaker-model (speech)
+  std::string speaker_weights;             // --speaker-weights (speech)
   discretion::HttpOptions http; // --http PORT: answer over HTTP, not stdin
   bool http_on = false;
   discretion::BatchOptions batch_opt;
@@ -128,6 +133,10 @@ bool parseArgs(int argc, char **argv, Args &a) {
       };
       if (k == "--sd-weights")
         a.sd.weights = next();
+      else if (k == "--speaker-model")
+        a.speaker_model = next();
+      else if (k == "--speaker-weights")
+        a.speaker_weights = next();
       else if (k == "--stream-file")
         a.audio.file = next();
       else if (k == "--stream-speed")
@@ -370,6 +379,8 @@ int speechServeMain(Args &args) {
   opt.asr = args.asr;
   opt.asr_secs = args.asr_secs;
   opt.sd_weights = args.sd.weights;
+  opt.speaker_model = args.speaker_model;
+  opt.speaker_weights = args.speaker_weights;
   discretion::SpeechOps ops;
   std::string error;
   if (!ops.init(opt, error)) {

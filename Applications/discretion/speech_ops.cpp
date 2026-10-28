@@ -115,7 +115,29 @@ bool SpeechOps::init(const SpeechOptions &opt, std::string &error) {
       "cannot initialize the diarization models (" + opt_.sd_weights + ")";
     return false;
   }
+  if (opt_.speaker_model == "eres2netv2") {
+    if (opt_.speaker_weights.empty() ||
+        !sd_->useERes2NetV2(opt_.speaker_weights)) {
+      error = "cannot load the ERes2NetV2 speaker model (" +
+              (opt_.speaker_weights.empty() ? std::string("no speaker_weights")
+                                            : opt_.speaker_weights) +
+              ")";
+      return false;
+    }
+  } else if (opt_.speaker_model != "wespeaker") {
+    error =
+      "speaker_model is wespeaker or eres2netv2, not " + opt_.speaker_model;
+    return false;
+  }
   return true;
+}
+
+int SpeechOps::embeddingDim() const {
+  return sd_ ? static_cast<int>(sd_->embeddingDim()) : 256;
+}
+
+std::string SpeechOps::speakerModel() const {
+  return sd_ ? sd_->speakerModel() : opt_.speaker_model;
 }
 
 std::string SpeechOps::describe() const {
@@ -124,7 +146,8 @@ std::string SpeechOps::describe() const {
   j["language"] = opt_.asr.language;
   j["model"] = opt_.asr.model_dir;
   j["sd_weights"] = opt_.sd_weights;
-  j["embedding_dim"] = EMBEDDING_DIM;
+  j["speaker_model"] = speakerModel();
+  j["embedding_dim"] = embeddingDim();
   j["frame_ms"] = 10000.0 / 589.0;
   return j.dump();
 }

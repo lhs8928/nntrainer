@@ -45,6 +45,7 @@ Java 클래스는 `java/ai/nntrainer/discretion/Recognizer.java` 하나다.
 | `model_dir` | `Qwen3-ASR-1.7B/` 폴더 전체 | 1.1 GB |
 | `sd_weights` | `speaker_diarization.bin` (PyanNet + WeSpeaker ResNet34) | 38 MB |
 | `silero` | `silero_vad_v6.onnx` | 1.1 MB |
+| `speaker_weights` | `speaker_eres2netv2.bin` (ERes2NetV2, 선택) | 68 MB |
 
 시험 폰의 `/data/local/tmp/nntrainer/discretion/models/Qwen3-ASR-1.7B/` 안에는 `.safetensors`가 다른 폴더를 가리키는 링크로 들어 있다.
 앱에 넣을 때는 링크가 아니라 실제 파일을 복사해야 한다.
@@ -75,6 +76,12 @@ Recognizer r = new Recognizer(config);   // 모델을 읽는다(수 초). 실패
 ```
 
 나머지 설정(`asr_secs`, `threads`, `vad`, `silero_threshold`, `speaker_threshold`)은 기본값을 쓰면 된다.
+
+목소리 모델은 `speaker_model`로 고른다.
+- `"wespeaker"`(기본): `sd_weights` 안의 WeSpeaker ResNet34. 목소리 숫자 256개, 줄 하나에 약 55 ms.
+- `"eres2netv2"`: 앨리스 서버와 같은 ERes2NetV2. `speaker_weights`에 `speaker_eres2netv2.bin`을 준다. 같은 소리에서 서버와 같은 목소리 숫자 192개가 나오고(cosine 1.0000), 화자 묶기 기준은 서버와 같은 0.66이 된다. 소리 1초에 약 0.2초(Galaxy S25+).
+- `speaker_eres2netv2.bin`은 서버의 `speaker-eres2netv2.onnx`에서 `Applications/SpeakerDiarization/export_eres2netv2.py`로 만든다.
+- 아래 표의 "256개"는 ERes2NetV2를 고르면 192개다. 모델이 다른 목소리 숫자는 서로 섞어 쓸 수 없다.
 뜻은 `room_api.h` 머리말에 있다.
 
 만드는 데 몇 초가 걸리니 UI 스레드에서 부르지 않는다.

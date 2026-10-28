@@ -102,6 +102,7 @@ SPEECH_SOURCES := \
     $(SD_MODELS)/audio_preprocessor.cpp \
     $(SD_MODELS)/pyannet.cpp \
     $(SD_MODELS)/wespeaker_resnet34.cpp \
+    $(SD_MODELS)/eres2netv2.cpp \
     $(SD_MODELS)/plda_vbx.cpp \
     $(SD_MODELS)/online_speaker_tracker.cpp \
     $(SD_MODELS)/audio_stream_buffer.cpp \
