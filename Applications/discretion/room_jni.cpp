@@ -153,6 +153,22 @@ JNIEXPORT jstring JNICALL Java_ai_nntrainer_discretion_Recognizer_nativeStatus(
   return text(env, room(h), nntr_room_status);
 }
 
+JNIEXPORT jstring JNICALL
+Java_ai_nntrainer_discretion_Recognizer_nativeModelManifest(JNIEnv *env, jclass,
+                                                            jstring path) {
+  const std::string p = str(env, path);
+  std::vector<char> buf(4096);
+  while (true) {
+    const int n = nntr_room_model_manifest(p.c_str(), buf.data(),
+                                           static_cast<int>(buf.size()));
+    if (n < 0)
+      return nullptr;
+    if (n < static_cast<int>(buf.size()))
+      return env->NewStringUTF(buf.data());
+    buf.resize(n + 1);
+  }
+}
+
 JNIEXPORT jint JNICALL
 Java_ai_nntrainer_discretion_Recognizer_nativeFlush(JNIEnv *, jclass, jlong h) {
   return nntr_room_flush(room(h));

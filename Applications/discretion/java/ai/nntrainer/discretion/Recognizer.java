@@ -93,6 +93,16 @@ public final class Recognizer implements AutoCloseable {
 
   public String status() { return nativeStatus(check()); }
 
+  /**
+   * @brief the voice model manifest a voice model file carries (JSON), read
+   *        without loading any model, for POST /api/device/meeting/start
+   *        before the Recognizer is made; "" when the file has none
+   *        (WeSpeaker), null when it is not a weight file
+   */
+  public static String modelManifest(String speakerWeightsPath) {
+    return nativeModelManifest(speakerWeightsPath);
+  }
+
   /** @brief listening ends: blocks until everything fed is recognized */
   public void flush() { nativeFlush(check()); }
 
@@ -111,6 +121,7 @@ public final class Recognizer implements AutoCloseable {
   }
 
   private static native long nativeCreate(String config);
+  private static native String nativeModelManifest(String path);
   private static native int nativeFeed(long h, short[] pcm, int n, double atMs);
   private static native void nativeEnroll(long h, String person, short[] pcm);
   private static native int nativeBeginEnrollment(long h, String person,

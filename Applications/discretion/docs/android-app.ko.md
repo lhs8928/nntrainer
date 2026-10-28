@@ -167,7 +167,7 @@ r.close();
 
 | 요청 | 언제 | 본문 → 응답 |
 |---|---|---|
-| `POST /api/device/meeting/start` | 듣기 시작 | `{}` → 3.2 |
+| `POST /api/device/meeting/start` | 듣기 시작 | `{}` 또는 `{"model_manifest": …}` → 3.2 |
 | `POST /api/device/lines` | 줄이 생길 때마다 | 3.3 |
 | `GET /api/device/speaker-ops?after=k` | 0.5초마다 | 3.4 |
 | `POST /api/device/enrolled` | `enrolled` 이벤트, 등록 실패 | 3.5 |
@@ -178,7 +178,10 @@ r.close();
 ### 3.1 회의 한 번의 순서
 
 ```
-1. POST meeting/start            → meeting_id, next, labels_in_use, ops_next, voices, remember
+0. manifest = Recognizer.modelManifest(speaker_weights 경로)   (모델을 읽지 않음, 3.9)
+1. POST meeting/start {"model_manifest": manifest}   (manifest가 ""이면 {})
+                                 → meeting_id, next, labels_in_use, ops_next, voices, remember
+   409이면: 서버의 목소리 모델이 다르다. speaker_wespeaker.bin으로 바꾸고 {}로 다시 부른다
 2. Recognizer 만들기 (labels_in_use 넣어서)
 3. voices의 각 사람: enrollVector(person, vector)
    remember의 각 사람: "회의 끝에 목소리를 돌려줄 사람" 목록에 넣기
@@ -209,7 +212,7 @@ r.close();
 | `next` | 다음에 보낼 줄 번호. 새 회의면 0이다. |
 | `labels_in_use` | 이 회의에서 이미 보인 화자 라벨. 앱이 다시 시작했을 때 새 목소리가 같은 라벨을 받지 않게 한다. |
 | `ops_next` | 수정 번호의 시작. 이보다 뒤의 수정만 받는다. |
-| `voices` | 참석자의 저장된 목소리(폰 모델, 256개). `enrollVector`로 넣는다. |
+| `voices` | 참석자의 저장된 목소리. 폰 목소리 모델의 숫자(ERes2NetV2 192개, WeSpeaker 256개). `enrollVector`로 넣는다. |
 | `remember` | 목소리 기억을 켠 사람. 회의 끝에 이 사람들의 `voiceOf`를 돌려준다. |
 
 ### 3.3 줄 보내기 `POST /api/device/lines`
@@ -276,7 +279,8 @@ r.close();
 
 - `meeting/end` **전에** 보낸다.
 - 서버는 목소리 기억을 켜고 동의한 사람의 것만 저장한다. 다음 회의의 `start` 응답 `voices`로 돌아온다.
-- 녹음이 아니라 목소리 특징(숫자 256개)만 오간다.
+- 녹음이 아니라 목소리 특징(숫자 192개 또는 256개)만 오간다.
+- ERes2NetV2 폰이면 서버가 그 사람의 기억 목소리 자체를 갱신한다. 서버가 직접 들은 회의에서 쓰는 목소리와 같은 것이다.
 
 ### 3.7 앱이 회의 중에 다시 시작했을 때
 
@@ -307,6 +311,16 @@ AudioRecord ─┬─▶ Recognizer.feed()  ─▶ line 이벤트 ─▶ POST /a
 - 서버가 아직 그 흐름의 소리를 받지 못했으면 `compare-lines`가 409이고 응답의 `phase`는 `"meeting"`이다. 잠시 뒤 다시 보낸다. `phase`가 다르면 회의가 끝난 것이다.
 - 이 방식에서는 사람의 화자 수정이 폰에 오지 않는다(`speaker-ops` 없음).
 - 시험 도구: `nntr_room --pcm-out FIFO`가 인식하는 소리를 그대로 FIFO에 쓰고, ALICE `tools/phone_relay.py --compare`가 그것을 서버로 보낸다.
+
+### 3.9 목소리 모델 알리기 (`model_manifest`, 앨리스 Issue #62)
+
+`speaker_eres2netv2.bin`은 앨리스 서버와 같은 목소리 모델이다. 회의 시작 때 그 사실을 서버에 알리면, 서버에 저장된 목소리(서버 회의에서 등록하거나 기억한 것)를 폰이 그대로 받고, 회의 끝 목소리도 서버 것으로 돌아간다.
+
+- `Recognizer.modelManifest(경로)`(C: `nntr_room_model_manifest`)가 파일 안의 정보를 모델을 읽지 않고 돌려준다. 시험은 `nntr_room --model-manifest speaker_eres2netv2.bin`
+- 그 JSON을 그대로 `POST /api/device/meeting/start`의 `model_manifest`로 보낸다. `speech_capabilities`는 보내지 않는다(그건 다른 방식인 v2)
+- 서버의 목소리 모델과 다르면 409가 온다. `speaker_wespeaker.bin`으로 인식기를 만들고 본문 `{}`로 다시 시작한다
+- 회의 중에 앱이 다시 시작할 때도 같은 `model_manifest`로 부른다. 다른 모델(또는 manifest 없이)로 오면 409다
+- WeSpeaker 파일은 manifest가 없다(`""`). 그때는 `{}`로 시작하고 예전처럼 256개 목소리를 주고받는다
 
 ## 4. 성능과 확인된 범위
 

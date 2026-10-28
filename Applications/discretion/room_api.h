@@ -129,6 +129,16 @@ int nntr_room_poll(nntr_room *room, char *out, int cap);
 /** @brief queue, speakers and gate as JSON; length as nntr_room_poll */
 int nntr_room_status(nntr_room *room, char *out, int cap);
 
+/**
+ * @brief the voice model as ALICE names it (a ModelFingerprint manifest, JSON)
+ *        that a voice model file carries, read without loading any model: the
+ *        app sends it with POST /api/device/meeting/start, before it makes the
+ *        recognizer with the reply's labels_in_use. "" for a file without one
+ *        (speaker_wespeaker.bin, the all-in-one file); -1 when the file cannot
+ *        be read as a weight file. Length as nntr_room_poll.
+ */
+int nntr_room_model_manifest(const char *speaker_weights, char *out, int cap);
+
 /** @brief listening ends: wait until everything fed is recognized */
 int nntr_room_flush(nntr_room *room);
 

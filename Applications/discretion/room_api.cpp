@@ -12,6 +12,8 @@
 
 #include "room_api.h"
 
+#include "../SpeakerDiarization/models/weight_loader.h"
+
 #include <algorithm>
 #include <cmath>
 #include <condition_variable>
@@ -517,6 +519,22 @@ int nntr_room_flush(nntr_room *room) {
   } catch (const std::exception &) {
     return -1;
   }
+}
+
+int nntr_room_model_manifest(const char *speaker_weights, char *out, int cap) {
+  if (!speaker_weights)
+    return -1;
+  speaker_diarization::WeightLoader loader;
+  if (!loader.load(speaker_weights))
+    return -1;
+  std::string manifest;
+  std::vector<uint32_t> dims;
+  if (loader.hasTensor("meta.model_manifest")) {
+    const int8_t *bytes = loader.getTensorI8("meta.model_manifest", &dims);
+    if (bytes && dims.size() == 1)
+      manifest.assign(reinterpret_cast<const char *>(bytes), dims[0]);
+  }
+  return copyOut(manifest, out, cap);
 }
 
 void nntr_room_destroy(nntr_room *room) { delete room; }

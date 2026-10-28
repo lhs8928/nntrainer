@@ -17,6 +17,7 @@
  *             [--enroll NAME=voice.wav ...] [--enroll-vector NAME=v.json ...]
  *             [--pin LINE=NAME ...] [--voices NAME,NAME] [--commands]
  *             [--pcm-out PATH] [--realtime] [--seconds S] INPUT
+ *   nntr_room --model-manifest speaker_eres2netv2.bin
  *
  * INPUT is a 16 kHz mono PCM16 WAV file, '-' for raw PCM16 on stdin (a live
  * stream relayed from another machine), or 'mic' for the phone's microphone
@@ -351,7 +352,19 @@ int main(int argc, char **argv) {
   double seconds = 0;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
-    if (a == "--config" && i + 1 < argc)
+    if (a == "--model-manifest" && i + 1 < argc) {
+      // the voice model manifest a voice model file carries, as the app reads
+      // it before the meeting start; nothing is loaded or recognized
+      char buf[4096];
+      const int n = nntr_room_model_manifest(argv[++i], buf, sizeof(buf));
+      if (n < 0 || n >= static_cast<int>(sizeof(buf))) {
+        std::fprintf(stderr, "cannot read %s\n", argv[i]);
+        return 1;
+      }
+      std::fflush(stdout);
+      std::printf("%s\n", buf);
+      return 0;
+    } else if (a == "--config" && i + 1 < argc)
       config = argv[++i];
     else if (a == "--enroll" && i + 1 < argc) {
       const std::string v = argv[++i];
