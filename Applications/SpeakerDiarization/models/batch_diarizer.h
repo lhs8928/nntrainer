@@ -89,6 +89,13 @@ public:
   /** @brief "wespeaker" or "eres2netv2": the voice model embed() uses */
   const char *speakerModel() const;
 
+  /**
+   * @brief the voice model as ALICE names it (a ModelFingerprint manifest,
+   *        JSON), when its file carries one ("meta.model_manifest", written by
+   *        export_eres2netv2.py); empty otherwise
+   */
+  std::string modelManifest() const;
+
   /** @brief numbers in one embed() result: 256 (WeSpeaker) or 192 */
   size_t embeddingDim() const;
 

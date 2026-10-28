@@ -198,6 +198,17 @@ const char *BatchDiarizer::speakerModel() const {
   return use_eres2_ ? "eres2netv2" : "wespeaker";
 }
 
+std::string BatchDiarizer::modelManifest() const {
+  std::vector<uint32_t> dims;
+  if (!speaker_loader_.hasTensor("meta.model_manifest"))
+    return "";
+  const int8_t *bytes =
+    speaker_loader_.getTensorI8("meta.model_manifest", &dims);
+  if (!bytes || dims.size() != 1)
+    return "";
+  return std::string(reinterpret_cast<const char *>(bytes), dims[0]);
+}
+
 size_t BatchDiarizer::embeddingDim() const {
   return use_eres2_ ? ERes2NetV2::DIM : 256;
 }

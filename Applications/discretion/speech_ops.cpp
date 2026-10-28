@@ -148,6 +148,16 @@ std::string SpeechOps::describe() const {
     j["speaker_weights"] = opt_.speaker_weights;
   }
   j["speaker_model"] = speakerModel();
+  // the voice model as ALICE names it, for the meeting start (a phone whose
+  // model is the server's shares the server's stored voices)
+  const std::string manifest = sd_ ? sd_->modelManifest() : "";
+  if (!manifest.empty()) {
+    try {
+      j["model_manifest"] = json::parse(manifest);
+    } catch (const std::exception &) {
+      // a damaged manifest only loses the sharing, never the meeting
+    }
+  }
   j["embedding_dim"] = embeddingDim();
   j["frame_ms"] = 10000.0 / 589.0;
   return j.dump();
