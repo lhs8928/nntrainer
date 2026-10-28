@@ -99,9 +99,9 @@ bool Room::init(const std::string &config, std::string &error) {
   }
   SpeechOptions opt;
   opt.asr.model_dir = c.value("model_dir", "");
-  opt.sd_weights = c.value("sd_weights", "");
-  opt.speaker_model = c.value("speaker_model", "wespeaker");
+  opt.segmentation_weights = c.value("segmentation_weights", "");
   opt.speaker_weights = c.value("speaker_weights", "");
+  opt.sd_weights = c.value("sd_weights", "");
   opt.asr.language = c.value("language", "Korean");
   opt.asr.threads = c.value("threads", 0);
   // ALICE's segments run up to 12 s (more with the bridge): a 12.5 s graph
@@ -109,8 +109,11 @@ bool Room::init(const std::string &config, std::string &error) {
   opt.asr_secs = c.contains("asr_secs")
                    ? c["asr_secs"].get<std::vector<float>>()
                    : std::vector<float>{8.0f, 12.5f};
-  if (opt.asr.model_dir.empty() || opt.sd_weights.empty()) {
-    error = "model_dir and sd_weights are needed";
+  if (opt.asr.model_dir.empty() ||
+      (opt.sd_weights.empty() &&
+       (opt.segmentation_weights.empty() || opt.speaker_weights.empty()))) {
+    error = "model_dir and the speaker models (segmentation_weights and "
+            "speaker_weights, or sd_weights) are needed";
     return false;
   }
   if (!ops_.init(opt, error))

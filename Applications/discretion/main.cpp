@@ -85,9 +85,10 @@ void usage(const char *prog) {
     "        --http PORT [--http-host 0.0.0.0] [--token T]: the same requests\n"
     "        over HTTP (GET /health, POST /asr|/embed|/segment with PCM16),\n"
     "        as speech_server.py does, for devices without Python.\n"
-    "        --speaker-model eres2netv2 --speaker-weights B: EMBED with\n"
-    "        ERes2NetV2 (the ALICE server's voice model, 192 numbers) from\n"
-    "        speaker_eres2netv2.bin instead of WeSpeaker\n"
+    "        --segmentation-weights S --speaker-weights V in place of\n"
+    "        --sd-weights: PyanNet and a voice model, told by the file\n"
+    "        (speaker_eres2netv2.bin: the ALICE server's ERes2NetV2, 192\n"
+    "        numbers; speaker_wespeaker.bin: WeSpeaker ResNet34)\n"
     "Serve: --serve keeps the ASR model loaded and reads requests from stdin,\n"
     "        one per line: WAV<TAB>JSONL<TAB>0|1 (1 = with speaker labels).\n"
     "        Replies on stdout: READY, then OK or ERR <reason> per request.\n"
@@ -108,8 +109,8 @@ struct Args {
   bool batch = false;     // --batch: WhisperX-style whole-file pipeline
   bool speech = false;    // --serve --speech: ASR / EMBED / SEGMENT requests
   std::vector<float> asr_secs; // --asr-sec: model graph lengths (speech)
-  std::string speaker_model = "wespeaker"; // --speaker-model (speech)
-  std::string speaker_weights;             // --speaker-weights (speech)
+  std::string segmentation_weights; // --segmentation-weights (speech)
+  std::string speaker_weights;      // --speaker-weights (speech)
   discretion::HttpOptions http; // --http PORT: answer over HTTP, not stdin
   bool http_on = false;
   discretion::BatchOptions batch_opt;
@@ -133,8 +134,8 @@ bool parseArgs(int argc, char **argv, Args &a) {
       };
       if (k == "--sd-weights")
         a.sd.weights = next();
-      else if (k == "--speaker-model")
-        a.speaker_model = next();
+      else if (k == "--segmentation-weights")
+        a.segmentation_weights = next();
       else if (k == "--speaker-weights")
         a.speaker_weights = next();
       else if (k == "--stream-file")
@@ -227,8 +228,12 @@ bool parseArgs(int argc, char **argv, Args &a) {
     usage(argv[0]);
     return false;
   }
-  if (!a.no_sd && a.sd.weights.empty()) {
-    std::fprintf(stderr, "error: --sd-weights is required (or use --no-sd)\n");
+  const bool two_files =
+    a.speech && !a.segmentation_weights.empty() && !a.speaker_weights.empty();
+  if (!a.no_sd && a.sd.weights.empty() && !two_files) {
+    std::fprintf(stderr, "error: --sd-weights is required (or use --no-sd; "
+                         "--speech also takes --segmentation-weights and "
+                         "--speaker-weights)\n");
     return false;
   }
   if (a.batch) {
@@ -379,7 +384,7 @@ int speechServeMain(Args &args) {
   opt.asr = args.asr;
   opt.asr_secs = args.asr_secs;
   opt.sd_weights = args.sd.weights;
-  opt.speaker_model = args.speaker_model;
+  opt.segmentation_weights = args.segmentation_weights;
   opt.speaker_weights = args.speaker_weights;
   discretion::SpeechOps ops;
   std::string error;

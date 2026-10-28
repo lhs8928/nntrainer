@@ -110,34 +110,30 @@ bool SpeechOps::init(const SpeechOptions &opt, std::string &error) {
     engines_.push_back(std::move(engine));
   }
   sd_ = std::make_unique<speaker_diarization::BatchDiarizer>();
-  if (!sd_->init(opt_.sd_weights)) {
-    error =
-      "cannot initialize the diarization models (" + opt_.sd_weights + ")";
+  const bool two =
+    !opt_.segmentation_weights.empty() || !opt_.speaker_weights.empty();
+  if (two &&
+      (opt_.segmentation_weights.empty() || opt_.speaker_weights.empty())) {
+    error = "segmentation_weights and speaker_weights go together";
     return false;
   }
-  if (opt_.speaker_model == "eres2netv2") {
-    if (opt_.speaker_weights.empty() ||
-        !sd_->useERes2NetV2(opt_.speaker_weights)) {
-      error = "cannot load the ERes2NetV2 speaker model (" +
-              (opt_.speaker_weights.empty() ? std::string("no speaker_weights")
-                                            : opt_.speaker_weights) +
-              ")";
-      return false;
-    }
-  } else if (opt_.speaker_model != "wespeaker") {
-    error =
-      "speaker_model is wespeaker or eres2netv2, not " + opt_.speaker_model;
+  if (two ? !sd_->init(opt_.segmentation_weights, opt_.speaker_weights)
+          : !sd_->init(opt_.sd_weights)) {
+    error = "cannot initialize the diarization models (" +
+            (two ? opt_.segmentation_weights + ", " + opt_.speaker_weights
+                 : opt_.sd_weights) +
+            ")";
     return false;
   }
   return true;
 }
 
 int SpeechOps::embeddingDim() const {
-  return sd_ ? static_cast<int>(sd_->embeddingDim()) : 256;
+  return sd_ ? static_cast<int>(sd_->embeddingDim()) : 0;
 }
 
 std::string SpeechOps::speakerModel() const {
-  return sd_ ? sd_->speakerModel() : opt_.speaker_model;
+  return sd_ ? sd_->speakerModel() : "";
 }
 
 std::string SpeechOps::describe() const {
@@ -145,7 +141,12 @@ std::string SpeechOps::describe() const {
   j["asr_secs"] = opt_.asr_secs;
   j["language"] = opt_.asr.language;
   j["model"] = opt_.asr.model_dir;
-  j["sd_weights"] = opt_.sd_weights;
+  if (opt_.segmentation_weights.empty()) {
+    j["sd_weights"] = opt_.sd_weights;
+  } else {
+    j["segmentation_weights"] = opt_.segmentation_weights;
+    j["speaker_weights"] = opt_.speaker_weights;
+  }
   j["speaker_model"] = speakerModel();
   j["embedding_dim"] = embeddingDim();
   j["frame_ms"] = 10000.0 / 589.0;

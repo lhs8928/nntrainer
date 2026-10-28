@@ -12,7 +12,8 @@
  * Drives libnntr_discretion_jni.so through its C interface only, as the app
  * does, and writes every event as one JSON line on stdout:
  *
- *   nntr_room --config '{"model_dir":..,"sd_weights":..,"silero":..}'
+ *   nntr_room --config '{"model_dir":..,"segmentation_weights":..,
+ *                        "speaker_weights":..,"silero":..}'
  *             [--enroll NAME=voice.wav ...] [--enroll-vector NAME=v.json ...]
  *             [--pin LINE=NAME ...] [--voices NAME,NAME] [--commands]
  *             [--pcm-out PATH] [--realtime] [--seconds S] INPUT
@@ -25,7 +26,8 @@
  * recognized and written before the program exits. --pin corrects a line as a
  * person would, as soon as it is written (NAME '-' = nobody), to see what the
  * diarizer makes of the lines after it. --enroll-vector enrolls a voice the
- * server keeps (a JSON array of 256 numbers, or an object with "vector");
+ * server keeps (a JSON array of the voice model's numbers: 192 ERes2NetV2,
+ * 256 WeSpeaker; or an object with "vector");
  * --voices writes, at the end, {"type":"voice","person","vector"} for each
  * name (the voice to remember, nothing when there is none). --pcm-out also
  * writes the audio it recognizes, as raw PCM16 in the order it is fed, to PATH
@@ -37,7 +39,7 @@
  * one JSON object per line, as an app gets them from the server:
  *   {"op":"pin","line":"audio-20","person":"홍길동"|null}
  *   {"op":"map_speaker","label":"화자 2","person":"홍길동"}
- *   {"op":"enroll","person":"홍길동","vector":[256 numbers]}
+ *   {"op":"enroll","person":"홍길동","vector":[192 or 256 numbers]}
  *   {"op":"remember","person":"홍길동","on":true}   its voice at the end
  *   {"op":"record","person":"홍길동","seconds":6}  the next seconds are theirs
  * and answers each with {"type":"ack","op":..,"rc":..} (rc as the C function;

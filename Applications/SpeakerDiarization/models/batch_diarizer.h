@@ -57,8 +57,25 @@ struct BatchResult {
  */
 class BatchDiarizer {
 public:
-  /** @brief load weights and initialize all models; false on failure */
+  /**
+   * @brief load the models from one file holding all of them (the
+   *        speaker_diarization.bin of the SD application: PyanNet, WeSpeaker
+   *        ResNet34, PLDA); false on failure
+   */
   bool init(const std::string &weights_path);
+
+  /**
+   * @brief load the models from two files: the segmentation model and a voice
+   *        model, which is told by its tensors (split_sd_weights.py,
+   *        export_eres2netv2.py):
+   *        - WeSpeaker ResNet34 (speaker_wespeaker.bin, with its fbank set-up
+   *          and the PLDA trained on its embeddings): embed() and run()
+   *        - ERes2NetV2 (speaker_eres2netv2.bin, the ALICE server's model):
+   *          embed() only; run(diarize = true) needs WeSpeaker's PLDA
+   *        Either path may be the all-in-one file.
+   */
+  bool init(const std::string &segmentation_path,
+            const std::string &speaker_path);
 
   /**
    * @brief run the models over 16 kHz mono samples
@@ -69,15 +86,7 @@ public:
   BatchResult run(const std::vector<float> &audio, bool diarize,
                   double vad_step_sec = 1.0);
 
-  /**
-   * @brief embed() with ERes2NetV2 (the ALICE server's speaker model) instead
-   *        of WeSpeaker; run() keeps WeSpeaker, whose embeddings its PLDA was
-   *        trained on
-   * @param weights_path speaker_eres2netv2.bin (export_eres2netv2.py)
-   */
-  bool useERes2NetV2(const std::string &weights_path);
-
-  /** @brief "wespeaker" or "eres2netv2": the model embed() uses */
+  /** @brief "wespeaker" or "eres2netv2": the voice model embed() uses */
   const char *speakerModel() const;
 
   /** @brief numbers in one embed() result: 256 (WeSpeaker) or 192 */
@@ -101,16 +110,17 @@ public:
   std::vector<std::vector<uint8_t>> segment(const std::vector<float> &audio);
 
 private:
-  WeightLoader loader_;
+  WeightLoader loader_;         // the segmentation model
+  WeightLoader speaker_loader_; // the voice model (and PLDA with WeSpeaker)
   AudioPreprocessor preprocessor_;
   PyanNet seg_model_;
   WeSpeakerResNet34 emb_model_;
   PldaVBx plda_vbx_;
   const float *mel_banks_ = nullptr;
   const float *fbank_window_ = nullptr;
-  WeightLoader eres2_loader_;
   ERes2NetV2 eres2_;
   bool use_eres2_ = false;
+  bool has_plda_ = false;
 };
 
 } // namespace speaker_diarization

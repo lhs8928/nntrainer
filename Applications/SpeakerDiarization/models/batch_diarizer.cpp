@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <stdexcept>
 
 namespace speaker_diarization {
 
@@ -51,30 +52,59 @@ std::vector<std::vector<float>> sliceEvery(const std::vector<float> &audio,
 } // namespace
 
 bool BatchDiarizer::init(const std::string &weights_path) {
-  if (!loader_.load(weights_path)) {
-    std::cerr << "BatchDiarizer: failed to load weights from " << weights_path
-              << "\n";
+  return init(weights_path, weights_path);
+}
+
+bool BatchDiarizer::init(const std::string &segmentation_path,
+                         const std::string &speaker_path) {
+  if (!loader_.load(segmentation_path)) {
+    std::cerr << "BatchDiarizer: failed to load weights from "
+              << segmentation_path << "\n";
     return false;
   }
   if (!seg_model_.init(loader_)) {
     std::cerr << "BatchDiarizer: failed to initialize PyanNet\n";
     return false;
   }
-  if (!emb_model_.init(loader_)) {
-    std::cerr << "BatchDiarizer: failed to initialize WeSpeaker ResNet34\n";
+  if (!speaker_loader_.load(speaker_path)) {
+    std::cerr << "BatchDiarizer: failed to load weights from " << speaker_path
+              << "\n";
     return false;
   }
-  if (!plda_vbx_.init(loader_)) {
+  // the voice model is told by its tensors: ERes2NetV2's are named by the
+  // 3D-Speaker module path, WeSpeaker's start with "resnet."
+  use_eres2_ = speaker_loader_.hasTensor("layer1.0.conv1.weight");
+  if (use_eres2_) {
+    std::string missing;
+    if (!eres2_.init(speaker_loader_, &missing)) {
+      std::cerr << "BatchDiarizer: ERes2NetV2 weights lack " << missing << "\n";
+      return false;
+    }
+    has_plda_ = false;
+    return true;
+  }
+  if (!speaker_loader_.hasTensor("resnet.conv1.weight") ||
+      !emb_model_.init(speaker_loader_)) {
+    std::cerr << "BatchDiarizer: no voice model (WeSpeaker ResNet34 or "
+                 "ERes2NetV2) in "
+              << speaker_path << "\n";
+    return false;
+  }
+  mel_banks_ = speaker_loader_.getTensor("frontend.fbank_mel_banks");
+  fbank_window_ = speaker_loader_.getTensor("frontend.fbank_window");
+  has_plda_ = speaker_loader_.hasTensor("plda.mu");
+  if (has_plda_ && !plda_vbx_.init(speaker_loader_)) {
     std::cerr << "BatchDiarizer: failed to initialize PLDA & VBx\n";
     return false;
   }
-  mel_banks_ = loader_.getTensor("frontend.fbank_mel_banks");
-  fbank_window_ = loader_.getTensor("frontend.fbank_window");
   return true;
 }
 
 BatchResult BatchDiarizer::run(const std::vector<float> &audio, bool diarize,
                                double vad_step_sec) {
+  if (diarize && !has_plda_)
+    throw std::runtime_error("whole-recording diarization needs the WeSpeaker "
+                             "voice model and its PLDA");
   BatchResult r;
   r.frame_step_sec = FRAME_STEP_SEC;
   // The clustering assumes the 1 s hop of the SD application.
@@ -162,20 +192,6 @@ BatchResult BatchDiarizer::run(const std::vector<float> &audio, bool diarize,
                                  speaker_counting, total_frames);
   r.embed_ms = msSince(t0);
   return r;
-}
-
-bool BatchDiarizer::useERes2NetV2(const std::string &weights_path) {
-  if (!eres2_loader_.load(weights_path)) {
-    std::cerr << "BatchDiarizer: failed to load " << weights_path << "\n";
-    return false;
-  }
-  std::string missing;
-  if (!eres2_.init(eres2_loader_, &missing)) {
-    std::cerr << "BatchDiarizer: ERes2NetV2 weights lack " << missing << "\n";
-    return false;
-  }
-  use_eres2_ = true;
-  return true;
 }
 
 const char *BatchDiarizer::speakerModel() const {

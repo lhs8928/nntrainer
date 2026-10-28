@@ -15,13 +15,15 @@
  * clock and why its speaker may be wrong. Recognition runs on a worker
  * thread of its own, so nntr_room_feed never blocks the audio callback.
  *
- * config_json (all optional but the two model paths):
+ * config_json (all optional but the model paths):
  *   model_dir          Qwen3-ASR model directory
- *   sd_weights         speaker_diarization.bin (PyanNet + WeSpeaker)
- *   speaker_model      "wespeaker" (default) or "eres2netv2": the voice model
- *                      (ERes2NetV2 is the ALICE server's: the same samples
- *                      give the server's 192 numbers)
- *   speaker_weights    speaker_eres2netv2.bin, for "eres2netv2"
+ *   segmentation_weights  sd_segmentation.bin (PyanNet)
+ *   speaker_weights    the voice model, told by the file:
+ *                      speaker_eres2netv2.bin (ERes2NetV2, the ALICE
+ *                      server's: the same samples give the server's 192
+ *                      numbers) or speaker_wespeaker.bin (WeSpeaker ResNet34)
+ *   sd_weights         instead of the two: the all-in-one
+ *                      speaker_diarization.bin (PyanNet + WeSpeaker)
  *   language           "Korean" (default), "" = the model decides
  *   asr_secs           model graph lengths (default [8, 12.5])
  *   threads            worker threads of the models (0 = default)

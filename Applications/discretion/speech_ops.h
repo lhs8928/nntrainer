@@ -43,11 +43,13 @@ class AsrEngine;
 struct SpeechOptions {
   AsrOptions asr;              // model, language, threads
   std::vector<float> asr_secs; // one model graph per length, ascending
-  std::string sd_weights;      // speaker_diarization.bin
-  // the voice model of EMBED: "wespeaker" (in sd_weights) or "eres2netv2"
-  // (the ALICE server's, in speaker_weights)
-  std::string speaker_model = "wespeaker";
-  std::string speaker_weights; // speaker_eres2netv2.bin
+  // the segmentation model and the voice model, as two files
+  // (sd_segmentation.bin; speaker_eres2netv2.bin or speaker_wespeaker.bin:
+  // the voice model is told by the file) or as the all-in-one
+  // speaker_diarization.bin of the SD application (WeSpeaker)
+  std::string segmentation_weights;
+  std::string speaker_weights;
+  std::string sd_weights; // all-in-one, used when the two are not given
 };
 
 /** @brief one recognized segment: its text and the time of every word */
@@ -95,7 +97,7 @@ public:
   /** @brief text and word times of 16 kHz samples (Qwen3-ASR) */
   AsrResult recognize(const std::vector<float> &pcm);
 
-  /** @brief one embedding of the samples (the speaker_model's) */
+  /** @brief one embedding of the samples (the voice model's) */
   std::vector<float> embedding(const std::vector<float> &pcm);
 
   /** @brief PyanNet powerset class per frame, per consecutive 10 s window */

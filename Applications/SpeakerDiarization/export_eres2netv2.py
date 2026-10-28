@@ -20,11 +20,12 @@
 ##
 
 import argparse
-import struct
 
 import numpy as np
 import onnx
 from onnx import numpy_helper
+
+from split_sd_weights import write  # the file format of models/weight_loader.cpp
 
 EXPECTED = 181  # 90 convolutions and the linear layer, weight and bias (layer3_ds has no bias)
 
@@ -55,27 +56,6 @@ def tensors(model):
     return out
 
 
-def write_nntr_binary(path, named):
-    """The format of export_quantized_weights.py (models/weight_loader.cpp):
-    "NNTRDIAR", tensor count, (name, dims, byte size, offset) per tensor, the
-    header padded to 64 bytes, then the tensors' bytes."""
-    header = bytearray(b"NNTRDIAR") + struct.pack("<I", len(named))
-    blobs, offset = [], 0
-    for name, array in named.items():
-        raw = np.ascontiguousarray(array).tobytes()
-        encoded = name.encode("utf-8")
-        header += struct.pack("<I", len(encoded)) + encoded
-        header += struct.pack("<I", array.ndim) + struct.pack(f"<{array.ndim}I", *array.shape)
-        header += struct.pack("<QQ", len(raw), offset)
-        blobs.append(raw)
-        offset += len(raw)
-    header += b"\x00" * ((64 - len(header) % 64) % 64)
-    with open(path, "wb") as f:
-        f.write(header)
-        for raw in blobs:
-            f.write(raw)
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("onnx", help="speaker-eres2netv2.onnx (sherpa-onnx release)")
@@ -88,7 +68,7 @@ def main():
     named = tensors(model)
     if len(named) != EXPECTED:
         raise ValueError(f"{len(named)} tensors, expected {EXPECTED}")
-    write_nntr_binary(args.out, named)
+    write(args.out, [(n, a.shape, np.ascontiguousarray(a).tobytes()) for n, a in named.items()])
     params = sum(a.size for a in named.values())
     print(f"{args.out}: {len(named)} tensors, {params} parameters")
 
