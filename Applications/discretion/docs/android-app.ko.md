@@ -30,7 +30,7 @@
 | `libnntr_discretion_jni.so` | 1.7 MB | 인식기와 JNI 함수 |
 | `libquick_ai_core.so` | 81 MB | Qwen3-ASR |
 | `libnntrainer.so`, `libccapi-nntrainer.so` | 5 MB | nntrainer |
-| `libonnxruntime.so` | 17 MB | Silero 소리 문(없으면 에너지 문으로 대체) |
+| `libonnxruntime.so` | 17 MB | **넣지 않아도 된다.** `silero`에 `.onnx`를 줄 때만 필요(ONNX Runtime으로 빌드했을 때). 기본 `.bin`은 인식기가 직접 돌린다 |
 | `libc++_shared.so` | 1.7 MB | NDK C++ 런타임 |
 
 Java 클래스는 `java/ai/nntrainer/discretion/Recognizer.java` 하나다.
@@ -45,7 +45,7 @@ Java 클래스는 `java/ai/nntrainer/discretion/Recognizer.java` 하나다.
 | `model_dir` | `Qwen3-ASR-1.7B/` 폴더 전체 | 1.1 GB |
 | `segmentation_weights` | `sd_segmentation.bin` (PyanNet: 구간 안에서 화자가 바뀌는 곳) | 6 MB |
 | `speaker_weights` | 목소리 모델 하나: `speaker_eres2netv2.bin` (기본, 앨리스 서버와 같은 ERes2NetV2) 또는 `speaker_wespeaker.bin` (WeSpeaker ResNet34) | 68 MB / 34 MB |
-| `silero` | `silero_vad_v6.onnx` | 1.1 MB |
+| `silero` | `silero_vad_v6.bin` (Silero VAD v6, 인식기가 직접 돌림) 또는 `silero_vad_v6.onnx` (ONNX Runtime 필요) | 1.2 MB |
 
 목소리 모델은 넘긴 파일로 정해진다(파일 안의 텐서로 알아본다, 따로 고르는 설정은 없다).
 
@@ -58,6 +58,7 @@ Java 클래스는 `java/ai/nntrainer/discretion/Recognizer.java` 하나다.
 - 파일 만들기(nntrainer 저장소 `Applications/SpeakerDiarization`):
   - `split_sd_weights.py speaker_diarization.bin 폴더`: 예전 한 파일을 `sd_segmentation.bin`과 `speaker_wespeaker.bin`으로 나눈다(텐서는 바이트 그대로).
   - `export_eres2netv2.py speaker-eres2netv2.onnx speaker_eres2netv2.bin`: 앨리스 서버의 모델 파일에서 만든다.
+  - `export_silero_vad.py silero_vad_v6.onnx silero_vad_v6.bin`: Silero 모델 파일에서 만든다. 같은 소리에서 ONNX Runtime과 블록 확률 차이 5e-6 이하, 폰에서 week1·boda의 줄이 모두 같았다(`docs/silero-vad.ko.md`).
 - 예전 한 파일(`sd_weights`: `speaker_diarization.bin`, PyanNet + WeSpeaker)도 계속 받는다. 두 파일 대신 주면 WeSpeaker로 동작한다.
 
 시험 폰의 `/data/local/tmp/nntrainer/discretion/models/Qwen3-ASR-1.7B/` 안에는 `.safetensors`가 다른 폴더를 가리키는 링크로 들어 있다.
@@ -82,7 +83,7 @@ String config = new JSONObject()
     .put("model_dir", dir + "/Qwen3-ASR-1.7B")
     .put("segmentation_weights", dir + "/sd_segmentation.bin")
     .put("speaker_weights", dir + "/speaker_eres2netv2.bin")   // WeSpeaker: speaker_wespeaker.bin
-    .put("silero", dir + "/silero_vad_v6.onnx")
+    .put("silero", dir + "/silero_vad_v6.bin")
     .put("language", "Korean")
     .put("labels_in_use", labelsFromStartReply)   // 3.2 참고, 없으면 빈 배열
     .toString();

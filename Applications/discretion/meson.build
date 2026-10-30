@@ -31,6 +31,7 @@ if host_machine.system() == 'linux' and get_option('platform') == 'none' and get
     sd_models / 'pyannet.cpp',
     sd_models / 'wespeaker_resnet34.cpp',
     sd_models / 'eres2netv2.cpp',
+    sd_models / 'silero_vad.cpp',
     sd_models / 'plda_vbx.cpp',
     sd_models / 'online_speaker_tracker.cpp',
     sd_models / 'audio_stream_buffer.cpp',
@@ -58,7 +59,8 @@ if host_machine.system() == 'linux' and get_option('platform') == 'none' and get
   # directory, and no source file includes both.
   # The room recognizer (room_api.h): ALICE's endpointing and whole-meeting
   # speaker clustering on the speech models, and nntr_room to test it on a
-  # file. The Silero gate needs ONNX Runtime; without it the energy gate.
+  # file. Silero runs from the .bin of export_silero_vad.py; a .onnx model
+  # needs ONNX Runtime.
   room_sources = [
     'voice_gate.cpp',
     'room_diarizer.cpp',
@@ -72,6 +74,7 @@ if host_machine.system() == 'linux' and get_option('platform') == 'none' and get
     sd_models / 'pyannet.cpp',
     sd_models / 'wespeaker_resnet34.cpp',
     sd_models / 'eres2netv2.cpp',
+    sd_models / 'silero_vad.cpp',
     sd_models / 'plda_vbx.cpp',
     sd_models / 'online_speaker_tracker.cpp',
     sd_models / 'audio_stream_buffer.cpp',

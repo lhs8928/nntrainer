@@ -12,6 +12,8 @@
 
 #include "voice_gate.h"
 
+#include "../SpeakerDiarization/models/silero_vad.h"
+
 #include <algorithm>
 #include <array>
 #include <stdexcept>
@@ -28,25 +30,45 @@ bool EnergyGate::voiced(double rms, const int16_t *, size_t) {
   return speech;
 }
 
+/** @brief one 512-sample block in, its speech probability out */
+struct SileroGate::Impl {
+  static constexpr size_t BLOCK = speaker_diarization::SileroVad::BLOCK;
+  std::vector<float> pending;
+  virtual ~Impl() = default;
+  virtual float run(const float *block) = 0;
+};
+
+namespace {
+
+/** @brief the weights from export_silero_vad.py, run by this repository */
+struct NativeSilero : SileroGate::Impl {
+  speaker_diarization::SileroVad vad;
+  explicit NativeSilero(const std::string &path) {
+    std::string error;
+    if (!vad.load(path, &error))
+      throw std::runtime_error(error);
+  }
+  float run(const float *block) override { return vad.run(block); }
+};
+
 #ifdef ENABLE_ONNXRUNTIME
 
-struct SileroGate::Impl {
-  static constexpr size_t BLOCK = 512, CONTEXT = 64, STATE = 128;
+/** @brief the ONNX file, run by ONNX Runtime */
+struct OnnxSilero : SileroGate::Impl {
+  static constexpr size_t CONTEXT = 64, STATE = 128;
   Ort::Env env{ORT_LOGGING_LEVEL_WARNING, "silero"};
   Ort::Session session{nullptr};
   std::array<float, STATE> h{}, c{};
   std::array<float, CONTEXT> context{};
-  std::vector<float> pending;
 
-  explicit Impl(const std::string &path) {
+  explicit OnnxSilero(const std::string &path) {
     Ort::SessionOptions o;
     o.SetIntraOpNumThreads(1);
     o.SetInterOpNumThreads(1);
     session = Ort::Session(env, path.c_str(), o);
   }
 
-  /** @brief speech probability of one 512-sample block */
-  float run(const float *block) {
+  float run(const float *block) override {
     std::array<float, CONTEXT + BLOCK> input;
     std::copy(context.begin(), context.end(), input.begin());
     std::copy(block, block + BLOCK, input.begin() + CONTEXT);
@@ -71,24 +93,31 @@ struct SileroGate::Impl {
   }
 };
 
-SileroGate::SileroGate(const std::string &model_path, double threshold) :
-  impl_(std::make_unique<Impl>(model_path)), threshold_(threshold) {}
+#endif
 
-#else
-
-struct SileroGate::Impl {};
-
-SileroGate::SileroGate(const std::string &, double threshold) :
-  threshold_(threshold) {
-  throw std::runtime_error("built without ONNX Runtime");
+bool onnx_file(const std::string &path) {
+  return path.size() >= 5 && path.compare(path.size() - 5, 5, ".onnx") == 0;
 }
 
+std::unique_ptr<SileroGate::Impl> open_silero(const std::string &path) {
+  if (!onnx_file(path))
+    return std::make_unique<NativeSilero>(path);
+#ifdef ENABLE_ONNXRUNTIME
+  return std::make_unique<OnnxSilero>(path);
+#else
+  throw std::runtime_error("built without ONNX Runtime: give the .bin made by "
+                           "export_silero_vad.py instead of the .onnx");
 #endif
+}
+
+} // namespace
+
+SileroGate::SileroGate(const std::string &model_path, double threshold) :
+  impl_(open_silero(model_path)), threshold_(threshold) {}
 
 SileroGate::~SileroGate() = default;
 
 bool SileroGate::voiced(double, const int16_t *frame, size_t n) {
-#ifdef ENABLE_ONNXRUNTIME
   for (size_t i = 0; i < n; ++i)
     impl_->pending.push_back(frame[i] / 32768.0f);
   size_t used = 0;
@@ -98,10 +127,6 @@ bool SileroGate::voiced(double, const int16_t *frame, size_t n) {
     on_ = last_ >= threshold_ || (on_ && last_ >= threshold_ - .15);
   }
   impl_->pending.erase(impl_->pending.begin(), impl_->pending.begin() + used);
-#else
-  (void)frame;
-  (void)n;
-#endif
   return on_;
 }
 

@@ -13,9 +13,10 @@
 #
 # Also builds libnntr_discretion_jni.so (the room recognizer of room_api.h and
 # its JNI methods, for ai.nntrainer.discretion.Recognizer) and nntr_room (a
-# test executable on that library). The Silero voice gate needs ONNX Runtime
-# for Android: ORT_ROOT is the extracted onnxruntime-android AAR (headers/,
-# jni/<abi>/libonnxruntime.so); without it the library uses the energy gate.
+# test executable on that library). The Silero voice gate runs the .bin of
+# SpeakerDiarization/export_silero_vad.py by itself; a .onnx model needs ONNX
+# Runtime for Android: ORT_ROOT is the extracted onnxruntime-android AAR
+# (headers/, jni/<abi>/libonnxruntime.so), optional.
 ##
 
 LOCAL_PATH := $(call my-dir)
@@ -103,6 +104,7 @@ SPEECH_SOURCES := \
     $(SD_MODELS)/pyannet.cpp \
     $(SD_MODELS)/wespeaker_resnet34.cpp \
     $(SD_MODELS)/eres2netv2.cpp \
+    $(SD_MODELS)/silero_vad.cpp \
     $(SD_MODELS)/plda_vbx.cpp \
     $(SD_MODELS)/online_speaker_tracker.cpp \
     $(SD_MODELS)/audio_stream_buffer.cpp \

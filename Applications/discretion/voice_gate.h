@@ -53,19 +53,22 @@ private:
 /**
  * @brief Silero VAD v6 (the ONNX model ALICE takes from faster-whisper) run on
  *        the stream with its state carried over: speech from `threshold`,
- *        held down to `threshold - 0.15`
+ *        held down to `threshold - 0.15`. A `.onnx` model runs on ONNX Runtime
+ *        (when built with it); any other file is the weights from
+ *        export_silero_vad.py, run by SileroVad without ONNX Runtime
  */
 class SileroGate : public VoiceGate {
 public:
   SileroGate(const std::string &model_path, double threshold);
   ~SileroGate() override;
+  /** @brief one 512-sample block in, its speech probability out */
+  struct Impl;
   bool voiced(double rms, const int16_t *frame, size_t n) override;
   const char *name() const override { return "silero"; }
   /** @brief probability of the last 32 ms block */
   float last() const { return last_; }
 
 private:
-  struct Impl;
   std::unique_ptr<Impl> impl_;
   double threshold_;
   bool on_ = false;
@@ -73,8 +76,8 @@ private:
 };
 
 /**
- * @brief Silero when the model loads (built with ONNX Runtime), else the
- *        energy gate, as ambient.audio.vad_gate falls back
+ * @brief Silero when the model loads, else the energy gate, as
+ *        ambient.audio.vad_gate falls back
  * @param error why Silero was not used (empty when it is)
  */
 std::unique_ptr<VoiceGate> makeVoiceGate(const std::string &silero_model,
