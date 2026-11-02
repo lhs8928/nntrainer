@@ -8,7 +8,7 @@
 
 ```
 진행자 폰
- ├ Chrome: https://dog.agentic-fw.com/alice-dev/host?phone=8031
+ ├ Chrome: https://dog.agentic-fw.com/alice-dev/host
  │    마이크 → AudioWorklet(16 kHz PCM16, 0.2초)
  │       ├─▶ 서버 /api/audio/chunk        (지금과 같음: 서버 ASR이 정식 전사)
  │       └─▶ http://127.0.0.1:8031/feed   (폰 안에서만)
@@ -42,7 +42,9 @@
 
 - `POST /api/audio/compare-lines` (진행자 열쇠): `{"stream", "lines":[{n, speaker, start_ms, end_ms, text, doubt?}]}`
   → `RoomSession.accept_compare`. 장치용 `/api/device/compare-lines`와 같은 검사·번호 규칙.
-- 진행자 화면(`ambient/ui/pages/listen.js`): 주소에 `?phone=PORT`가 있을 때만 위 흐름을 켭니다. 없으면 지금과 같습니다.
+- 진행자 화면(`ambient/ui/pages/listen.js`): 마이크를 켤 때, 이 사이트가 루프백에 닿아도 되고(권한 상태만 물음, 창 없음)
+  8031이 답하면 위 흐름을 켭니다. 아니면 지금과 같습니다. `?phone=PORT`는 다른 포트로 시험할 때만.
+- 권한은 진행자 본인 자리의 ASR 비교 탭에서 묻습니다(Android에서만 버튼). 사이트 단위라 진행자 화면에도 적용됩니다.
 
 ## 4. 단계
 
@@ -69,7 +71,8 @@
 
 ### 2. 앨리스 연결 (2026-11-02, ALICE Issue #82, 브랜치 `feat/82-phone-browser-asr`)
 
-- 서버 `POST /api/audio/compare-lines`(진행자 열쇠), 진행자 화면 `?phone=PORT`(`ambient/ui/shared/phone-asr.js`)
+- 서버 `POST /api/audio/compare-lines`(진행자 열쇠), 진행자 화면이 폰 서비스를 스스로 찾음(`ambient/ui/shared/phone-asr.js`),
+  ASR 비교 탭에 권한 버튼. 처음 시험은 `?phone=8031`로 함
 - 이 PC 시험 서버(8847, 서버 ASR은 로컬 Whisper small, 언어 모델 없음) + 폰 Chrome으로 처음부터 끝까지:
   진행자 화면을 `https://127.0.0.1:8847/host?phone=8031`로 열고(adb reverse), 마이크 대신 boda 60초를 넣는
   가짜 `getUserMedia`로 회의 시작 → 종료
@@ -77,3 +80,5 @@
   - 12.7~21.7초 구간은 서버·폰 모두 줄이 없음: 화면이 받은 소리 쪽 문제로 보고 폰 경로 문제로 보지 않음
   - 글은 파일을 바로 넣은 결과와 조금 다름(브라우저가 소리를 다시 표본화함)
 - 미실행: 실제 폰 마이크, alice-dev(공개 주소, 권한 창 포함) 위 회의
+- 주소 없이 켜기: 127.0.0.1에 있는 페이지는 Chrome이 권한을 "prompt"라고 답해도 루프백 호출이 창 없이 됨 →
+  그런 페이지는 허용된 것으로 봄. 8847 진행자 화면에서 자동으로 8031을 찾음 확인
