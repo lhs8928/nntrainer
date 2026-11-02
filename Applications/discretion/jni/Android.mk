@@ -12,11 +12,12 @@
 # run Applications/quick_ai/build_android.sh first.
 #
 # Also builds libnntr_discretion_jni.so (the room recognizer of room_api.h and
-# its JNI methods, for ai.nntrainer.discretion.Recognizer) and nntr_room (a
-# test executable on that library). The Silero voice gate runs the .bin of
-# SpeakerDiarization/export_silero_vad.py by itself; a .onnx model needs ONNX
-# Runtime for Android: ORT_ROOT is the extracted onnxruntime-android AAR
-# (headers/, jni/<abi>/libonnxruntime.so), optional.
+# its JNI methods, for ai.nntrainer.discretion.Recognizer), nntr_room (a
+# test executable on that library) and nntr_room_http (that library for a web
+# page on the same phone, docs/browser-phone-asr.ko.md). The Silero voice gate
+# runs the .bin of SpeakerDiarization/export_silero_vad.py by itself; a .onnx
+# model needs ONNX Runtime for Android: ORT_ROOT is the extracted
+# onnxruntime-android AAR (headers/, jni/<abi>/libonnxruntime.so), optional.
 ##
 
 LOCAL_PATH := $(call my-dir)
@@ -163,6 +164,15 @@ LOCAL_CFLAGS += -O2 -fexceptions
 LOCAL_CXXFLAGS += -std=c++20
 LOCAL_SRC_FILES := ../room_cli.cpp
 LOCAL_LDLIBS := -laaudio
+LOCAL_SHARED_LIBRARIES := nntr_discretion_jni
+LOCAL_C_INCLUDES += $(LOCAL_PATH)/.. $(DISCRETION_INCLUDES)
+include $(BUILD_EXECUTABLE)
+
+include $(CLEAR_VARS)
+LOCAL_MODULE := nntr_room_http
+LOCAL_CFLAGS += -O2 -fexceptions
+LOCAL_CXXFLAGS += -std=c++20
+LOCAL_SRC_FILES := ../room_http.cpp
 LOCAL_SHARED_LIBRARIES := nntr_discretion_jni
 LOCAL_C_INCLUDES += $(LOCAL_PATH)/.. $(DISCRETION_INCLUDES)
 include $(BUILD_EXECUTABLE)

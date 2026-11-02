@@ -99,6 +99,17 @@ if host_machine.system() == 'linux' and get_option('platform') == 'none' and get
     install_rpath: application_install_dir
   )
 
+  # the room recognizer for a web page on the same phone (loopback HTTP)
+  executable('nntr_room_http',
+    ['room_http.cpp'] + room_sources,
+    include_directories: [include_directories('.')] + quick_ai_inc + quick_ai_external_incs,
+    dependencies: room_dependencies,
+    cpp_args: room_args,
+    install: get_option('install-app'),
+    install_dir: application_install_dir,
+    install_rpath: application_install_dir
+  )
+
   e_discretion = executable('nntr_discretion',
     discretion_sources,
     include_directories: [include_directories('.')] + quick_ai_inc + quick_ai_external_incs,
