@@ -76,7 +76,8 @@ transcribe / lastWords)이 그대로라 `asr_lane`, `batch_pipeline`, `speech_op
 - [x] `AsrEngine::init`: `config.json`의 `architectures`로 Qwen3-ASR / Whisper 선택 (`asr_engine.cpp`)
 - [x] `AsrOptions::language`를 엔진이 해석: Qwen3은 이름 그대로, Whisper는 `"Korean"`→`ko` 표(코드 직접도 받음, 모르는 언어는 init 오류)
 - [x] `asr_provider`를 엔진이 알려 줌(`nntrainer:qwen3-asr` / `nntrainer:whisper`). `SpeechModels::asrProvider()`, `SpeechOps::describe()`
-- [ ] 확인: 녹음 파일(week1, boda)로 바꾸기 전과 Qwen3 줄이 같음 (Qwen3 가중치가 있는 곳에서)
+- [x] 확인: boda(2분)로 바꾸기 전과 Qwen3 줄이 같음. 폰(S25+)에서 16줄의 글·화자·시각·의심 표시·info(asr_ms 빼고) 모두 같음 (9절 4)
+- [ ] 확인: week1(6분)도 같음
 
 ### 5.2 Whisper 가중치 변환
 
@@ -95,6 +96,8 @@ transcribe / lastWords)이 그대로라 `asr_lane`, `batch_pipeline`, `speech_op
       인코더 graph 끝의 `cross_memory_writer`가 층별 K/V를 이름 붙인 메모리(FP16 빌드는 FP16)에 저장하고,
       디코더의 `cross_attention`이 그 이름(`memory_id`)으로 읽음. 두 graph가 따로라 graph 입력 순서에 기대지 않음
 - [x] PyTorch 대조: 멜·cross K·디코딩 8스텝 logits 오차 5e-4 이하, 탐욕 토큰 224개·단어·시각 모두 같음(9절 2)
+- [x] 실제 large-v3 가중치로 PyTorch 대조: boda 앞 30초와 회의 구간 2개, 글·단어 시각 모두 같음(9절 4)
+- [x] large-v3에서 단어 시각이 첫 인식에서 멈추던 문제(`capture_heads=` 빈 값) 고침(9절 4)
 - [x] `quick_ai` 팩토리 등록(`WhisperForConditionalGeneration`), `nntr_quick_ai <dir> --audio x.wav --language ko`
 
 ### 5.4 디코딩
@@ -103,6 +106,7 @@ transcribe / lastWords)이 그대로라 `asr_lane`, `batch_pipeline`, `speech_op
 - [x] 탐욕 디코딩: 끝 토큰 말고 특수 토큰 전부 + `suppress_tokens` 막음, 첫 토큰은 `begin_suppress_tokens`도, 최대 224토큰
 - [x] 무음: SOT 행의 `no_speech` 확률 > 0.6 이고 평균 log 확률 < -1 이면 글 없음 (discretion `AsrEngine`, openai 규칙)
 - [ ] 압축률 검사(반복 환각)는 아직. `batch_pipeline`의 반복 검사가 있음. temperature fallback은 WhisperX처럼 끔
+- [ ] 평균 log 확률이 아주 낮은 구간 처리: boda 회의 구간 2개가 `3`, `4`로 나옴(PyTorch도 같음, -2.7 / -1.9). fallback 또는 표시 방법 정하기(9절 4)
 - [x] 단어 시각 (a): openai/whisper `timing.py`와 같은 단계 (`models/whisper/whisper_timing.*`). 끝 토큰을 한 번 더 넣어
       그 행까지 모음, 프레임 softmax → 행 방향 정규화 → median 7 → head 평균 → DTW → 단어(공백, zh/ja 등은 글자) →
       문장 끝 긴 단어 줄이기 → 구두점 합치기. `lastWords()`는 단어 시작 시각
@@ -111,13 +115,14 @@ transcribe / lastWords)이 그대로라 `asr_lane`, `batch_pipeline`, `speech_op
 
 - [x] `segmentSamples()`는 `segment_sec`(최대 30초). 호출자가 채운 뒤쪽 0은 떼고 넣어 단어 시각이 소리 안에 있게 함
 - [x] `speech_ops`: Whisper면 `asr_secs` 전체에 모델 하나(가장 긴 길이)
+- [ ] `speech_ops`: 첫 길이로 Whisper를 올렸다 버리고 다시 올림 → 시작할 때 가중치를 두 번 읽음(FP32 6.2 GB)
 - [x] `room_api.h` 머리말, `main.cpp` 도움말
 - [x] `meson.build`·`jni/Android.mk`(quick_ai, discretion)에 Whisper 소스와 헤더 경로. Qwen3과 함께 빌드, 설정으로 하나만 올림
-- [ ] 폰 빌드(ndk-build) 확인
+- [x] 폰 빌드(ndk-build) 확인: quick_ai `build_android.sh`, discretion `ndk-build NNTRAINER_ROOT=<절대 경로>` 성공. `libquick_ai_core.so` 9.9 MB (9절 4)
 
 ### 5.6 wav2vec2 강제 정렬 (b) — WhisperX 4단계 그대로
 
-- [ ] 한국어 CTC 모델 확정(WhisperX 기본: `kresnik/wav2vec2-large-xlsr-korean`, 라이선스 확인)
+- [ ] 한국어 CTC 모델 확정(WhisperX 기본: `kresnik/wav2vec2-large-xlsr-korean`, 라이선스 확인). 회사망에서 HF 큰 파일(CDN)이 받아지지 않아 아직 실제 모델로 확인 못 함(9절 4)
 - [x] nntrainer로 wav2vec2 구현 (`models/wav2vec2/wav2vec2_ctc.*`, `layers/wav2vec2_layers.*`): conv 특징 추출(layer/group norm),
       feature projection, group conv 위치 임베딩, encoder(pre-LN XLS-R / post-LN base), CTC head. 30초 graph에서 구간 길이만큼만 계산
 - [x] WhisperX 3.8.6 `align()` 그대로 (`models/wav2vec2/ctc_align.*`): 소문자, 공백 `|`, 사전 밖 글자는 와일드카드,
@@ -228,3 +233,28 @@ nntr_discretion <model_dir> --no-sd --stream-file x.wav --align-model <w2v_dir>
   여분 공백, ja 글자 단위, 0.02초 입력, 프레임보다 긴 글(양쪽 모두 실패). Whisper 전사 → 정렬도 같음. discretion 줄의 단어 시각이 정렬 결과로 나옴
 - 아직: 실제 한국어 정렬 모델(kresnik)로 확인, (a)와 화자 줄 정확도 비교, 정렬기 양자화·폰 속도
 
+### 4. 실제 large-v3로 검증 (2026-11-04, x86 PC와 Galaxy S25+)
+
+- 가중치: 회사망에서 HF의 큰 파일(`us.aws.cdn.hf.co`)이 받아지지 않고 HF가 IP 요청 제한(429)을 걸어, OpenAI 공식
+  `large-v3.pt`(`openaipublic.azureedge.net`, sha256 `e5b1a55b…` 일치)를 받아 HF 형식으로 바꿈(transformers의
+  `convert_openai_to_hf`와 같은 이름 대응). 바꾼 모델과 openai-whisper의 인코더 출력·logits 차이 0.
+  `generation_config.json`은 openai-whisper 값으로 다시 만듦(alignment head 10개, `<|ko|>` 50264)
+- 빌드: x86 `-Denable-fp16=false` 성공. x86 `-Denable-fp16=true`는 브랜치 전에도 quick_ai `rms_norm.cpp`의 NEON 코드로 실패(이 작업과 무관)
+- 고친 문제: large-v3는 디코더 32층 중 일부에만 alignment head가 있어, 나머지 층에 `capture_heads=`(빈 값)를 넘김 →
+  nntrainer가 값 없는 속성을 거절해 단어 시각을 켠 첫 인식이 `parsing property failed`로 멈춤. 랜덤 작은 모델은 모든 층에
+  head가 있어 드러나지 않았음. head 없는 층은 `capture_heads=none`
+- PyTorch 대조(`reference_pytorch.py`, 같은 가중치)
+  - boda 앞 30초: 글과 단어 57개의 시작·끝 시각 모두 같음. no_speech 0.8093 같음, 평균 log 확률 -0.1861 / -0.1859
+  - 회의 구간 21.72~28.58초, 64.08~70.60초: 둘 다 `3`, `4`로 같음(아래)
+- Qwen3 회귀
+  - 폰(FP16 빌드, `Qwen3-ASR-1.7B-LM-FP16`, ERes2NetV2, Silero `.bin`): boda 16줄이 바꾸기 전 폰 빌드와 모두 같음.
+    ASR 시간 합 145.1 s / 146.1 s
+  - x86(FP16 끔): 바꾸기 전(623c26fc + FP16 없이 빌드되게 한 커밋 2개)과 16줄이 모두 같으나, 두 쪽 모두 글이 `!!!…`
+    (x86 FP32 활성값 Qwen3 경로의 기존 문제로 보임, 원인은 안 찾음)
+- 회의 경로(`nntr_room`, boda 2분, x86): 구간 16개가 Qwen3와 같고 `asr_provider` = `nntrainer:whisper`
+  - 글은 대체로 Qwen3보다 정확(예: Qwen3 "페르시아를 조금하기" → "페르시아가 침공하기")
+  - 두 구간이 숫자 하나(`3`, `4`): PyTorch도 같음, 평균 log 확률 -2.72 / -1.90, no_speech 0.10 / 0.07. 첫 구간은 boda 앞 30초를
+    통째로 넣었을 때는 제대로 나옴("퀴로스 때부터 이렇게 커졌잖아요") → 짧게 잘린 구간에서의 모델 동작으로 보임. 재시도(fallback)나 표시 방법이 필요
+  - 속도: x86 24코어 FP32에서 구간당 평균 35.6초(RTF 5.47), 최대 RSS 7.7 GB
+- 그 밖: `/hdd`(회전 디스크)에 둔 6.2 GB 가중치는 mmap 읽기가 다른 작업과 겹치면 초당 1 MB 아래로 떨어짐 → NVMe에 두고 시험
+- 아직: week1 Qwen3 회귀, wav2vec2 (b) 실제 한국어 모델, 양자화와 폰 속도, 낮은 log 확률 구간 처리, 시작 시 두 번 읽기
