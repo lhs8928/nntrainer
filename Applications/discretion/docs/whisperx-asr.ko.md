@@ -62,7 +62,7 @@ Qwen3에만 해당하는 가정(Whisper에서 달라지는 점):
 | 항목 | 후보 | 제안 |
 |---|---|---|
 | Whisper 크기 | **large-v3** (1.55B, 디코더 32층) / large-v3-turbo (809M, 디코더 4층) / medium (769M) / small (244M) | **large-v3로 결정(2026-11-04)**. WhisperX가 권장하는 large 계열이고, 같은 인코더에 디코더가 깊어 turbo보다 인식 품질이 대체로 좋습니다. 디코더가 32층이라 생성이 느린 점은 6절에서 잽니다 |
-| 단어 시각 | (a) Whisper cross-attention + DTW / (b) WhisperX처럼 wav2vec2 CTC 강제 정렬 | **둘 다 구현, (a) 먼저로 결정(2026-11-04)**. (a) 구현 완료(9절 2). (b)는 5.6절 |
+| 단어 시각 | (a) Whisper cross-attention + DTW / (b) WhisperX처럼 wav2vec2 CTC 강제 정렬 | **둘 다 구현, (a) 먼저로 결정(2026-11-04)**. (a) 구현 완료(9절 2), (b)도 구현(9절 3). 둘 중 무엇을 쓸지는 실제 모델로 화자 줄 정확도를 재고 정함 |
 | 짧은 구간 | 30초로 채움 / 인코더 길이를 줄임(whisper.cpp `audio_ctx`) | 묶음(batch)은 30초 그대로. 실시간 lane은 8절에서 지연을 재고 정함 |
 | 엔진 고르기 | 설정 키 `asr_backend` / `config.json`의 `model_type`으로 자동 | **자동만 구현**: `config.json`의 `architectures`가 `WhisperForConditionalGeneration`이면 Whisper. 설정 키는 필요할 때 |
 
@@ -117,9 +117,13 @@ transcribe / lastWords)이 그대로라 `asr_lane`, `batch_pipeline`, `speech_op
 
 ### 5.6 wav2vec2 강제 정렬 (b) — WhisperX 4단계 그대로
 
-- [ ] 한국어 CTC 모델 선정(WhisperX 기본: `kresnik/wav2vec2-large-xlsr-korean`, 라이선스 확인)
-- [ ] nntrainer로 wav2vec2(conv 특징 추출 + transformer) 구현, CTC 강제 정렬(trellis·backtrack)
-- [ ] 5.4의 DTW 시각과 화자 바뀜 위치 정확도 비교 후 채택 여부 결정
+- [ ] 한국어 CTC 모델 확정(WhisperX 기본: `kresnik/wav2vec2-large-xlsr-korean`, 라이선스 확인)
+- [x] nntrainer로 wav2vec2 구현 (`models/wav2vec2/wav2vec2_ctc.*`, `layers/wav2vec2_layers.*`): conv 특징 추출(layer/group norm),
+      feature projection, group conv 위치 임베딩, encoder(pre-LN XLS-R / post-LN base), CTC head. 30초 graph에서 구간 길이만큼만 계산
+- [x] WhisperX 3.8.6 `align()` 그대로 (`models/wav2vec2/ctc_align.*`): 소문자, 공백 `|`, 사전 밖 글자는 와일드카드,
+      trellis → backtrack → 같은 토큰 묶기, 1 ms 반올림, 공백 단위 단어(ja·zh는 글자). 문장 나누기(nltk)는 단어가 같아 뺌
+- [x] 연결: `nntr_quick_ai --align-model`, discretion `--align-model` / room 설정 `align_model_dir` (Qwen3 전사에도 붙음)
+- [ ] 5.4의 DTW 시각과 화자 바뀜 위치 정확도 비교 후 기본값 결정
 
 ### 5.7 안드로이드와 문서
 
@@ -137,6 +141,8 @@ transcribe / lastWords)이 그대로라 `asr_lane`, `batch_pipeline`, `speech_op
 - **cross-attention 속도**: `cross_attention`은 스칼라 루프(head별 스레드)라 토큰당 약 1.2억 곱셈(large-v3). 폰에서 재고 느리면 NEON/GEMV로
 - **생성 속도**: large-v3 디코더는 32층(폭 1280)이라 토큰 하나에 Qwen3-1.7B 디코더(28층, 폭 2048)와 비슷하거나 조금 덜 듭니다.
   여기에 30초 인코더(32층)가 구간마다 더해집니다. 폰에서 RTF를 먼저 재고, 부족하면 디코더 양자화(Q4_0)·인코더 길이 줄이기를 봅니다.
+- **정렬 모델 메모리·속도**: XLS-R large(약 3억 파라미터)는 FP32 약 1.2 GB, 구간마다 한 번 더 돎. 특징 추출 conv는
+  im2col + sgemm이고 30초 구간이면 첫 층 출력만 약 200 MB. 지금은 FP32만(양자화·FP16 활성값 아직)
 - **라이선스**: Whisper 가중치 MIT. 정렬 모델(5.6)은 따로 확인.
 
 ## 7. 사용법 (지금)
@@ -155,6 +161,14 @@ python Applications/quick_ai/res/whisper/whisper-large-v3/reference_pytorch.py <
 
 # discretion: model_dir만 Whisper 폴더로 바꾸면 됨 (language는 "Korean" 또는 "ko")
 nntr_discretion <model_dir> --no-sd --stream-file x.wav --language Korean
+
+# 단어 시각 (b): wav2vec2 CTC 체크포인트(예: kresnik/wav2vec2-large-xlsr-korean) 변환
+python Applications/quick_ai/res/wav2vec2/weight_converter.py <hf_w2v_dir> -o <w2v_dir>/nntr_wav2vec2.safetensors
+cp <hf_w2v_dir>/{config,vocab}.json Applications/quick_ai/res/wav2vec2/nntr_config.json <w2v_dir>/
+nntr_quick_ai <model_dir> --audio x.wav --language ko --align-model <w2v_dir>     # Whisper + 정렬
+nntr_quick_ai <w2v_dir> --audio x.wav --align-text "글" --language ko             # 정렬만
+python Applications/quick_ai/res/wav2vec2/reference_pytorch.py <hf_w2v_dir> x.wav "글" --language ko
+nntr_discretion <model_dir> --no-sd --stream-file x.wav --align-model <w2v_dir>
 ```
 
 ## 8. 비교 평가 (바꿀지 정하는 기준)
@@ -200,3 +214,17 @@ nntr_discretion <model_dir> --no-sd --stream-file x.wav --language Korean
     `tie_word_embedding`·Qwen3-ASR의 `_FP16` 변환
 - 아직 못 한 것: 실제 large-v3 가중치로 인식(한국어 CER), 양자화, 폰 빌드·속도, Qwen3 줄 회귀 확인(가중치 있는 곳에서), 압축률 검사, 단어 시각 (b)
 - 다음: large-v3 실제 가중치로 `reference_pytorch.py`와 대조 → 양자화 → 폰 RTF → (b) wav2vec2 정렬
+
+### 3. 단어 시각 (b): wav2vec2 강제 정렬 (2026-11-04)
+
+- (a)와 (b) 둘 다 구현하고 (a)를 먼저 하기로 함(사용자 결정). (b) 구현
+- quick_ai: `layers/wav2vec2_layers.*`(특징 추출기, 위치 conv), `models/wav2vec2/`(Wav2Vec2ForCTC, WhisperX 정렬),
+  `res/wav2vec2/`(변환기, 설정, PyTorch 기준). Whisper의 `run()`은 `setAligner()`가 있으면 정렬기로 단어 시각
+- discretion: `align_model_dir`이 있으면 엔진(Whisper·Qwen3 모두)이 전사를 정렬해 `lastWords()`로 줌. 실패하거나 구간이
+  정렬기 graph보다 길면 모델 자체 시각. 정렬기는 폴더마다 하나만 올려 엔진끼리 나눠 씀
+- 기준: 받아 둔 WhisperX 코드를 직접 실행하는 것은 막혀서, 그 정렬 단계를 `res/wav2vec2/reference_pytorch.py`에 옮겨 기준으로 씀
+- 검증(x86, `-Denable-fp16=false`, 랜덤 작은 wav2vec2 두 구조: XLS-R식 pre-LN/layer norm/conv bias, base식 post-LN/group norm):
+  logits 차이 3e-3 이하(attention 캐시 FP16). 단어와 시작·끝 시각(1 ms)이 **전부 같음**: 3.1초·7.3초, 한국어·영어·숫자·구두점(와일드카드),
+  여분 공백, ja 글자 단위, 0.02초 입력, 프레임보다 긴 글(양쪽 모두 실패). Whisper 전사 → 정렬도 같음. discretion 줄의 단어 시각이 정렬 결과로 나옴
+- 아직: 실제 한국어 정렬 모델(kresnik)로 확인, (a)와 화자 줄 정확도 비교, 정렬기 양자화·폰 속도
+
