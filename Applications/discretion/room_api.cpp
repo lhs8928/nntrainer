@@ -106,6 +106,7 @@ bool Room::init(const std::string &config, std::string &error) {
   opt.speaker_weights = c.value("speaker_weights", "");
   opt.sd_weights = c.value("sd_weights", "");
   opt.asr.language = c.value("language", "Korean");
+  opt.asr.align_model_dir = c.value("align_model_dir", "");
   opt.asr.threads = c.value("threads", 0);
   // ALICE's segments run up to 12 s (more with the bridge): a 12.5 s graph
   // hears them whole, an 8 s one decodes the short ones faster

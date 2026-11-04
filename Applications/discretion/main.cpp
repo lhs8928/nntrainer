@@ -65,6 +65,8 @@ void usage(const char *prog) {
     "Cores: --asr-cpus LIST  --sd-cpus LIST (e.g. 0,1 / 2-3)\n"
     "       --asr-threads N  --sd-threads N\n"
     "       --no-word-timestamps (label whole segments instead of words)\n"
+    "       --align-model DIR (wav2vec2 CTC model: time the words by WhisperX\n"
+    "                         forced alignment of the transcript)\n"
     "Serial: default. ASR and SD take turns (each call uses all its threads);\n"
     "        --parallel runs both lanes at once on their own cores instead\n"
     "Other: --seconds N (stop after N s of audio)  --verbose\n"
@@ -178,6 +180,8 @@ bool parseArgs(int argc, char **argv, Args &a) {
         a.sd.threads = std::stoi(next());
       else if (k == "--no-word-timestamps")
         a.asr.word_timestamps = false;
+      else if (k == "--align-model")
+        a.asr.align_model_dir = next();
       else if (k == "--no-sd")
         a.no_sd = true;
       else if (k == "--serve")

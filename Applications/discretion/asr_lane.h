@@ -40,6 +40,9 @@ struct AsrOptions {
   int threads = 0;             // worker threads of the ASR (0 = default)
   std::mutex *gate = nullptr;  // serial mode: held around each model call
   bool word_timestamps = true; // time every word, so a line can change speaker
+  // wav2vec2 CTC model directory: time the words by WhisperX forced alignment
+  // of the transcript ("" = the ASR model's own word times)
+  std::string align_model_dir;
 };
 
 /**

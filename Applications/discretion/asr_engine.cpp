@@ -20,9 +20,12 @@
 #include <cctype>
 #include <exception>
 #include <filesystem>
+#include <map>
+#include <mutex>
 
 #include "json.hpp"
 #include "qwen3_asr_causallm.h"
+#include "wav2vec2_ctc.h"
 #include "whisper_causallm.h"
 
 namespace discretion {
@@ -88,6 +91,22 @@ std::string architectureOf(const json &cfg) {
 constexpr float NO_SPEECH_THRESHOLD = 0.6f;
 constexpr float LOGPROB_THRESHOLD = -1.0f;
 
+/**
+ * @brief the aligner of a model directory, loaded once and shared by the
+ *        engines of a process (SpeechOps keeps one engine per graph length)
+ */
+std::shared_ptr<AsrAligner> sharedAligner(const std::string &dir) {
+  static std::mutex m;
+  static std::map<std::string, std::weak_ptr<AsrAligner>> cache;
+  std::lock_guard<std::mutex> lock(m);
+  if (auto a = cache[dir].lock())
+    return a;
+  auto a = std::make_shared<AsrAligner>();
+  a->model.load(dir);
+  cache[dir] = a;
+  return a;
+}
+
 } // namespace
 
 AsrEngine::AsrEngine() = default;
@@ -132,6 +151,11 @@ bool AsrEngine::initWhisper(const AsrOptions &opt, std::string &error) {
 
 bool AsrEngine::init(const AsrOptions &opt, std::string &error) {
   try {
+    word_timestamps_ = opt.word_timestamps;
+    if (!opt.align_model_dir.empty()) {
+      aligner_ = sharedAligner(opt.align_model_dir);
+      align_language_ = whisperLanguage(opt.language);
+    }
     json cfg = quick_ai::LoadJsonFile(opt.model_dir + "/config.json");
     if (architectureOf(cfg) == quick_ai::WhisperCausalLM::architectures)
       return initWhisper(opt, error);
@@ -214,41 +238,61 @@ bool AsrEngine::init(const AsrOptions &opt, std::string &error) {
 size_t AsrEngine::segmentSamples() const { return segment_samples_; }
 
 std::string AsrEngine::transcribe(std::vector<float> pcm) {
+  // callers pad a segment to segmentSamples() with zeros: drop them, so the
+  // word times stay inside the audio
+  size_t n = pcm.size();
+  while (n > 0 && pcm[n - 1] == 0.0f)
+    --n;
+  last_words_.clear();
+  if (n == 0)
+    return "";
+  const bool align =
+    aligner_ && word_timestamps_ && n <= aligner_->model.maxSamples();
+  std::vector<float> audio(pcm.begin(), pcm.begin() + n);
+
+  std::string text, language = align_language_;
   if (whisper_) {
-    // callers pad a segment to segmentSamples() with zeros: drop them, so the
-    // word times stay inside the audio
-    size_t n = pcm.size();
-    while (n > 0 && pcm[n - 1] == 0.0f)
-      --n;
-    pcm.resize(n);
-    whisper_words_.clear();
-    if (pcm.empty())
-      return "";
-    const auto r =
-      whisper_->transcribe(pcm, whisper_language_, word_timestamps_);
+    // the aligner times the words, so no cross-attention timing then
+    const auto r = whisper_->transcribe(audio, whisper_language_,
+                                        word_timestamps_ && !align);
     if (r.no_speech_prob > NO_SPEECH_THRESHOLD &&
         r.avg_logprob < LOGPROB_THRESHOLD)
       return "";
     for (const auto &w : r.words) {
       const size_t b = w.word.find_first_not_of(' ');
       if (b != std::string::npos)
-        whisper_words_.emplace_back(w.word.substr(b), w.start);
+        last_words_.emplace_back(w.word.substr(b), w.start);
     }
-    return r.text;
+    text = r.text;
+    language = r.language;
+  } else {
+    model_->setAudioPcm(std::move(pcm));
+    model_->run(prompt_, /*do_sample=*/false, /*system_prompt=*/"",
+                /*tail_prompt=*/"", /*log_output=*/false);
+    text = model_->getLastTranscription();
+    for (const auto &w : model_->getLastWordTimestamps())
+      last_words_.emplace_back(w.text, w.time_sec);
   }
-  model_->setAudioPcm(std::move(pcm));
-  model_->run(prompt_, /*do_sample=*/false, /*system_prompt=*/"",
-              /*tail_prompt=*/"", /*log_output=*/false);
-  return model_->getLastTranscription();
+
+  if (align && !text.empty()) {
+    // WhisperX: force-align the transcript with the wav2vec2 CTC model; the
+    // model's own word times stay when the alignment fails
+    std::vector<quick_ai::CtcWord> aligned;
+    {
+      std::lock_guard<std::mutex> lock(aligner_->mutex);
+      aligned = aligner_->model.align(audio, text, language);
+    }
+    if (!aligned.empty()) {
+      last_words_.clear();
+      for (const auto &w : aligned)
+        last_words_.emplace_back(w.word, w.start);
+    }
+  }
+  return text;
 }
 
 std::vector<std::pair<std::string, double>> AsrEngine::lastWords() const {
-  if (whisper_)
-    return whisper_words_;
-  std::vector<std::pair<std::string, double>> words;
-  for (const auto &w : model_->getLastWordTimestamps())
-    words.emplace_back(w.text, w.time_sec);
-  return words;
+  return last_words_;
 }
 
 } // namespace discretion

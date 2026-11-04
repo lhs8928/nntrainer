@@ -21,11 +21,14 @@
 #define __DISCRETION_ASR_ENGINE_H__
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "asr_lane.h"
+
+#include "wav2vec2_ctc.h"
 
 namespace quick_ai {
 class Qwen3ASRCausalLM;
@@ -33,6 +36,12 @@ class WhisperCausalLM;
 } // namespace quick_ai
 
 namespace discretion {
+
+/** @brief a wav2vec2 CTC model for WhisperX alignment, shared by engines */
+struct AsrAligner {
+  quick_ai::Wav2Vec2CTC model;
+  std::mutex mutex;
+};
 
 class AsrEngine {
 public:
@@ -62,7 +71,12 @@ public:
    */
   std::string transcribe(std::vector<float> pcm);
 
-  /** @brief words of the last transcribe(), time from the segment start */
+  /**
+   * @brief words of the last transcribe(), time from the segment start: by
+   *        WhisperX forced alignment when AsrOptions::align_model_dir is set
+   *        (and the segment fits it), else the model's own (Qwen3-ASR's
+   *        attention peaks, Whisper's cross-attention DTW)
+   */
   std::vector<std::pair<std::string, double>> lastWords() const;
 
 private:
@@ -75,7 +89,10 @@ private:
   std::unique_ptr<quick_ai::WhisperCausalLM> whisper_;
   std::string whisper_language_; // code such as "ko", "" = detect
   bool word_timestamps_ = true;
-  std::vector<std::pair<std::string, double>> whisper_words_;
+
+  std::shared_ptr<AsrAligner> aligner_;
+  std::string align_language_; // code of the forced language (Qwen3-ASR)
+  std::vector<std::pair<std::string, double>> last_words_;
 };
 
 } // namespace discretion

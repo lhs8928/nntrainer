@@ -26,6 +26,8 @@
  *   sd_weights         instead of the two: the all-in-one
  *                      speaker_diarization.bin (PyanNet + WeSpeaker)
  *   language           "Korean" (default), "" = the model decides
+ *   align_model_dir    wav2vec2 CTC model (WhisperX alignment) that times
+ *                      the words of the transcripts ("" = the ASR model's)
  *   asr_secs           model graph lengths (default [8, 12.5]); Whisper
  *                      loads one model for the longest
  *   threads            worker threads of the models (0 = default)
