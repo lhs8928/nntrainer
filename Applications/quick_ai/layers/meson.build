@@ -29,6 +29,7 @@ causallm_multimodal_scatter_src_abs = [meson.current_source_dir() / 'multimodal_
 causallm_nhwc_to_nchw_src_abs = [meson.current_source_dir() / 'nhwc_to_nchw.cpp']
 causallm_cross_attention_src_abs = [meson.current_source_dir() / 'cross_attention.cpp']
 causallm_position_embedding_src_abs = [meson.current_source_dir() / 'position_embedding.cpp']
+causallm_wav2vec2_layers_src_abs = [meson.current_source_dir() / 'wav2vec2_layers.cpp']
 
 causallm_rms_norm = shared_library(
     'rms_norm_layer',
@@ -177,6 +178,20 @@ if quick_ai_use_tokenizer_layers
       link_with: causallm_position_embedding,
       include_directories: causallm_layer_inc
   )
+
+  # wav2vec 2.0 (forced alignment): conv feature encoder, positional conv
+  causallm_wav2vec2_layers = shared_library(
+      'wav2vec2_layers',
+      causallm_wav2vec2_layers_src_abs,
+      include_directories: causallm_layer_inc,
+      dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+      install: quick_ai_use_tokenizer_layers,
+      install_dir: application_install_dir
+  )
+  causallm_wav2vec2_layers_dep = declare_dependency(
+      link_with: causallm_wav2vec2_layers,
+      include_directories: causallm_layer_inc
+  )
 else
   # Dummy dependencies for CED-only builds
   causallm_swiglu_dep = declare_dependency()
@@ -189,6 +204,7 @@ else
   causallm_nhwc_to_nchw_dep = declare_dependency()
   causallm_cross_attention_dep = declare_dependency()
   causallm_position_embedding_dep = declare_dependency()
+  causallm_wav2vec2_layers_dep = declare_dependency()
 endif
 
 causallm_mha_core = shared_library(

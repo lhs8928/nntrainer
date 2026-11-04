@@ -69,6 +69,7 @@ if quick_ai_use_tokenizer_for_deps
     causallm_nhwc_to_nchw_dep,
     causallm_cross_attention_dep,
     causallm_position_embedding_dep,
+    causallm_wav2vec2_layers_dep,
   ]
 endif
 
