@@ -109,8 +109,11 @@ bool fusedLayerNorm(const Tensor &input, Tensor &output, const Tensor &gamma,
 
   const unsigned int W = input_dim.width();
   const unsigned int row_dim_v = input_dim.height();
-  const unsigned int row_begin = (to > from && to <= row_dim_v) ? from : 0u;
-  const unsigned int row_end = (to > from && to <= row_dim_v) ? to : row_dim_v;
+  // An incremental step holds its rows from row 0 on (as fully_connected and
+  // addition read them), not at their positions [from, to).
+  const unsigned int row_begin = 0u;
+  const unsigned int row_end =
+    to > from ? std::min(to - from, row_dim_v) : row_dim_v;
 
   std::vector<float> gf(W), bf(W), xf, yf;
   auto to_f32 = [W](const Tensor &t, std::vector<float> &dst) {
@@ -376,9 +379,10 @@ void LayerNormalizationLayer::incremental_forwarding(RunLayerContext &context,
       width_axis_only) {
     const unsigned int W = input_dim.width();
     const unsigned int row_dim_v = input_dim.height();
-    const unsigned int row_begin = (to > from && to <= row_dim_v) ? from : 0u;
+    // the step's rows start at row 0 (see fusedLayerNorm)
+    const unsigned int row_begin = 0u;
     const unsigned int row_end =
-      (to > from && to <= row_dim_v) ? to : row_dim_v;
+      to > from ? std::min(to - from, row_dim_v) : row_dim_v;
     const size_t row_count = row_end - row_begin;
 
     for (unsigned int b = 0; b < input_dim.batch(); ++b) {
