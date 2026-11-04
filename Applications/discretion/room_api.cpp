@@ -57,6 +57,7 @@ public:
   segment(const std::vector<float> &pcm) override {
     return ops_.segmentation(pcm);
   }
+  std::string asrProvider() const override { return ops_.asrProvider(); }
 
 private:
   SpeechOps &ops_;

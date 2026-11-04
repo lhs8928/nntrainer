@@ -21,7 +21,8 @@
  * - each line's voice goes to the whole-meeting clustering (RoomDiarizer) and
  *   carries why its label may be wrong (speaker_doubt).
  * ALICE's own-voice gating, barge-in cuts and recognizer context are left out:
- * the phone does not speak, and Qwen3-ASR takes no context.
+ * the phone does not speak, and the recognizer (Qwen3-ASR or Whisper) takes no
+ * context.
  */
 
 #ifndef __DISCRETION_ROOM_PIPELINE_H__
@@ -58,6 +59,8 @@ public:
   /** @brief powerset class per frame (10000/589 ms), per 10 s window */
   virtual std::vector<std::vector<uint8_t>>
   segment(const std::vector<float> &pcm) = 0;
+  /** @brief the recognizer's name in the line info ("asr_provider") */
+  virtual std::string asrProvider() const { return "nntrainer:qwen3-asr"; }
 };
 
 /** @brief one emitted line and how it was recognized and labelled */

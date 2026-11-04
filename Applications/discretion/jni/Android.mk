@@ -59,6 +59,7 @@ DISCRETION_INCLUDES := \
     $(QUICK_AI)/layers \
     $(QUICK_AI)/models \
     $(QUICK_AI)/models/qwen3_asr \
+    $(QUICK_AI)/models/whisper \
     $(QUICK_AI)/third_party/minja/include \
     $(QUICK_AI)/third_party
 

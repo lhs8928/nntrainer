@@ -938,7 +938,7 @@ void RoomPipeline::complete(const Segment &seg) {
     auto it = r.info.find(l.id);
     const TurnInfo *ti = it == r.info.end() ? nullptr : &it->second;
     json info;
-    info["asr_provider"] = "nntrainer:qwen3-asr";
+    info["asr_provider"] = models_.asrProvider();
     info["asr_ms"] = std::lround(row.ms);
     info["separation"] = "diarize";
     info["split"] = joined.size() > 1;

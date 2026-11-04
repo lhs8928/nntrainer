@@ -108,6 +108,16 @@ bool SpeechOps::init(const SpeechOptions &opt, std::string &error) {
     if (!engine->init(a, error))
       return false;
     engines_.push_back(std::move(engine));
+    if (engines_.back()->anyLength()) {
+      // Whisper: one model takes every length, keep the longest segment
+      engines_.clear();
+      a.segment_sec = opt_.asr_secs.back();
+      auto whisper = std::make_shared<AsrEngine>();
+      if (!whisper->init(a, error))
+        return false;
+      engines_.push_back(std::move(whisper));
+      break;
+    }
   }
   sd_ = std::make_unique<speaker_diarization::BatchDiarizer>();
   const bool two =
@@ -136,11 +146,16 @@ std::string SpeechOps::speakerModel() const {
   return sd_ ? sd_->speakerModel() : "";
 }
 
+std::string SpeechOps::asrProvider() const {
+  return engines_.empty() ? "" : engines_.front()->provider();
+}
+
 std::string SpeechOps::describe() const {
   json j;
   j["asr_secs"] = opt_.asr_secs;
   j["language"] = opt_.asr.language;
   j["model"] = opt_.asr.model_dir;
+  j["asr_provider"] = asrProvider();
   if (opt_.segmentation_weights.empty()) {
     j["sd_weights"] = opt_.sd_weights;
   } else {

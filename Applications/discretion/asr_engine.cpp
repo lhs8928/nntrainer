@@ -4,7 +4,7 @@
  *
  * @file   asr_engine.cpp
  * @date   12 October 2026
- * @brief  Resident Qwen3-ASR model that transcribes fixed-length PCM segments
+ * @brief  Resident ASR model (Qwen3-ASR or Whisper) that transcribes segments
  * @see    https://github.com/nntrainer/nntrainer
  * @author Hyeonseok Lee <hs89.lee@samsung.com>
  * @bug    No known bugs except for NYI items
@@ -17,11 +17,13 @@
 #include "asr_engine.h"
 
 #include <algorithm>
+#include <cctype>
 #include <exception>
 #include <filesystem>
 
 #include "json.hpp"
 #include "qwen3_asr_causallm.h"
+#include "whisper_causallm.h"
 
 namespace discretion {
 
@@ -51,14 +53,88 @@ void resolvePath(json &cfg, const std::string &key,
   cfg[key] = (std::filesystem::path(model_dir) / path).string();
 }
 
+/**
+ * @brief Whisper's language code of a language name ("Korean" -> "ko"); a
+ *        code is returned as it is, "" stays "" (detect the language)
+ */
+std::string whisperLanguage(const std::string &language) {
+  static const std::pair<const char *, const char *> names[] = {
+    {"english", "en"},    {"korean", "ko"},     {"japanese", "ja"},
+    {"chinese", "zh"},    {"german", "de"},     {"spanish", "es"},
+    {"french", "fr"},     {"russian", "ru"},    {"portuguese", "pt"},
+    {"italian", "it"},    {"vietnamese", "vi"}, {"thai", "th"},
+    {"indonesian", "id"}, {"arabic", "ar"},     {"hindi", "hi"},
+    {"turkish", "tr"},    {"dutch", "nl"},      {"polish", "pl"},
+    {"cantonese", "yue"}};
+  std::string lower = language;
+  std::transform(lower.begin(), lower.end(), lower.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  for (const auto &[name, code] : names)
+    if (lower == name)
+      return code;
+  return lower;
+}
+
+/** @brief architectures[0] of config.json */
+std::string architectureOf(const json &cfg) {
+  if (cfg.contains("architectures") && cfg["architectures"].is_array() &&
+      !cfg["architectures"].empty())
+    return cfg["architectures"][0].get<std::string>();
+  return "";
+}
+
+// Whisper's rule for a segment without speech: likely silence and a weak
+// transcription (openai/whisper no_speech_threshold, logprob_threshold)
+constexpr float NO_SPEECH_THRESHOLD = 0.6f;
+constexpr float LOGPROB_THRESHOLD = -1.0f;
+
 } // namespace
 
 AsrEngine::AsrEngine() = default;
 AsrEngine::~AsrEngine() = default;
 
+std::string AsrEngine::provider() const {
+  return whisper_ ? "nntrainer:whisper" : "nntrainer:qwen3-asr";
+}
+
+bool AsrEngine::initWhisper(const AsrOptions &opt, std::string &error) {
+  json cfg = quick_ai::LoadJsonFile(opt.model_dir + "/config.json");
+  json generation_cfg =
+    quick_ai::LoadJsonFile(opt.model_dir + "/generation_config.json");
+  json nntr_cfg = quick_ai::LoadJsonFile(opt.model_dir + "/nntr_config.json");
+  for (const std::string key : {"tokenizer_file", "embedding_file_name"})
+    resolvePath(nntr_cfg, key, opt.model_dir);
+
+  // Whisper always encodes a 30 s window; a segment is at most that long
+  const float sec = std::min(opt.segment_sec, 30.0f);
+  segment_samples_ =
+    static_cast<size_t>(static_cast<unsigned int>(sec * 100.0f + 0.5f)) * 160;
+  word_timestamps_ = opt.word_timestamps;
+
+  whisper_ =
+    std::make_unique<quick_ai::WhisperCausalLM>(cfg, generation_cfg, nntr_cfg);
+  whisper_language_ = whisperLanguage(opt.language);
+  if (!whisper_language_.empty()) {
+    const auto codes = whisper_->languages();
+    if (std::find(codes.begin(), codes.end(), whisper_language_) ==
+        codes.end()) {
+      error = "Whisper does not know the language \"" + opt.language + "\"";
+      whisper_.reset();
+      return false;
+    }
+  }
+  whisper_->initialize();
+  whisper_->load_weight(opt.model_dir + "/" +
+                        nntr_cfg["model_file_name"].get<std::string>());
+  whisper_->repack_weight();
+  return true;
+}
+
 bool AsrEngine::init(const AsrOptions &opt, std::string &error) {
   try {
     json cfg = quick_ai::LoadJsonFile(opt.model_dir + "/config.json");
+    if (architectureOf(cfg) == quick_ai::WhisperCausalLM::architectures)
+      return initWhisper(opt, error);
     json text_cfg = json::object();
     if (cfg.contains("text_config") && cfg["text_config"].is_object()) {
       text_cfg = cfg["text_config"];
@@ -138,6 +214,28 @@ bool AsrEngine::init(const AsrOptions &opt, std::string &error) {
 size_t AsrEngine::segmentSamples() const { return segment_samples_; }
 
 std::string AsrEngine::transcribe(std::vector<float> pcm) {
+  if (whisper_) {
+    // callers pad a segment to segmentSamples() with zeros: drop them, so the
+    // word times stay inside the audio
+    size_t n = pcm.size();
+    while (n > 0 && pcm[n - 1] == 0.0f)
+      --n;
+    pcm.resize(n);
+    whisper_words_.clear();
+    if (pcm.empty())
+      return "";
+    const auto r =
+      whisper_->transcribe(pcm, whisper_language_, word_timestamps_);
+    if (r.no_speech_prob > NO_SPEECH_THRESHOLD &&
+        r.avg_logprob < LOGPROB_THRESHOLD)
+      return "";
+    for (const auto &w : r.words) {
+      const size_t b = w.word.find_first_not_of(' ');
+      if (b != std::string::npos)
+        whisper_words_.emplace_back(w.word.substr(b), w.start);
+    }
+    return r.text;
+  }
   model_->setAudioPcm(std::move(pcm));
   model_->run(prompt_, /*do_sample=*/false, /*system_prompt=*/"",
               /*tail_prompt=*/"", /*log_output=*/false);
@@ -145,6 +243,8 @@ std::string AsrEngine::transcribe(std::vector<float> pcm) {
 }
 
 std::vector<std::pair<std::string, double>> AsrEngine::lastWords() const {
+  if (whisper_)
+    return whisper_words_;
   std::vector<std::pair<std::string, double>> words;
   for (const auto &w : model_->getLastWordTimestamps())
     words.emplace_back(w.text, w.time_sec);

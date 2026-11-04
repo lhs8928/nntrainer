@@ -4,13 +4,17 @@
  *
  * @file   asr_engine.h
  * @date   12 October 2026
- * @brief  Resident Qwen3-ASR model that transcribes fixed-length PCM segments
+ * @brief  Resident ASR model (Qwen3-ASR or Whisper) that transcribes segments
  * @see    https://github.com/nntrainer/nntrainer
  * @author Hyeonseok Lee <hs89.lee@samsung.com>
  * @bug    No known bugs except for NYI items
  *
  * Only asr_lane.cpp and asr_engine.cpp include this header (and with it the
  * quick_ai model headers).
+ *
+ * The model directory's config.json picks the model: architectures
+ * "WhisperForConditionalGeneration" runs Whisper (docs/whisperx-asr.ko.md),
+ * anything else Qwen3-ASR.
  */
 
 #ifndef __DISCRETION_ASR_ENGINE_H__
@@ -25,7 +29,8 @@
 
 namespace quick_ai {
 class Qwen3ASRCausalLM;
-}
+class WhisperCausalLM;
+} // namespace quick_ai
 
 namespace discretion {
 
@@ -41,8 +46,15 @@ public:
   bool init(const AsrOptions &opt, std::string &error);
 
   /** @brief samples of one segment: the model is built for exactly this length
+   *         (Whisper: the longest segment, at most 30 s; any length works)
    */
   size_t segmentSamples() const;
+
+  /** @brief true when one engine takes every length (Whisper's 30 s window) */
+  bool anyLength() const { return whisper_ != nullptr; }
+
+  /** @brief "nntrainer:qwen3-asr" or "nntrainer:whisper" */
+  std::string provider() const;
 
   /**
    * @brief transcribe one segment
@@ -54,9 +66,16 @@ public:
   std::vector<std::pair<std::string, double>> lastWords() const;
 
 private:
+  bool initWhisper(const AsrOptions &opt, std::string &error);
+
   std::unique_ptr<quick_ai::Qwen3ASRCausalLM> model_;
   std::string prompt_;
   size_t segment_samples_ = 0;
+
+  std::unique_ptr<quick_ai::WhisperCausalLM> whisper_;
+  std::string whisper_language_; // code such as "ko", "" = detect
+  bool word_timestamps_ = true;
+  std::vector<std::pair<std::string, double>> whisper_words_;
 };
 
 } // namespace discretion

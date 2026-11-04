@@ -16,7 +16,8 @@
  * thread of its own, so nntr_room_feed never blocks the audio callback.
  *
  * config_json (all optional but the model paths):
- *   model_dir          Qwen3-ASR model directory
+ *   model_dir          ASR model directory: Qwen3-ASR, or Whisper when its
+ *                      config.json says WhisperForConditionalGeneration
  *   segmentation_weights  sd_segmentation.bin (PyanNet)
  *   speaker_weights    the voice model, told by the file:
  *                      speaker_eres2netv2.bin (ERes2NetV2, the ALICE
@@ -25,7 +26,8 @@
  *   sd_weights         instead of the two: the all-in-one
  *                      speaker_diarization.bin (PyanNet + WeSpeaker)
  *   language           "Korean" (default), "" = the model decides
- *   asr_secs           model graph lengths (default [8, 12.5])
+ *   asr_secs           model graph lengths (default [8, 12.5]); Whisper
+ *                      loads one model for the longest
  *   threads            worker threads of the models (0 = default)
  *   vad                "silero" (default) or "energy"
  *   silero             silero_vad_v6.onnx path (energy gate when missing)

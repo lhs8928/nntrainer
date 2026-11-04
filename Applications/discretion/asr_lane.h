@@ -28,13 +28,13 @@ namespace discretion {
 class AsrEngine;
 
 struct AsrOptions {
-  std::string model_dir;        // Qwen3-ASR model directory
+  std::string model_dir;        // Qwen3-ASR or Whisper model directory
   float segment_sec = 8.0f;     // longest segment (the model is built for it)
   float segment_min_sec = 0.0f; // shortest segment, 0 = 0.9 * segment_sec
   float silence_rms = 0.005f;   // segments quieter than this are skipped
   bool vad = false; // cut at pauses (energy VAD), not only at the limit
   std::string language =
-    "English";                 // forced language, "" = let the model decide
+    "English"; // forced language ("Korean", or "ko" for Whisper), "" = detect
   unsigned max_backlog = 2;    // drop the oldest waiting segment beyond this
   std::vector<int> cpus;       // CPUs for this lane (empty = no restriction)
   int threads = 0;             // worker threads of the ASR (0 = default)

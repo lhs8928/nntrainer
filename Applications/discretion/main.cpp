@@ -11,7 +11,7 @@
  *
  * One audio stream feeds two lanes in the same process:
  *
- *   audio source -> fan-out -+-> ASR lane (segmenter + resident Qwen3-ASR) -+
+ *   audio source -> fan-out -+-> ASR lane (segmenter + resident ASR model) -+
  *                            |                                             +->
  * merger -> lines
  *                            +-> SD lane  (streaming diarizer)  ----------+
@@ -51,13 +51,15 @@ void usage(const char *prog) {
   std::fprintf(
     stderr,
     "Usage: %s <asr_model_dir> --sd-weights <speaker_diarization.bin>\n"
+    "          (asr_model_dir: Qwen3-ASR, or Whisper by its config.json)\n"
     "          (--stream-file <wav> [--stream-speed X] | --mic [--mic-device "
     "D] | "
     "--stdin-pcm)\n"
     "\n"
     "ASR:   --segment-sec S (8)  --segment-min-sec S  --silence-rms R (0.005)\n"
     "       --vad (cut segments at pauses too; min length 1.5 s)\n"
-    "       --language NAME (English, \"\" = automatic)  --max-backlog N (2)\n"
+    "       --language NAME (English; Whisper also takes a code: ko;\n"
+    "                       \"\" = automatic)  --max-backlog N (2)\n"
     "SD:    --window S (20)  --step S (20)\n"
     "       --no-sd (ASR only: no speaker labels, no SD weights needed)\n"
     "Cores: --asr-cpus LIST  --sd-cpus LIST (e.g. 0,1 / 2-3)\n"

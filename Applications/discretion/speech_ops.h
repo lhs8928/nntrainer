@@ -12,7 +12,7 @@
  * `--serve --speech` answers three requests on stdin, each on a file of
  * 16 kHz mono PCM16 samples, writing JSON to an output file:
  *
- *   ASR      text and word timestamps of one segment (Qwen3-ASR)
+ *   ASR      text and word timestamps of one segment (Qwen3-ASR or Whisper)
  *   EMBED    one speaker embedding of the whole input (WeSpeaker ResNet34,
  *            or ERes2NetV2 with --speaker-model eres2netv2)
  *   SEGMENT  PyanNet powerset classes per frame, per 10 s window
@@ -78,6 +78,10 @@ public:
   /** @brief "wespeaker" or "eres2netv2" */
   std::string speakerModel() const;
 
+  /** @brief the ASR engine's name: "nntrainer:qwen3-asr", "nntrainer:whisper"
+   */
+  std::string asrProvider() const;
+
   /**
    * @brief answer one request
    * @param op ASR, EMBED or SEGMENT
@@ -94,7 +98,7 @@ public:
   bool run(const std::string &op, const std::string &pcm16, std::string &body,
            std::string &error);
 
-  /** @brief text and word times of 16 kHz samples (Qwen3-ASR) */
+  /** @brief text and word times of 16 kHz samples (Qwen3-ASR or Whisper) */
   AsrResult recognize(const std::vector<float> &pcm);
 
   /** @brief one embedding of the samples (the voice model's) */
