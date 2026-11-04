@@ -36,6 +36,7 @@
 #include "audio_vad.h"
 #include "ced/ced_transformer.h"
 #include "qwen3_asr_causallm.h"
+#include "wav2vec2_ctc.h"
 #include "whisper_causallm.h"
 #include <atomic>
 #include <condition_variable>
@@ -377,6 +378,10 @@ int main(int argc, char *argv[]) {
   // appending "language <Name><asr_text>" to the prompt, so the model does not
   // spend ~5 decode tokens (~0.5 s) per run on the language tag.
   std::string forced_language;
+  // WhisperX alignment (wav2vec2 CTC): --align-model DIR aligns Whisper's
+  // transcripts; --align-text TEXT with a wav2vec2 directory as the model
+  // aligns that text to --audio and stops
+  std::string align_model, align_text;
   // --max-backlog N: if the model falls behind real time and more than N
   // segments are waiting, drop the oldest ones (bounded latency) and say so.
   unsigned int max_backlog_opt = 2;
@@ -422,6 +427,10 @@ int main(int argc, char *argv[]) {
       stream_verbose = true;
     if (take_opt("--language", true, v))
       forced_language = v;
+    if (take_opt("--align-model", true, v))
+      align_model = v;
+    if (take_opt("--align-text", true, v))
+      align_text = v;
     if (take_opt("--context-chars", true, v))
       context_chars = static_cast<size_t>(std::stoul(v));
     if (take_opt("--stream-speed", true, v))
@@ -471,6 +480,24 @@ int main(int argc, char *argv[]) {
   }
 
   const std::string model_path = argv[1];
+
+  if (!align_text.empty()) {
+    try {
+      quick_ai::Wav2Vec2CTC ctc;
+      ctc.load(model_path);
+      quick_ai::AudioPreprocessor pre;
+      std::vector<float> pcm = pre.loadAudio(audio_path);
+      if (pcm.size() > ctc.maxSamples())
+        pcm.resize(ctc.maxSamples());
+      for (const auto &w : ctc.align(pcm, align_text, forced_language))
+        std::cout << "  " << std::fixed << std::setprecision(3) << w.start
+                  << " - " << w.end << "  " << w.word << std::endl;
+    } catch (const std::exception &e) {
+      std::cerr << "[!] alignment failed: " << e.what() << std::endl;
+      return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+  }
   std::string input_text;
   std::function<std::string(const std::string &)> make_prompt;
   std::string system_head_prompt = "";
@@ -645,6 +672,11 @@ int main(int argc, char *argv[]) {
           dynamic_cast<quick_ai::WhisperCausalLM *>(model.get())) {
       whisper->setAudioPath(audio_path);
       whisper->setLanguage(forced_language);
+      if (!align_model.empty()) {
+        static quick_ai::Wav2Vec2CTC ctc;
+        ctc.load(align_model);
+        whisper->setAligner(&ctc);
+      }
     }
 
     model->initialize();

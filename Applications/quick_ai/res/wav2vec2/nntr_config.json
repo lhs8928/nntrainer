@@ -1,0 +1,4 @@
+{
+  "model_file_name": "nntr_wav2vec2.safetensors",
+  "max_seconds": 30.0
+}

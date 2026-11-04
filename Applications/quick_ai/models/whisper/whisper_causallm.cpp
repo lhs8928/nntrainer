@@ -28,6 +28,7 @@
 #include <layer.h>
 
 #include "audio_preprocessor.h"
+#include "wav2vec2_ctc.h"
 #include <cross_attention.h>
 #include <llm_util.hpp>
 #include <mha_core.h>
@@ -649,15 +650,20 @@ void WhisperCausalLM::run(const WSTR prompt, bool do_sample,
   for (size_t off = 0; off < pcm.size(); off += window) {
     const size_t n = std::min(window, pcm.size() - off);
     std::vector<float> seg(pcm.begin() + off, pcm.begin() + off + n);
-    Result r = transcribe(seg, language_, word_timestamps_);
+    Result r = transcribe(seg, language_, word_timestamps_ && !aligner_);
+    if (aligner_ != nullptr && !r.text.empty()) {
+      r.words.clear();
+      for (const auto &w : aligner_->align(seg, r.text, r.language))
+        r.words.push_back({w.word, {}, w.start, w.end});
+    }
     const double t0 = static_cast<double>(off) / SAMPLE_RATE;
     out << "[Whisper] " << std::fixed << std::setprecision(2) << t0 << "s ("
         << r.language << ", no_speech " << std::defaultfloat
         << std::setprecision(4) << r.no_speech_prob << ", avg_logprob "
         << r.avg_logprob << std::fixed << "): " << r.text << std::endl;
     for (const auto &w : r.words)
-      out << "  " << std::setprecision(2) << t0 + w.start << " - " << t0 + w.end
-          << "  " << w.word << std::endl;
+      out << "  " << std::setprecision(aligner_ ? 3 : 2) << t0 + w.start
+          << " - " << t0 + w.end << "  " << w.word << std::endl;
     if (!all.empty() && !r.text.empty())
       all += " ";
     all += r.text;

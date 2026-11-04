@@ -34,6 +34,7 @@ CAUSALLM_COMMON_INCLUDES := \
     $(LOCAL_PATH)/../models/gemma4 \
     $(LOCAL_PATH)/../models/qwen3_asr \
     $(LOCAL_PATH)/../models/whisper \
+    $(LOCAL_PATH)/../models/wav2vec2 \
     $(LOCAL_PATH)/../models/xlm_roberta \
     $(LOCAL_PATH)/../third_party/minja/include \
     $(LOCAL_PATH)/../third_party \
@@ -130,6 +131,9 @@ LOCAL_SRC_FILES := \
     ../layers/position_embedding.cpp \
     ../models/whisper/whisper_causallm.cpp \
     ../models/whisper/whisper_timing.cpp \
+    ../layers/wav2vec2_layers.cpp \
+    ../models/wav2vec2/wav2vec2_ctc.cpp \
+    ../models/wav2vec2/ctc_align.cpp \
     ../api/streamer.cpp \
 
 LOCAL_SHARED_LIBRARIES := nntrainer ccapi-nntrainer
@@ -281,6 +285,9 @@ LOCAL_SRC_FILES := ../quantize.cpp \
     ../layers/position_embedding.cpp \
     ../models/whisper/whisper_causallm.cpp \
     ../models/whisper/whisper_timing.cpp \
+    ../layers/wav2vec2_layers.cpp \
+    ../models/wav2vec2/wav2vec2_ctc.cpp \
+    ../models/wav2vec2/ctc_align.cpp \
     ../api/streamer.cpp
 
 LOCAL_SHARED_LIBRARIES := nntrainer ccapi-nntrainer
@@ -306,6 +313,7 @@ LOCAL_C_INCLUDES += $(NNTRAINER_INCLUDES) \
     $(LOCAL_PATH)/../models/ced \
     $(LOCAL_PATH)/../models/qwen3_asr \
     $(LOCAL_PATH)/../models/whisper \
+    $(LOCAL_PATH)/../models/wav2vec2 \
     $(LOCAL_PATH)/../models/lfm2
 
 include $(BUILD_EXECUTABLE)

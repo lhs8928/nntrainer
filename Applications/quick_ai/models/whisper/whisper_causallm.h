@@ -42,6 +42,8 @@
 
 namespace quick_ai {
 
+class Wav2Vec2CTC;
+
 /**
  * @class WhisperEncoder
  * @brief the audio encoder as its own graph, writing the cross memories
@@ -127,6 +129,12 @@ public:
   void setLanguage(const std::string &code) { language_ = code; }
   void setWordTimestamps(bool on) { word_timestamps_ = on; }
 
+  /**
+   * @brief run() times the words with this wav2vec2 model (WhisperX forced
+   *        alignment) instead of the cross-attention; nullptr: cross-attention
+   */
+  void setAligner(Wav2Vec2CTC *aligner) { aligner_ = aligner; }
+
   const Result &getLastResult() const { return last_; }
 
   /** @brief samples of the encoder window (30 s) */
@@ -170,6 +178,7 @@ private:
   std::string language_;
   bool word_timestamps_ = true;
   bool capture_on_ = false;
+  Wav2Vec2CTC *aligner_ = nullptr;
   Result last_;
 };
 
