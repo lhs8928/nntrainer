@@ -9,6 +9,7 @@
  * @bug		No known bugs except for NYI items
  */
 
+#include <fp16.h>
 #include <tensor.h>
 #include <tensor_base.h>
 
@@ -81,12 +82,12 @@ void TensorBase::read(std::ifstream &file, size_t start_offset,
 
   auto it = safetensors_weight_sizes.find(start_offset);
   if (it != safetensors_weight_sizes.end() && it->second == sz / 2) {
-    std::vector<_FP16> fp16_buf(sz / 2 / sizeof(_FP16));
+    std::vector<uint16_t> fp16_buf(sz / 2 / sizeof(uint16_t));
     checkedRead(file, (char *)fp16_buf.data(), sz / 2, "[Tensor::read] FP16 read failed",
                 start_offset, read_from_offset);
     float *fp32_ptr = (float *)getData();
     for (size_t i = 0; i < fp16_buf.size(); ++i) {
-      fp32_ptr[i] = static_cast<float>(fp16_buf[i]);
+      fp32_ptr[i] = compute_fp16_to_fp32(fp16_buf[i]);
     }
   } else {
     checkedRead(file, (char *)getData(), sz, "[Tensor::read] operation failed",
@@ -108,12 +109,12 @@ void TensorBase::read(ReadSource src, size_t start_offset,
 
   auto it = safetensors_weight_sizes.find(start_offset);
   if (it != safetensors_weight_sizes.end() && it->second == sz / 2) {
-    std::vector<_FP16> fp16_buf(sz / 2 / sizeof(_FP16));
+    std::vector<uint16_t> fp16_buf(sz / 2 / sizeof(uint16_t));
     checkedRead(src, (char *)fp16_buf.data(), sz / 2, "[Tensor::read] FP16 read failed",
                 start_offset, read_from_offset);
     float *fp32_ptr = (float *)getData();
     for (size_t i = 0; i < fp16_buf.size(); ++i) {
-      fp32_ptr[i] = static_cast<float>(fp16_buf[i]);
+      fp32_ptr[i] = compute_fp16_to_fp32(fp16_buf[i]);
     }
   } else {
     checkedRead(src, (char *)getData(), sz, "[Tensor::read] operation failed",
