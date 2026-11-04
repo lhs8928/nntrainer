@@ -26,6 +26,7 @@ if quick_ai_use_tokenizer_models
   subdir('gemma4')
   subdir('lfm2')
   subdir('qwen3_asr')
+  subdir('whisper')
   if get_option('platform') != 'windows'
     subdir('bert')
     subdir('xlm_roberta')

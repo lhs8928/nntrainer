@@ -36,6 +36,7 @@
 #include "audio_vad.h"
 #include "ced/ced_transformer.h"
 #include "qwen3_asr_causallm.h"
+#include "whisper_causallm.h"
 #include <atomic>
 #include <condition_variable>
 #include <csignal>
@@ -453,6 +454,13 @@ int main(int argc, char *argv[]) {
                                                           nntr_cfg);
     });
 
+  quick_ai::Factory::Instance().registerModel(
+    quick_ai::WhisperCausalLM::architectures,
+    [](json &cfg, json &generation_cfg, json &nntr_cfg) {
+      return std::make_unique<quick_ai::WhisperCausalLM>(cfg, generation_cfg,
+                                                         nntr_cfg);
+    });
+
   // Validate arguments
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0] << " <model_path> [input_prompt]\n"
@@ -629,6 +637,14 @@ int main(int argc, char *argv[]) {
         system_head_prompt.clear();
         system_tail_prompt.clear();
       }
+    }
+
+    // Whisper: --audio is transcribed in 30 s windows; --language takes a
+    // code such as "ko" (empty: detect it)
+    if (auto *whisper =
+          dynamic_cast<quick_ai::WhisperCausalLM *>(model.get())) {
+      whisper->setAudioPath(audio_path);
+      whisper->setLanguage(forced_language);
     }
 
     model->initialize();

@@ -1,0 +1,23 @@
+{
+  "model_type": "causallm",
+  "batch_size": 1,
+  "init_seq_len": 4,
+  "max_seq_len": 448,
+  "num_to_generate": 224,
+  "model_tensor_type": "FP32-FP32",
+  "embedding_dtype": "FP32",
+  "fc_layer_dtype": "FP32",
+  "lmhead_dtype": "FP32",
+  "encoder": {
+    "model_tensor_type": "FP32-FP32",
+    "fc_layer_dtype": "FP32"
+  },
+  "tokenizer_file": "tokenizer.json",
+  "model_file_name": "nntr_whisper_large_v3_fp32.safetensors",
+  "bad_word_ids": [],
+  "sample_input": "",
+  "system_prompt": {
+    "head_prompt": "",
+    "tail_prompt": ""
+  }
+}
