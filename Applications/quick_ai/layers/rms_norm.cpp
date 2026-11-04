@@ -86,6 +86,7 @@ void RMSNormLayer::incremental_forwarding(nntrainer::RunLayerContext &context,
     g_dim.setDataType(out_step_dim.getDataType());
     cached_gamma = nntrainer::Tensor(g_dim, true);
     if (gamma.getDataType() != out_step_dim.getDataType()) {
+#ifdef ENABLE_FP16
       if (out_step_dim.getDataType() == ml::train::TensorDim::DataType::FP16) {
         const float *src = gamma.getData<float>();
         _FP16 *dst = cached_gamma.getData<_FP16>();
@@ -95,6 +96,10 @@ void RMSNormLayer::incremental_forwarding(nntrainer::RunLayerContext &context,
         float *dst = cached_gamma.getData<float>();
         for (unsigned int i = 0; i < gamma.getDim().getDataLen(); ++i) dst[i] = (float)src[i];
       }
+#else
+      // without FP16 every activation and gamma is FP32
+      throw std::invalid_argument("rms_norm: FP16 needs the FP16 build");
+#endif
     } else {
       cached_gamma.copy(gamma);
     }

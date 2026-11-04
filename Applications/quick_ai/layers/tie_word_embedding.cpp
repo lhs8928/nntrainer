@@ -354,11 +354,16 @@ void TieWordEmbedding::incremental_forwarding_embedding(
       } else {
         if (weight.getDataType() == nntrainer::TensorDim::DataType::FP16 &&
             out_tensor.getDataType() == nntrainer::TensorDim::DataType::FP32) {
+#ifdef ENABLE_FP16
           _FP16 *src_ptr = weight.getAddress<_FP16>(0) + embed_idx * out_dim;
           float *dst_ptr = out_tensor.getAddress<float>(0);
           for (unsigned int k = 0; k < out_dim; ++k) {
             dst_ptr[k] = (float)src_ptr[k];
           }
+#else
+          throw std::invalid_argument(
+            "tie_word_embeddings: FP16 weights need the FP16 build");
+#endif
         } else if (weight.getDataType() == nntrainer::TensorDim::DataType::FP16 &&
                    out_tensor.getDataType() == nntrainer::TensorDim::DataType::FP16) {
 #ifdef ENABLE_FP16
@@ -511,6 +516,7 @@ void TieWordEmbedding::incremental_forwarding_lmhead(
       });
 #endif
     } else {
+#ifdef ENABLE_FP16
       nntrainer::TensorDim dim = hidden_step.getDim();
       dim.setDataType(nntrainer::TensorDim::DataType::FP16);
       nntrainer::Tensor hidden_step_fp16(dim, true);
@@ -524,6 +530,10 @@ void TieWordEmbedding::incremental_forwarding_lmhead(
       for (size_t i = 0; i < len; ++i) {
         dest[i] = (float)src[i];
       }
+#else
+      // without FP16 the weight, the input and the logits are all FP32
+      input_step.dot(weight, hidden_step, false, true);
+#endif
     }
 
     if (auto &disable_bias =

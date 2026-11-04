@@ -437,7 +437,12 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
   if (act_dtype == "FP32") {
     fused_audio_embeds_fp32.resize(static_cast<size_t>(downsampled_len) * 1024, 0.0f);
   } else {
+#ifdef ENABLE_FP16
     fused_audio_embeds_fp16.resize(static_cast<size_t>(downsampled_len) * 1024, static_cast<_FP16>(0.0f));
+#else
+    throw std::invalid_argument(
+      "Qwen3-ASR: FP16 activations need the FP16 build");
+#endif
   }
 
   std::vector<float> all_chunks(static_cast<size_t>(num_chunks) * 128 * 100, 0.0f);
@@ -470,10 +475,12 @@ void Qwen3ASRCausalLM::run(const WSTR prompt, bool do_sample,
         float *dst = fused_audio_embeds_fp32.data() + out_token_idx * 1024;
         std::copy_n(src, 1024, dst);
       } else {
+#ifdef ENABLE_FP16
         _FP16 *dst = fused_audio_embeds_fp16.data() + out_token_idx * 1024;
         for (int k = 0; k < 1024; ++k) {
           dst[k] = static_cast<_FP16>(src[k]);
         }
+#endif
       }
       out_token_idx++;
     }
