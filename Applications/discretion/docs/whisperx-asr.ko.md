@@ -61,7 +61,7 @@ Qwen3에만 해당하는 가정(Whisper에서 달라지는 점):
 
 | 항목 | 후보 | 제안 |
 |---|---|---|
-| Whisper 크기 | large-v3 (1.55B, 디코더 32층) / **large-v3-turbo** (809M, 디코더 4층) / medium (769M) / small (244M) | **large-v3-turbo**. 인코더는 large-v3와 같고 디코더가 4층이라 폰에서 생성이 빠릅니다. 한국어 품질은 7절에서 Qwen3과 비교 |
+| Whisper 크기 | **large-v3** (1.55B, 디코더 32층) / large-v3-turbo (809M, 디코더 4층) / medium (769M) / small (244M) | **large-v3로 결정(2026-11-04)**. WhisperX가 권장하는 large 계열이고, 같은 인코더에 디코더가 깊어 turbo보다 인식 품질이 대체로 좋습니다. 디코더가 32층이라 생성이 느린 점은 6절에서 잽니다 |
 | 단어 시각 | (a) Whisper cross-attention + DTW / (b) WhisperX처럼 wav2vec2 CTC 강제 정렬 | **(a) 먼저**. 모델이 하나 더 늘지 않고 지금 Qwen3 방식과 비슷합니다. 정확도가 부족하면 (b)를 6단계로 |
 | 짧은 구간 | 30초로 채움 / 인코더 길이를 줄임(whisper.cpp `audio_ctx`) | 묶음(batch)은 30초 그대로. 실시간 lane은 7절에서 지연을 재고 정함 |
 | 엔진 고르기 | 설정 키 `asr_backend` / `config.json`의 `model_type`으로 자동 | 둘 다: 기본은 자동(`"whisper"`면 Whisper), 키가 있으면 그 값 |
@@ -74,13 +74,13 @@ Qwen3에만 해당하는 가정(Whisper에서 달라지는 점):
       `speech_ops`, `room_pipeline`은 인터페이스만 봄
 - [ ] `AsrEngine::create(opt, error)`: `model_dir/config.json`의 `model_type`(또는 `asr_backend`)으로 구현 선택
 - [ ] `AsrOptions::language`를 엔진이 해석: Qwen3은 이름 그대로, Whisper는 `"Korean"`→`ko` 표(+ `"ko"` 직접 입력)
-- [ ] `asr_provider`를 엔진이 알려 줌(`nntrainer:qwen3-asr` / `nntrainer:whisper-large-v3-turbo`)
+- [ ] `asr_provider`를 엔진이 알려 줌(`nntrainer:qwen3-asr` / `nntrainer:whisper-large-v3`)
 - [ ] 확인: 녹음 파일(week1, boda)로 바꾸기 전과 줄이 같음
 
 ### 5.2 Whisper 가중치 변환
 
-- [ ] `Applications/quick_ai/res/whisper/whisper-large-v3-turbo/` 아래 `weight_converter.py`, `nntr_config.json`
-      (HF `openai/whisper-large-v3-turbo` safetensors → nntrainer 순서·이름, 인코더/디코더 dtype 따로)
+- [ ] `Applications/quick_ai/res/whisper/whisper-large-v3/` 아래 `weight_converter.py`, `nntr_config.json`
+      (HF `openai/whisper-large-v3` safetensors → nntrainer 순서·이름, 인코더/디코더 dtype 따로)
 - [ ] `tokenizer.json`, `generation_config.json`(`alignment_heads`, `suppress_tokens`, `lang_to_id`) 함께 둠
 - [ ] 양자화 조합 정함: 인코더 FC는 QINT8/Q4_0, conv는 FP32부터
 
@@ -88,7 +88,7 @@ Qwen3에만 해당하는 가정(Whisper에서 달라지는 점):
 
 - [ ] **인코더**: conv1d(k3,s1)+GELU → conv1d(k3,s2)+GELU → 고정 사인 위치 임베딩 더함 →
       pre-LN 블록 ×32(MHA 양방향, q·v bias 있음·k bias 없음, FFN 4×, GELU) → `ln_post`. 출력 1500×1280
-- [ ] **디코더**: 토큰 임베딩 + 학습 위치 임베딩(448) → 블록 ×4(causal self-attn + KV 캐시,
+- [ ] **디코더**: 토큰 임베딩 + 학습 위치 임베딩(448) → 블록 ×32(causal self-attn + KV 캐시,
       **cross-attn**(K/V는 인코더 출력에서 구간마다 한 번 계산해 둠), FFN) → LN → 토큰 임베딩을 묶은 LM head
 - [ ] **cross-attention 지원**: 지금 `mha_core`는 Q·K·V가 같은 줄기에서 오고 RoPE·causal을 전제로 함.
       인코더 출력 K/V를 고정 캐시로 받는 모드(RoPE 끔, 마스크 없음, 증분 디코딩 때 재계산 없음)를 추가하거나
@@ -121,7 +121,7 @@ Qwen3에만 해당하는 가정(Whisper에서 달라지는 점):
 ### 5.7 안드로이드와 문서
 
 - [ ] `libquick_ai_core.so` 크기, 모델 파일 크기·목록을 `docs/android-app.ko.md`에 반영
-- [ ] 시험 폰 경로 `/data/local/tmp/nntrainer/discretion/models/whisper-large-v3-turbo/`
+- [ ] 시험 폰 경로 `/data/local/tmp/nntrainer/discretion/models/whisper-large-v3/`
 
 ## 6. 위험과 확인할 점
 
@@ -129,7 +129,9 @@ Qwen3에만 해당하는 가정(Whisper에서 달라지는 점):
   묶음 모드(`--batch`)와 room 끝 판정 줄 단위에서 먼저 쓰고, 실시간은 재고 정합니다.
 - **환각**: Whisper는 무음·잡음에서 글을 지어내는 경향이 있습니다. Silero/PyanNet 게이트 뒤에만 돌리고 `no_speech`를 씁니다.
 - **cross-attention 구현**: 5.3절. 지금 quick_ai 모델은 모두 디코더 전용이라 새 길입니다.
-- **메모리**: turbo Q4_0 기준 약 0.5 GB 예상(Qwen3 1.1 GB보다 작음). 실측 필요.
+- **메모리**: large-v3 Q4_0 기준 약 0.9~1 GB 예상(Qwen3 1.1 GB와 비슷). 실측 필요.
+- **생성 속도**: large-v3 디코더는 32층(폭 1280)이라 토큰 하나에 Qwen3-1.7B 디코더(28층, 폭 2048)와 비슷하거나 조금 덜 듭니다.
+  여기에 30초 인코더(32층)가 구간마다 더해집니다. 폰에서 RTF를 먼저 재고, 부족하면 디코더 양자화(Q4_0)·인코더 길이 줄이기를 봅니다.
 - **라이선스**: Whisper 가중치 MIT. 정렬 모델(5.6)은 따로 확인.
 
 ## 7. 비교 평가 (바꿀지 정하는 기준)
@@ -153,3 +155,9 @@ Qwen3에만 해당하는 가정(Whisper에서 달라지는 점):
 - `audio_preprocessor`가 Whisper 멜과 같은 계산임을 확인(멜 수만 인자로)
 - nntrainer에 `conv1d`, `layer_normalization`이 있음. quick_ai `mha_core`에는 cross-attention 모드가 없음 → 5.3절 핵심 작업
 - 다음: 4절 결정(모델 크기·단어 시각 방식) 확정 후 5.1 엔진 추상화부터
+
+### 1. 모델 크기 결정 (2026-11-04)
+
+- turbo 대신 **Whisper large-v3**로 함(사용자 결정). 인코더 32층 + 디코더 32층, 멜 128개, 어휘 51866
+- 경로·provider 이름을 `whisper-large-v3`로 맞춤. 6절에 디코더 32층의 생성 속도 위험 추가
+- 다음: 단어 시각 방식(cross-attention + DTW 먼저) 확인 후 5.1 엔진 추상화
