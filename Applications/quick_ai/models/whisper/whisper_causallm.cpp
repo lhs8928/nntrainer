@@ -468,7 +468,9 @@ void WhisperCausalLM::setCapture(bool on) {
         return;
       const std::string &name = layer.getName(); // dec<i>_cross_attention
       const int i = std::stoi(name.substr(3, name.find('_') - 3));
-      layer.setProperty({"capture_heads=" + per_layer[i]});
+      // an empty property value does not parse: "none" records no head
+      layer.setProperty(
+        {"capture_heads=" + (per_layer[i].empty() ? "none" : per_layer[i])});
     },
     nullptr);
   capture_on_ = on;

@@ -280,7 +280,7 @@ void CrossAttentionLayer::setProperty(const std::vector<std::string> &values) {
       std::stringstream ss(value);
       std::string item;
       while (std::getline(ss, item, ',')) {
-        if (!item.empty())
+        if (!item.empty() && item != "none")
           capture_heads.push_back(std::stoi(item));
       }
     }

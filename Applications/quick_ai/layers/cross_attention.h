@@ -25,7 +25,7 @@
  *   input 0: query (B, 1, T, num_heads * head_dim)
  *   output : (B, 1, T, num_heads * head_dim)
  *   properties: num_heads, memory_id, layer_index (key of the capture),
- *               capture_heads ("" = none, "3,7" = record these heads)
+ *               capture_heads ("none" = none, "3,7" = record these heads)
  *
  * Every query row attends to all S memory rows (no mask). For word
  * timestamps the layer can record, for chosen heads, the scaled attention
