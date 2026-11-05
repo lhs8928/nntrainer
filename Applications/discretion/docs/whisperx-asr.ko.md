@@ -84,7 +84,8 @@ transcribe / lastWords)이 그대로라 `asr_lane`, `batch_pipeline`, `speech_op
 - [x] `Applications/quick_ai/res/whisper/whisper-large-v3/` 아래 `weight_converter.py`, `nntr_config.json`
       (HF safetensors → nntrainer 이름, 모두 FP32. 인코더 graph의 dtype은 `nntr_config.json`의 `encoder`로 따로)
 - [x] `tokenizer.json`, `generation_config.json`(`alignment_heads`, `suppress_tokens`, `lang_to_id`)은 HF 체크포인트 것을 그대로 씀
-- [ ] 양자화 조합 정함: 인코더·디코더 FC는 QINT8/Q4_0, conv는 FP32부터 (`nntr_quantize`). 지금은 FP32라 폰에 못 올림(6절)
+- [x] 양자화 변환기 `quantize_weights.py`(FC를 인코더 graph·디코더 따로 FP16/Q4_0/Q8_0, 나머지 FP16). `nntr_quantize`는 Whisper 층 이름·graph 2개를 몰라 못 씀(9절 5)
+- [ ] 양자화 조합 정함: 전부 Q4_0은 FLEURS 3.50%(FP32 2.96%), Q8_0 조합은 아직(9절 5)
 
 ### 5.3 Whisper 모델 구현 (`Applications/quick_ai/models/whisper/`)
 
@@ -133,7 +134,7 @@ transcribe / lastWords)이 그대로라 `asr_lane`, `batch_pipeline`, `speech_op
 ### 5.7 안드로이드와 문서
 
 - [ ] `libquick_ai_core.so` 크기, 모델 파일 크기·목록을 `docs/android-app.ko.md`에 반영
-- [ ] 시험 폰 경로 `/data/local/tmp/nntrainer/discretion/models/whisper-large-v3/`
+- [x] 시험 폰 경로 `/data/local/tmp/nntrainer/discretion/models/whisper-large-v3-<dtype>/`, 실행 파일은 `whisper/`(기존 폰 파일과 따로)
 
 ## 6. 위험과 확인할 점
 
@@ -258,3 +259,43 @@ nntr_discretion <model_dir> --no-sd --stream-file x.wav --align-model <w2v_dir>
   - 속도: x86 24코어 FP32에서 구간당 평균 35.6초(RTF 5.47), 최대 RSS 7.7 GB
 - 그 밖: `/hdd`(회전 디스크)에 둔 6.2 GB 가중치는 mmap 읽기가 다른 작업과 겹치면 초당 1 MB 아래로 떨어짐 → NVMe에 두고 시험
 - 아직: week1 Qwen3 회귀, wav2vec2 (b) 실제 한국어 모델, 양자화와 폰 속도, 낮은 log 확률 구간 처리, 시작 시 두 번 읽기
+
+### 5. 폰(Galaxy S25+)에서 실행과 양자화 (2026-11-04, 진행 중)
+
+- 빌드: 이 브랜치(`1b2553c8`) Android 빌드, 폰 `whisper/` 폴더(라이브러리·`nntr_room`·`nntrainer_quick_ai`). 기존 폰 파일은 그대로
+- 가중치 변환: `nntr_quantize`는 층 이름을 `layer{i}_…`로 찾고 디코더 graph만 저장해 Whisper에 못 씀 → Python 변환기로
+  Qwen3-ASR 폰 모델과 같은 저장 방식: FC 가중치 = 원시 Q4_0 블록을 ARM `q4_0x4`(interleave 8)로 재배치한 U8, 또는 Q8_0 블록
+  (`[출력][입력/32]`, 재배치 없음), 양자화한 FC의 bias FP32, 나머지(정규화·임베딩=LM head·위치·conv) FP16.
+  Q4_0 계산은 ggml `quantize_row_q4_0_ref`와 같게(반올림 포함), 재배치는 Qwen3 변환기 `repack_to_q4_0x4`와 바이트 단위로 같음
+  - conv 2개는 그래프가 FP32로 고정(`weight_dtype FP32`), 인코더 연산의 1% 아래라 그대로 둠
+- boda 앞 30초(`nntrainer_quick_ai`, 올리기 포함), PyTorch FP32와 단어 비교
+
+  | 가중치 | 크기 | 시간 | 최대 RSS | 같은 단어 (FP32 50개) |
+  |---|---|---|---|---|
+  | FP16 | 3.1 GB | 151.7 s | 4.0 GB | 49 ("그러니까" 빠짐) |
+  | Q4_0 (FC 전부) | 0.98 GB | 27.1 s | 1.9 GB | 45 (맞춤법·비슷한 말 3곳 + "그러니까") |
+
+- boda 2분 회의 경로(`nntr_room`, 16구간): 기준은 폰 FP16 (x86 FP32와는 16줄 중 12줄 같음, 다른 4줄은 낮은 log 확률 구간)
+
+  | FC dtype (인코더 graph / 디코더) | RTF | FP16과 같은 줄 | 눈에 띄는 차이 |
+  |---|---|---|---|
+  | FP16 / FP16 | 8.64 | – | 구간당 인식 63초 |
+  | Q4_0 / Q4_0 | 2.77 | 7 | "한글자막 by 한효주"(Whisper 자막 환각), 첫 구간 앞부분 사라짐 |
+  | Q4_0 / FP16 | 6.34 | 6 | 위와 같은 환각·사라짐 → 인코더 Q4_0이 원인 |
+  | FP16 / Q4_0 | 4.97 | 10 | 환각 없음, 첫 구간 앞부분 사라짐은 남음 |
+
+  - 인코더 graph = 인코더 FC + 디코더 층별 cross K/V FC. 시간은 디코더 FP16 쪽이 더 큼
+- 다음: FLEURS 한국어 382문장 CER(정답 있음, Qwen3 결과와 같은 채점 `tools/eval_benchmark_standard.py`)
+  - Qwen3-ASR 1.7B Macro CER: PC 공식 2.98%, 폰 `nntr_room` LM-FP16 3.74%, Q4_0 3.71%
+  - Whisper: x86 PyTorch FP32(상한), 폰 Q4_0, Q8_0 구성(인코더 Q8_0 + 디코더 Q4_0, 전부 Q8_0)
+  - Whisper x86 PyTorch FP32(openai-whisper, 한국어 고정·탐욕·재시도 없음·문맥 없음): **Macro CER 2.96%**, Micro 2.39% (382문장)
+  - 382문장 Macro CER: Whisper FP32(x86) 2.96%, **폰 Whisper Q4_0(`nntr_room`) 3.50%** (RTF 2.29, 올리기 포함), Qwen3 PC 2.98%,
+    폰 Qwen3 LM-FP16 3.74%, 폰 Qwen3 Q4_0 3.71%
+  - Whisper Q4_0에서 늘어난 오류는 삽입(154 → 272): 문장 끝의 조용한 부분이 따로 한 구간이 될 때 "감사합니다.",
+    "MBC 뉴스 김성현입니다." 같은 Whisper 자막 환각(295문장 중 7문장). x86 FP32는 파일 통째라 그런 구간이 없음 →
+    양자화 탓인지 구간 탓인지 가리려고 두 줄로 나뉜 46문장을 폰 FP16으로 다시 돌림
+  - 시험 중 폰이 배터리로 꺼져 87문장이 빈 결과로 남았음 → 지우고 다시 돌림(`with_failures` 사본 보관)
+  - 두 줄로 나뉜 46문장 중 15문장을 폰 FP16으로 돌린 뒤 멈춤(사용자 요청으로 미룸): 환각이 있는 2문장에서 FP16도 Q4_0과 **같은 환각**
+    ("감사합니다.", "MBC 뉴스 김성현입니다.") → 양자화가 아니라 문장 끝 조용한 구간을 따로 인식할 때의 Whisper 동작
+- 미룬 것(이어서 할 때): FP16 46문장 중 남은 31문장(`fleurs_whisper_phone.py`가 끝난 문장은 건너뜀), Q8_0 두 구성(인코더 Q8_0 +
+  디코더 Q4_0, 전부 Q8_0; 폰 `models/`에 올려 둠)의 boda·FLEURS, 조용한 끝 구간 환각 거르기, 30초 창 인코더 줄이기(속도)
