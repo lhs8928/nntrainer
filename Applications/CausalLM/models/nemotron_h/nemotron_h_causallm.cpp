@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 
@@ -266,6 +267,16 @@ void NemotronHCausalLM::registerCustomLayers() {
 
 void NemotronHCausalLM::load_weight(const std::string &weight_path) {
   Transformer::load_weight(weight_path);
+  // A relative table path that does not resolve from the working directory
+  // is taken relative to the weight file (tools such as nntr_quantize hand
+  // the nntr_config.json values over unresolved).
+  std::filesystem::path table(EMBEDDING_TABLE_PATH);
+  if (!EMBEDDING_TABLE_PATH.empty() && table.is_relative() &&
+      !std::filesystem::exists(table)) {
+    auto beside = std::filesystem::path(weight_path).parent_path() / table;
+    if (std::filesystem::exists(beside))
+      EMBEDDING_TABLE_PATH = beside.string();
+  }
   loadEmbeddingTable();
 }
 

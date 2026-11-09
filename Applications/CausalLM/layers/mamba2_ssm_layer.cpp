@@ -89,8 +89,11 @@ void Mamba2SSMLayer::finalize(nntrainer::InitLayerContext &context) {
   };
 
   // Weight order is the order of the binary file (see weight_converter.py).
+  // Every weight is a single FP32 row (the conv taps [kernel, conv_dim] are
+  // flattened), which Layer::save() never quantizes: the SSM parameters stay
+  // FP32 when the rest of the model is quantized.
   weight_idx[CONV_W] = context.requestWeight(
-    fp32_dim(kernel, conv_dim), nntrainer::Initializer::NONE,
+    fp32_dim(1, kernel * conv_dim), nntrainer::Initializer::NONE,
     nntrainer::WeightRegularizer::NONE, 0.0f, 0.0f, "conv_weight", false);
   weight_idx[CONV_B] = context.requestWeight(
     fp32_dim(1, conv_dim), nntrainer::Initializer::ZEROS,

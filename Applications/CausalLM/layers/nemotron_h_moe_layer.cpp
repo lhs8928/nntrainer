@@ -69,8 +69,11 @@ void NemotronHMoELayer::finalize(nntrainer::InitLayerContext &context) {
 
   // File order: router, correction bias, (up, down) per expert, shared up,
   // shared down. Projections are stored [in, out] like fully_connected.
+  // The router is a [hidden, num_experts] matrix kept as a single FP32 row:
+  // Layer::save() leaves one-row weights unquantized, so quantizing the model
+  // (nntr_quantize) touches the expert projections only.
   router_idx = context.requestWeight(
-    fp32_dim(hidden, num_experts), nntrainer::Initializer::NONE,
+    fp32_dim(1, hidden * num_experts), nntrainer::Initializer::NONE,
     nntrainer::WeightRegularizer::NONE, 0.0f, 0.0f, "router", false);
   bias_idx = context.requestWeight(fp32_dim(1, num_experts),
                                    nntrainer::Initializer::ZEROS,
