@@ -148,8 +148,7 @@ Applications/CausalLM/
 └── res/nemotron3_5_transcribe/
     ├── weight_converter.py               # HF → nntrainer (LLM bin, audio bin, config)
     ├── make_tiny_reference.py            # tiny random 모델 + 참조 출력 생성
-    ├── nntr_config.json                  # 실행 설정 예시
-    └── README.md                         # 사용법
+    └── README.md                         # 사용법 (nntr_config.json 등 설정 파일은 converter 가 생성)
 ```
 
 ## 4. 단계별 계획
@@ -181,17 +180,41 @@ Applications/CausalLM/
 ## 6. 진행 현황
 
 - [x] P0 분석 및 계획
-- [ ] P1 빌드/참조 환경
-- [ ] P2 `mamba2_ssm` 레이어
-- [ ] P3 `nemotron_h_moe` 레이어
-- [ ] P4 `NemotronHCausalLM` + LLM 변환
-- [ ] P5 오디오 전처리
-- [ ] P6 ASR 인코더
-- [ ] P7 Diarization + Projector
-- [ ] P8 파이프라인 + 앱 + end-to-end 검증
-- [ ] P9 문서화
-- [ ] P10 (후속) 타임스탬프/양자화/스트리밍
+- [x] P1 빌드/참조 환경 — nntrainer 빌드(`-Denable-transformer=true`), torch 2.15 + transformers 5.22.2 CPU,
+      `make_tiny_reference.py` (tiny random 모델 + 참조 텐서 + tiny tokenizer)
+- [x] P2 `mamba2_ssm` 레이어 — conv state / SSM state 유지, chunked prefill + decode 검증
+- [x] P3 `nemotron_h_moe` 레이어 — sigmoid router + correction bias, relu², shared expert, expert 별 GEMM
+- [x] P4 `NemotronHCausalLM` + LLM 변환 — 텍스트 프롬프트 logits(rel 7.6e-5) / greedy 12 토큰 일치
+- [x] P5 오디오 전처리 — log-mel rel 1e-5 이내 일치 (bf16 window/filterbank 포함)
+- [x] P6 ASR 인코더 — chunk + context 처리, encoder states rel 4e-6
+- [x] P7 Diarization + Projector — speaker cache 압축(11 s 입력에서 6회) 포함, speaker logits rel 2e-6,
+      audio embeddings rel 4e-6
+- [x] P8 파이프라인 + 앱 + end-to-end 검증 — `nntr_nemotron_transcribe --verify` ALL CHECKS PASSED
+      (텍스트 / 2.6 s / 11 s / tokenizer 를 거친 `transcribe()` 전체 경로)
+- [x] P9 문서화 — `res/nemotron3_5_transcribe/README.md`
+- [ ] P10 (후속)
+  - [ ] LLM Q4_0 양자화 (커스텀 레이어 save 경로: Mamba 파라미터/라우터는 FP32 유지, expert 만 양자화)
+  - [ ] 단어 타임스탬프 헤드 (CTC) + forced alignment
+  - [ ] slim/FSU expert on-demand 로딩, 스트리밍 입력
+
+### 검증 결과 (tiny 모델, `--verify`)
+
+| 항목 | 결과 |
+|---|---|
+| text-only: last logits / greedy 12 tokens | rel 7.6e-5 / 일치 |
+| short (2.6 s, 33 audio tokens, ASR 2 chunks) | mel rel 5.7e-6, ASR rel 3.7e-6, speaker rel 1.6e-6, embeds rel 3.9e-6, logits rel 2.7e-5, tokens 일치 |
+| long (11 s, 138 audio tokens, 7 chunks, cache 압축 6회, 147-token prompt → chunked prefill) | mel rel 9.5e-6, ASR rel 4.2e-6, speaker rel 1.8e-6, embeds rel 3.8e-6, logits rel 1.9e-5, tokens 일치 |
+| transcribe(): tokenizer + 프롬프트 템플릿 + 생성 | prompt ids / greedy tokens 일치 |
 
 ## 7. 작업 로그
 
 - 2026-11-09: transformers 5.22.2 참조 구현 분석 완료, 계획 수립.
+- 2026-11-09: P1 — HF 접근 차단으로 PyPI 의 transformers wheel 에서 참조 코드 확보, tiny 참조 생성기 작성.
+  tiny diarization head 가 bias 지배로 상수 출력 → gain/bias 조정하여 화자 활동이 실제로 바뀌도록 수정.
+- 2026-11-09: P2~P4 — `mamba2_ssm`, `nemotron_h_moe`, `NemotronHCausalLM` 구현. LLM 은 임베딩 입력 그래프 +
+  임베딩 테이블 side file 구조(오디오 임베딩 삽입용). 변환기는 safetensors 를 텐서 단위로 스트리밍하며
+  NeMo export 이름(`perception.*`, `llm.*`, fused `w_qkv`, stacked experts)과 HF 이름 모두 지원.
+- 2026-11-09: P5~P8 — 오디오 전처리/인코더/diarization/파이프라인/앱 구현, 전 단계 참조 일치 확인.
+  참조 생성 시 HF `generate(pad_token_id=0)` 가 prompt 의 id 0 을 padding 으로 가리는 문제 발견 →
+  참조 쪽에 명시적 attention mask 전달로 수정 (NNTrainer 구현 문제 아님).
+- 2026-11-09: P9 — README 작성.
