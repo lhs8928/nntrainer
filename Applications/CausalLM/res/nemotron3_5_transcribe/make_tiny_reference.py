@@ -44,7 +44,9 @@ VOCAB = 1000
 AUDIO_TOKEN_ID = VOCAB  # outside of the vocabulary, as in the real checkpoint
 
 
-def tiny_config():
+def tiny_config(quant_friendly=False):
+    """quant_friendly: every LLM projection a multiple of the Q4_0 block (32)
+    in both dimensions, so the quantized path of nntr_quantize can run."""
     return Nemotron3_5TranscribeConfig(
         audio_config=dict(
             asr_config=dict(
@@ -72,8 +74,10 @@ def tiny_config():
         text_config=dict(
             hidden_size=64,
             hybrid_override_pattern="MEM*EM*E",
-            mamba_num_heads=4,
-            mamba_head_dim=16,
+            # in_proj width = d_inner + conv_dim + heads must be a multiple
+            # of 32 for Q4_0: 32 heads of 2 -> 64 + 128 + 32 = 224
+            mamba_num_heads=32 if quant_friendly else 4,
+            mamba_head_dim=2 if quant_friendly else 16,
             n_groups=2,
             ssm_state_size=16,
             num_attention_heads=4,
@@ -82,7 +86,7 @@ def tiny_config():
             n_routed_experts=8,
             num_experts_per_tok=2,
             moe_intermediate_size=32,
-            moe_shared_expert_intermediate_size=48,
+            moe_shared_expert_intermediate_size=64 if quant_friendly else 48,
             routed_scaling_factor=2.5,
             vocab_size=VOCAB,
             max_position_embeddings=4096,
@@ -211,12 +215,23 @@ def main():
     parser.add_argument("--out_dir", required=True)
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--max_new_tokens", type=int, default=12)
+    parser.add_argument(
+        "--quant_friendly",
+        action="store_true",
+        help="vocabulary and LLM projection sizes that are multiples of the "
+        "Q4_0 block, to exercise nntr_quantize --fc_dtype Q4_0",
+    )
     args = parser.parse_args()
+
+    global VOCAB, AUDIO_TOKEN_ID
+    if args.quant_friendly:
+        VOCAB = 1024
+        AUDIO_TOKEN_ID = VOCAB
 
     torch.manual_seed(args.seed)
     os.makedirs(args.out_dir, exist_ok=True)
 
-    config = tiny_config()
+    config = tiny_config(args.quant_friendly)
     model = Nemotron3_5TranscribeForConditionalGeneration(config).eval().float()
     randomize(model, args.seed)
     model.save_pretrained(os.path.join(args.out_dir, "hf"), safe_serialization=True)

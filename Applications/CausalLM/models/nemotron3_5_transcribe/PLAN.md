@@ -193,7 +193,10 @@ Applications/CausalLM/
       (텍스트 / 2.6 s / 11 s / tokenizer 를 거친 `transcribe()` 전체 경로)
 - [x] P9 문서화 — `res/nemotron3_5_transcribe/README.md`
 - [ ] P10 (후속)
-  - [ ] LLM Q4_0 양자화 (커스텀 레이어 save 경로: Mamba 파라미터/라우터는 FP32 유지, expert 만 양자화)
+  - [x] LLM Q4_0 양자화 — `nntr_quantize --fc_dtype Q4_0` 지원. Mamba 파라미터/라우터는 1-row FP32 weight 로
+        요청해 `Layer::save()` 가 양자화하지 않도록 하고, expert/FC/lm_head 만 Q4_0.
+        검증: Q4_0 격자에 snap 한 가중치로 FP32 vs Q4_0 실행 시 greedy 48 토큰 중 47 개 일치
+        (나머지 1 개는 Q4_0 GEMM 의 활성값 Q8 양자화 영향)
   - [ ] 단어 타임스탬프 헤드 (CTC) + forced alignment
   - [ ] slim/FSU expert on-demand 로딩, 스트리밍 입력
 
@@ -218,3 +221,7 @@ Applications/CausalLM/
   참조 생성 시 HF `generate(pad_token_id=0)` 가 prompt 의 id 0 을 padding 으로 가리는 문제 발견 →
   참조 쪽에 명시적 attention mask 전달로 수정 (NNTrainer 구현 문제 아님).
 - 2026-11-09: P9 — README 작성.
+- 2026-11-09: P10(양자화) — 커스텀 레이어 weight 를 기본 `Layer::save()` 가 전부 양자화하던 문제를
+  1-row FP32 요청으로 해결, `nntr_quantize` 에 Nemotron-H 등록/레이어 이름 매핑 추가.
+  tiny 랜덤 모델은 Q4_0 에 매우 민감(HF 에서 Q4_0 시뮬레이션만 해도 logits rel 0.84)하여
+  Q4_0 격자 snap 가중치로 FP32/Q4_0 동치성을 확인.

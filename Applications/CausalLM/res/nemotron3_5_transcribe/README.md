@@ -68,10 +68,27 @@ not at 16 kHz is resampled linearly; resample offline for best quality. One
 audio token covers 80 ms, so `max_seq_len` must hold `12.5 x seconds` plus the
 prompt and the transcript.
 
-### Memory
+### Quantize the language model (needed for the real checkpoint)
 
-The FP32 LLM weights of the real checkpoint are ~130 GB, so the full model
-needs a quantized LLM (see `PLAN.md`, P10). The audio tower is ~2.8 GB in FP32.
+The FP32 LLM weights of the 30B checkpoint are ~130 GB. Quantize the
+projections to Q4_0 with the generic tool; the Mamba2 parameters, the MoE
+routers and the norms stay FP32:
+
+```bash
+./build/Applications/CausalLM/nntr_quantize /path/to/nntr-nemotron-transcribe \
+    --fc_dtype Q4_0 --lmhead_dtype Q4_0
+```
+
+Without `--output` the quantized `.bin` is written next to the FP32 one and
+`nntr_config.json` is updated to point at it (the audio, embedding and
+transcribe settings are kept). With `--output <dir>`, copy
+`nntr_nemotron_h_embedding.bin`, `nntr_audio.bin` and `transcribe_config.json`
+into `<dir>` as well.
+
+`nntr_quantize` loads the FP32 model first, so the conversion itself needs
+about as much memory as the FP32 file. At run time the Q4_0 model takes
+roughly 17 GB for the LLM (mostly the 23 x 128 experts), 0.7 GB for an FP16
+embedding table and 2.8 GB for the FP32 audio tower.
 
 ## 4. Verify against the reference implementation
 
@@ -89,6 +106,9 @@ python Applications/CausalLM/res/nemotron3_5_transcribe/weight_converter.py \
 ./build/Applications/CausalLM/nntr_nemotron_transcribe --verify /tmp/tiny/nntr /tmp/tiny
 ```
 
+`--quant_friendly` makes every LLM projection a multiple of the Q4_0 block so
+the quantized path can be exercised on the tiny model as well.
+
 Expected: `ALL CHECKS PASSED` (log-mel, ASR encoder states, speaker logits,
 audio embeddings, last-position logits and 12 greedy tokens for a text-only
 prompt, a 2.6 s and an 11 s recording, and the whole `transcribe()` path with
@@ -97,5 +117,5 @@ the tokenizer).
 ## Not supported yet
 
 - Word timestamps (CTC alignment head) and the MTP speculative-decoding head.
-- Quantized LLM weights for the real checkpoint (P10 in `PLAN.md`).
+- On-demand (slim / FSU) expert loading for low-memory devices.
 - Streaming input; the whole recording is encoded before generation.
