@@ -85,7 +85,8 @@ transcribe / lastWords)이 그대로라 `asr_lane`, `batch_pipeline`, `speech_op
       (HF safetensors → nntrainer 이름, 모두 FP32. 인코더 graph의 dtype은 `nntr_config.json`의 `encoder`로 따로)
 - [x] `tokenizer.json`, `generation_config.json`(`alignment_heads`, `suppress_tokens`, `lang_to_id`)은 HF 체크포인트 것을 그대로 씀
 - [x] 양자화 변환기 `quantize_weights.py`(FC를 인코더 graph·디코더 따로 FP16/Q4_0/Q8_0, 나머지 FP16). `nntr_quantize`는 Whisper 층 이름·graph 2개를 몰라 못 씀(9절 5)
-- [ ] 양자화 조합 정함: 전부 Q4_0은 FLEURS 3.50%(FP32 2.96%), Q8_0 조합은 아직(9절 5)
+- [ ] 양자화 조합 정함: 전부 Q4_0은 FLEURS 3.50%(FP32 2.96%). 인코더 Q8_0은 환각이 사라지나 FP16 연산 Q8_0 커널이 없어
+  RTF 13.3 → 지금 쓸 만한 것은 인코더 FP16 + 디코더 Q4_0(9절 6)
 
 ### 5.3 Whisper 모델 구현 (`Applications/quick_ai/models/whisper/`)
 
@@ -299,3 +300,27 @@ nntr_discretion <model_dir> --no-sd --stream-file x.wav --align-model <w2v_dir>
     ("감사합니다.", "MBC 뉴스 김성현입니다.") → 양자화가 아니라 문장 끝 조용한 구간을 따로 인식할 때의 Whisper 동작
 - 미룬 것(이어서 할 때): FP16 46문장 중 남은 31문장(`fleurs_whisper_phone.py`가 끝난 문장은 건너뜀), Q8_0 두 구성(인코더 Q8_0 +
   디코더 Q4_0, 전부 Q8_0; 폰 `models/`에 올려 둠)의 boda·FLEURS, 조용한 끝 구간 환각 거르기, 30초 창 인코더 줄이기(속도)
+
+### 6. 인코더 Q8_0 구성 (2026-11-06, Galaxy S25+)
+
+- 변환기 버그: Q8_0 부분의 `model_tensor_type`을 `"Q8_0-FP16"`으로 써서 바로 실패(`No matching enum for value: Q8_0-FP16`,
+  그런 값이 없음). `"FP16-FP16"`으로 바꾸면 구간마다 `unsupported datatype`: FP16 연산(`HalfTensor::dot`)은 Q4_0·Q6_K 가중치만 받고
+  Q8_0은 FP32 연산 경로(`FloatTensor::dot` → `gemm_q8_0`)에만 있음 → Q8_0 부분은 `"FP16-FP32"`(가중치 FP16, 연산 FP32)로 쓰게 고침
+- boda 2분 회의 경로(`nntr_room`, 16구간), 위 표에 이어서. CER은 사용자 작성 정답(공백 뺀 653자, `normalize_korean`)
+
+  | FC dtype (인코더 graph / 디코더) | RTF | FP16과 같은 줄 | CER | 눈에 띄는 차이 |
+  |---|---|---|---|---|
+  | FP16 / FP16 | 8.64 | – | 28.94% | |
+  | Q4_0 / Q4_0 | 2.77 | 7 | 36.29% | 환각, 첫 구간 앞부분 사라짐 |
+  | Q4_0 / FP16 | 6.34 | 6 | 38.44% | 환각 |
+  | FP16 / Q4_0 | 4.97 | 10 | 32.77% | 첫 구간 앞부분 사라짐 |
+  | **Q8_0(연산 FP32) / Q4_0** | **13.31** | **11** | **32.92%** | 환각 없음("이 시점과 맞물리면…"), 첫 구간 앞부분 사라짐은 남음 |
+
+  - 인코더 Q8_0의 정확도는 인코더 FP16과 거의 같음. 구간당 인식 약 95초, 최대 RSS 2.7 GB
+  - 느린 이유: 인코더 전체가 FP32 연산 + FP32 Q8_0 GEMM. 인코더 Q8_0 고유의 속도가 아님
+- 전부 Q8_0과 FLEURS는 돌리지 않음: 디코더까지 FP32 연산이면 더 느리고, FLEURS 382문장은 이 속도로 하루 넘게 걸림
+- 결론: 지금 nntrainer로 환각 없이 쓸 만한 구성은 인코더 FP16 + 디코더 Q4_0(RTF 4.97). 인코더 Q8_0을 쓰려면 ARM FP16 연산 × Q8_0 GEMM
+  커널이 필요함
+- 이어서 할 것: 인코더 FP16 + 디코더 Q4_0의 FLEURS 382문장, (커널을 만든다면) 인코더 Q8_0 다시 측정, FP16 남은 31문장, 조용한 끝 구간 환각 거르기
+- 폰: `models/whisper-large-v3-eq8_0-dq4_0`·`-dq8_0`의 `nntr_config.json`을 고친 값으로 바꿈(원본 `nntr_config.json.orig`).
+  결과 `whisper/room_e8d4.jsonl`·`.log`

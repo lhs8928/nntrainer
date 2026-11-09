@@ -74,9 +74,17 @@ with safe_open(src, 'np') as f:
             out[k] = a.astype(np.float16)
         count[dt] = count.get(dt, 0) + 1
 save_file(out, os.path.join(out_dir, name), metadata=meta)
+
+
+def tensor_type(dt):
+    # "Q8_0-FP16" is no model_tensor_type, and FP16 activations take only Q4_0/Q6_K weights:
+    # a Q8_0 part runs FP32 activations (FP32 Q8_0 GEMM), slow on the phone (RTF 13.3, boda)
+    return 'FP16-FP32' if dt == 'Q8_0' else f'{dt}-FP16'
+
+
 cfg = json.load(open(os.path.join(os.path.dirname(src), 'nntr_config.json')))
-cfg.update({'model_tensor_type': f'{dec_dt}-FP16', 'fc_layer_dtype': dec_dt, 'embedding_dtype': 'FP16',
-            'lmhead_dtype': 'FP16', 'encoder': {'model_tensor_type': f'{enc_dt}-FP16', 'fc_layer_dtype': enc_dt},
+cfg.update({'model_tensor_type': tensor_type(dec_dt), 'fc_layer_dtype': dec_dt, 'embedding_dtype': 'FP16',
+            'lmhead_dtype': 'FP16', 'encoder': {'model_tensor_type': tensor_type(enc_dt), 'fc_layer_dtype': enc_dt},
             'model_file_name': name})
 json.dump(cfg, open(os.path.join(out_dir, 'nntr_config.json'), 'w'), indent=2)
 print(name, count)
