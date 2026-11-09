@@ -200,3 +200,33 @@ causallm_custom_multiply_dep = declare_dependency(
     link_with: causallm_custom_multiply_layer,
     include_directories: causallm_layer_inc
 )
+
+# Nemotron-H (Nemotron 3.5 Transcribe LLM) layers: Mamba2 SSM core and the
+# sigmoid-routed squared-ReLU mixture of experts.
+causallm_mamba2_ssm_layer = shared_library(
+    'mamba2_ssm_layer',
+    [meson.current_source_dir() / 'mamba2_ssm_layer.cpp'],
+    include_directories: causallm_layer_inc,
+    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+    install: true,
+    install_dir: application_install_dir
+)
+
+causallm_mamba2_ssm_dep = declare_dependency(
+    link_with: causallm_mamba2_ssm_layer,
+    include_directories: causallm_layer_inc
+)
+
+causallm_nemotron_h_moe_layer = shared_library(
+    'nemotron_h_moe_layer',
+    [meson.current_source_dir() / 'nemotron_h_moe_layer.cpp'],
+    include_directories: causallm_layer_inc,
+    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+    install: true,
+    install_dir: application_install_dir
+)
+
+causallm_nemotron_h_moe_dep = declare_dependency(
+    link_with: causallm_nemotron_h_moe_layer,
+    include_directories: causallm_layer_inc
+)

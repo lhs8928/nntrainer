@@ -70,6 +70,8 @@ causallm_layer_dependencies += [
     causallm_deberta_attention_layer_dep,
     causallm_shared_fully_connected_layer_dep,
     causallm_per_layer_slice_dep,
+    causallm_mamba2_ssm_dep,
+    causallm_nemotron_h_moe_dep,
     # scalar_multiply and logit_softcapping are core nntrainer layers
 ]
 
