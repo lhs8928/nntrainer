@@ -57,6 +57,7 @@ public:
   }
 
   const json &meta() const { return index_.at("_meta"); }
+  bool has(const std::string &name) const { return index_.contains(name); }
 
 private:
   std::string dir_;
@@ -162,6 +163,21 @@ int verify(const std::string &model_dir, const std::string &ref_dir) {
                 2e-3);
     check.same(tag + ": greedy tokens", toInt(llm.getGeneratedIds()),
                ref.load<int>(tag + "_generated"));
+  }
+
+  // ---- the whole transcribe() path: tokenizer + prompt template
+  if (ref.has("transcribe_prompt_ids")) {
+    if (llm.getTokenizer() == nullptr) {
+      std::cout << "[skip] transcribe: no tokenizer_file configured\n";
+    } else {
+      const int n_audio = ref.meta().at("short_num_audio_tokens").get<int>();
+      check.same("transcribe: prompt ids", pipe.buildPromptIds("", n_audio),
+                 ref.load<int>("transcribe_prompt_ids"));
+      pipe.transcribe(ref_dir + "/audio_short.wav", "", false);
+      check.same("transcribe: greedy tokens", toInt(llm.getGeneratedIds()),
+                 ref.load<int>("transcribe_generated"));
+      std::cout << "[info] transcribe: text \"" << llm.getOutput(0) << "\"\n";
+    }
   }
 
   std::cout << (check.failures == 0 ? "ALL CHECKS PASSED\n"
