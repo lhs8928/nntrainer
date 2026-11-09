@@ -353,6 +353,13 @@ e = executable('nntr_causallm',
 )
 
 
+e_nemotron_transcribe = executable('nntr_nemotron_transcribe',
+    nemotron3_5_transcribe_app_src,
+    include_directories: [causallm_inc, causallm_inc_minja_inc, causallm_inc_nlohmann_inc],
+    dependencies: [nntrainer_dep, nntrainer_ccapi_dep, causallm_layer_dependencies, causallm_dep],
+)
+
+
 quantize_src = [
     meson.current_source_dir() / 'quantize.cpp',
 ]

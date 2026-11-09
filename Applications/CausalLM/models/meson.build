@@ -19,6 +19,7 @@ subdir('gemma4')
 subdir('timm_vit')
 subdir('lfm2')
 subdir('nemotron_h')
+subdir('nemotron3_5_transcribe')
 if get_option('platform') != 'windows'
     subdir('bert')
     subdir('xlm_roberta')
