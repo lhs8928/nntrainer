@@ -98,6 +98,9 @@ bool SpeechOps::init(const SpeechOptions &opt, std::string &error) {
   std::sort(opt_.asr_secs.begin(), opt_.asr_secs.end());
   if (opt_.asr_secs.empty())
     opt_.asr_secs.push_back(opt_.asr.segment_sec);
+  // Whisper takes every length with one model: load it once, for the longest
+  if (AsrEngine::anyLengthModel(opt_.asr.model_dir))
+    opt_.asr_secs.erase(opt_.asr_secs.begin(), opt_.asr_secs.end() - 1);
   if (opt_.asr.threads > 0)
     setenv("NNTR_NUM_THREADS", std::to_string(opt_.asr.threads).c_str(), 1);
   for (float sec : opt_.asr_secs) {
@@ -108,16 +111,6 @@ bool SpeechOps::init(const SpeechOptions &opt, std::string &error) {
     if (!engine->init(a, error))
       return false;
     engines_.push_back(std::move(engine));
-    if (engines_.back()->anyLength()) {
-      // Whisper: one model takes every length, keep the longest segment
-      engines_.clear();
-      a.segment_sec = opt_.asr_secs.back();
-      auto whisper = std::make_shared<AsrEngine>();
-      if (!whisper->init(a, error))
-        return false;
-      engines_.push_back(std::move(whisper));
-      break;
-    }
   }
   sd_ = std::make_unique<speaker_diarization::BatchDiarizer>();
   const bool two =

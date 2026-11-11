@@ -62,6 +62,12 @@ public:
   /** @brief true when one engine takes every length (Whisper's 30 s window) */
   bool anyLength() const { return whisper_ != nullptr; }
 
+  /**
+   * @brief whether the model in `model_dir` takes every length (Whisper), from
+   *        its config.json alone: no weights are loaded
+   */
+  static bool anyLengthModel(const std::string &model_dir);
+
   /** @brief "nntrainer:qwen3-asr" or "nntrainer:whisper" */
   std::string provider() const;
 

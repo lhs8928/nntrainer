@@ -112,6 +112,15 @@ std::shared_ptr<AsrAligner> sharedAligner(const std::string &dir) {
 AsrEngine::AsrEngine() = default;
 AsrEngine::~AsrEngine() = default;
 
+bool AsrEngine::anyLengthModel(const std::string &model_dir) {
+  try {
+    return architectureOf(quick_ai::LoadJsonFile(model_dir + "/config.json")) ==
+           quick_ai::WhisperCausalLM::architectures;
+  } catch (const std::exception &) {
+    return false; // init() reports the problem
+  }
+}
+
 std::string AsrEngine::provider() const {
   return whisper_ ? "nntrainer:whisper" : "nntrainer:qwen3-asr";
 }
