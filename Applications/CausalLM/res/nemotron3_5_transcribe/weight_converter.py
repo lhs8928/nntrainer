@@ -124,13 +124,16 @@ class RemoteSafetensors:
         self.header.pop("__metadata__", None)
         self.base = 8 + n
 
-    def _range(self, start, end):
+    CHUNK = 64 * 2**20  # bytes per request
+    WORKERS = 4         # parallel requests for a large tensor
+
+    def _fetch(self, start, end):
         for attempt in range(self.retries):
             try:
                 req = urllib.request.Request(
                     self.url, headers={"Range": f"bytes={start}-{end - 1}"}
                 )
-                with urllib.request.urlopen(req, timeout=120) as r:
+                with urllib.request.urlopen(req, timeout=60) as r:
                     data = r.read()
                 if len(data) != end - start:
                     raise IOError(f"short read {len(data)} != {end - start}")
@@ -139,8 +142,24 @@ class RemoteSafetensors:
                 if attempt + 1 == self.retries:
                     raise
                 wait = 2 ** (attempt + 1)
-                print(f"  range {start}-{end} failed ({e}); retry in {wait}s")
+                print(f"  range {start}-{end} failed ({e}); retry in {wait}s",
+                      flush=True)
                 time.sleep(wait)
+
+    def _range(self, start, end):
+        """Bytes [start, end). Large ranges are split into CHUNK-sized
+        requests fetched in parallel: one long transfer can stall without
+        ever hitting a socket timeout."""
+        if end - start <= self.CHUNK:
+            return self._fetch(start, end)
+        from concurrent.futures import ThreadPoolExecutor
+
+        bounds = [(a, min(a + self.CHUNK, end)) for a in range(start, end, self.CHUNK)]
+        out = bytearray(end - start)
+        with ThreadPoolExecutor(self.WORKERS) as pool:
+            for (a, b), data in zip(bounds, pool.map(lambda r: self._fetch(*r), bounds)):
+                out[a - start:b - start] = data
+        return bytes(out)
 
     def keys(self):
         return list(self.header)
