@@ -299,10 +299,9 @@ std::vector<float> AudioPreprocessor::generateMelFilterBank(unsigned int num_mel
   return mel_filters;
 }
 
-std::vector<float> AudioPreprocessor::computeMelSpectrogram(const std::vector<float> &waveform,
-                                                            unsigned int num_mel_bins,
-                                                            unsigned int n_fft,
-                                                            unsigned int hop_length) {
+std::vector<float> AudioPreprocessor::computeMelSpectrogram(
+  const std::vector<float> &waveform, unsigned int num_mel_bins,
+  unsigned int n_fft, unsigned int hop_length, size_t compute_frames) {
   unsigned int num_fft_bins = 1 + n_fft / 2; // e.g. 201
 
   // Precompute cos/sin tables for O(N^2) unpadded 400-point DFT to ensure 100% exact numerical match
@@ -343,7 +342,16 @@ std::vector<float> AudioPreprocessor::computeMelSpectrogram(const std::vector<fl
   std::vector<float> frame_windowed(n_fft);
   std::vector<float> power_spectrum(num_fft_bins);
 
-  for (unsigned int f = 0; f < out_frames; ++f) {
+  const unsigned int dft_frames =
+    (compute_frames > 0 && compute_frames < out_frames)
+      ? static_cast<unsigned int>(compute_frames)
+      : out_frames;
+  // frames of zeros only: no power in any bin, log10 of the floor
+  for (unsigned int f = dft_frames; f < out_frames; ++f)
+    for (unsigned int m = 0; m < num_mel_bins; ++m)
+      mel_spectrogram[f * num_mel_bins + m] = std::log10(1e-10f);
+
+  for (unsigned int f = 0; f < dft_frames; ++f) {
     size_t start_sample = f * hop_length;
     applyHannWindow(&padded_waveform[start_sample], frame_windowed.data(), n_fft);
 

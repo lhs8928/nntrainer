@@ -49,17 +49,23 @@ public:
   std::vector<float> loadAudio(const std::string &file_path);
 
   /**
-   * @brief Compute the Log-Mel Spectrogram matching Whisper/Qwen feature extractor.
+   * @brief Compute the Log-Mel Spectrogram matching Whisper/Qwen feature
+   * extractor.
    * @param waveform Input 16kHz audio samples.
    * @param num_mel_bins Number of Mel filters (e.g. 128 for Qwen3-ASR).
    * @param n_fft FFT size (e.g. 400).
    * @param hop_length Hop length in samples (e.g. 160).
-   * @return std::vector<float> Log-mel spectrogram flattened in row-major order (num_mel_bins x seq_len).
+   * @param compute_frames Frames to compute (0 = all). The frames after them
+   *        must see only zeros (a zero-padded window): they get the value of
+   *        silence without a transform, which is what computing them gives.
+   * @return std::vector<float> Log-mel spectrogram flattened in row-major order
+   * (num_mel_bins x seq_len).
    */
   std::vector<float> computeMelSpectrogram(const std::vector<float> &waveform,
-                                          unsigned int num_mel_bins = 128,
-                                          unsigned int n_fft = 400,
-                                          unsigned int hop_length = 160);
+                                           unsigned int num_mel_bins = 128,
+                                           unsigned int n_fft = 400,
+                                           unsigned int hop_length = 160,
+                                           size_t compute_frames = 0);
 
 private:
   /**
