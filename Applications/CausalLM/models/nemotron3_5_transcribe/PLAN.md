@@ -206,21 +206,38 @@ Applications/CausalLM/
 우선순위 순서. 각 항목의 **완료 기준**을 만족해야 체크한다.
 
 #### R1. 실제 체크포인트 실행 (최우선, 다른 모든 항목의 전제)
-- [ ] R1-1 체크포인트 확보 및 변환
+- [ ] R1-1 체크포인트 확보 및 변환 — **부분 완료 (2026-11-11)**
+  - [x] 실제 safetensors 헤더(1395 텐서)로 이름 매핑 검증: 기대 텐서 7257 개(expert 분해 후) 전부 매핑,
+        shape 불일치 0. 미사용 `hidden_to_spks` 2 개는 IGNORED 에 추가
+  - [x] 설정값 확인: hidden 2688, 52 블록 `MEMEM*EMEMEM*...`, attn 32/2 head_dim 128, Mamba 64×64 groups 8
+        state 128, expert 128 top-6 (1856 / shared 3712), relu2, vocab 131072, audio_token_id 131072,
+        ASR 1280d×32, diarization 512d×31 speaker 8, chunk 500/50/50 — 분석 때 가정과 동일
+  - [x] 오디오 타워 실제 가중치 변환 (`--audio_only`, 2.8 GB FP32)
+  - [ ] 전체 LLM 변환 (60 GB, 디스크·RAM 부족으로 미실행)
   - huggingface.co 접근 가능 + RAM ≥ 160 GB 머신에서 `weight_converter.py` 실행
     (NeMo export 이름 매핑은 transformers `conversion_mapping.py` 기준으로만 작성됨 → 실제 키 목록과 대조)
   - 변환기가 무시한 키(`IGNORED`)와 매핑되지 않은 키를 로그로 남기도록 보강
   - 완료 기준: 모든 LLM/오디오 텐서가 shape 오류 없이 변환되고 unmapped 키 0 개(MTP, preprocessor 등 의도한 것 제외)
-- [ ] R1-2 프롬프트 형식 확인
+- [x] R1-2 프롬프트 형식 확인 — **완료 (2026-11-11)**: 실제 chat template 이 렌더링됨
+  (`<|im_start|>system\n<|im_end|>\n<|im_start|>user\n{prompt} {audio}<|im_end|>\n<|im_start|>assistant\n<think></think>`,
+  기존 ChatML fallback 과 다름). 오디오 2 길이 × 프롬프트 3 종(기본/화자 태그/한국어) 모두
+  `apply_transcription_request()` 와 input_ids 완전 일치. C++ tokenizer 도 한국어 포함 프롬프트에서 Python 과 일치
   - processor 파일로 `chat_template_parts()` 가 렌더링되는지 확인 (현재 tiny 는 ChatML fallback 만 검증됨)
   - HF `apply_transcription_request()` 가 만든 `input_ids` 와 `buildPromptIds()` 결과를 바이트 단위로 비교
   - `enable_thinking=False` 처리, BOS 유무, `<|audio|>` 앞뒤 공백/개행 확인
   - 완료 기준: 기본 프롬프트·사용자 프롬프트 각 3 개에서 prompt ids 완전 일치
-- [ ] R1-3 FP32 레퍼런스 대조 (고메모리 서버, x86)
+- [ ] R1-3 FP32 레퍼런스 대조 (고메모리 서버, x86) — **부분 완료 (2026-11-11)**
+  - [x] 오디오 타워, 실제 가중치: `make_audio_reference.py` + `--verify-audio`. 실제 음성 4 개
+        (5.9 s / 9.3 s / 28 s / 60 s 2 화자)에서 log-mel rel ≤ 1.6e-5, ASR rel ≤ 1.3e-4,
+        speaker logits rel ≤ 1.3e-6, audio embeds rel ≤ 7.4e-5 (화자 2 명 검출되는 파일 포함)
+  - [x] LLM, 실제 가중치 3 블록 축소본(0 번 M, 1 번 E, 5 번 \*): `--verify-llm` 에서 logits rel 9.5e-5,
+        greedy 8 토큰 일치. 실제 크기 레이아웃(expert 128, vocab 131072) 검증됨
+  - [ ] 전체 52 블록 + 오디오 end-to-end (고메모리 서버 필요)
   - 실 가중치로 HF transformers 와 단계별 비교: log-mel, ASR 출력, speaker logits, audio embeds, prefill logits
   - 기존 `--verify` 를 실 체크포인트용으로 확장 (참조 덤프 스크립트 `make_real_reference.py` 추가)
   - 완료 기준: 각 단계 rel 1e-3 이내, 30 s 한국어/영어 샘플 각 2 개에서 greedy 출력 문자열 일치
-- [ ] R1-4 Q4_0 실행
+- [ ] R1-4 Q4_0 실행 — 3 블록 축소본으로 시험: 6.8 GB → 0.96 GB, 처음 4 토큰 일치,
+  logits 최대 편차 rel 0.22 (축소 모델이라 품질 판단 불가, 전체 모델 WER 로 판단 필요)
   - `nntr_quantize --fc_dtype Q4_0 --lmhead_dtype Q4_0` 후 동일 샘플 실행
   - 완료 기준: 전사 결과가 FP32 와 의미상 동일(WER 차이 R2 에서 측정), 크래시/NaN 없음
 
@@ -246,7 +263,8 @@ Applications/CausalLM/
       1 토큰이면 HF 와 다를 수 있음. prefill/decode 구분을 레이어에 명시적으로 전달하도록 수정
 
 #### R4. 성능 최적화 (x86 → ARM 순)
-- [ ] R4-1 프로파일링: 30 s 오디오 기준 단계별 시간(전처리 / ASR / diarization / prefill / decode tok/s) 측정표 작성
+- [ ] R4-1 프로파일링 (첫 측정, x86 4 코어: 오디오 타워 로딩 13.5 s, 60 s 오디오 인코딩 10.2 s ≈ RTF 0.17,
+      28 s → 3.9 s, log-mel 60 s → 0.19 s): 30 s 오디오 기준 단계별 시간(전처리 / ASR / diarization / prefill / decode tok/s) 측정표 작성
 - [ ] R4-2 Mamba2 prefill 을 순차 recurrence → chunked scan(SSD, chunk 128) GEMM 화. decode 경로는 head 단위
       벡터화(NEON/AVX2). 완료 기준: prefill 수치 rel 1e-4 유지, prefill 속도 ≥ 5 배
 - [ ] R4-3 MoE: router GEMV 를 스칼라 루프 → sgemv, expert 별 gather 버퍼 재사용(매 호출 Tensor 할당 제거),
@@ -310,3 +328,7 @@ Applications/CausalLM/
   Q4_0 격자 snap 가중치로 FP32/Q4_0 동치성을 확인.
 - 2026-11-11: 남은 작업을 R1~R6 으로 구체화 (실 체크포인트 실행, 정확도 평가, 기능 보완, 성능, 메모리/모바일,
   테스트). Android/앱 빌드 목록 누락(R3-1), Mamba dt clamp edge case(R3-7), KV cache 전 레이어 할당(R4-5) 확인.
+- 2026-11-11: HF 접근 가능해져 R1 일부 진행. 64 GB 전체는 디스크/RAM 부족으로 받지 않고 HTTP Range 로
+  헤더와 필요한 텐서만 받음. 이름 매핑·설정·chat template 확인, 오디오 타워는 실제 가중치로 HF 와 일치,
+  LLM 은 블록 종류별 1 개씩(3 블록) 실제 가중치로 일치 확인. `--audio_only`, `make_audio_reference.py`,
+  `--verify-audio`, `--verify-llm` 추가.

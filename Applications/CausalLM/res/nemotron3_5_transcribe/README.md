@@ -114,6 +114,21 @@ audio embeddings, last-position logits and 12 greedy tokens for a text-only
 prompt, a 2.6 s and an 11 s recording, and the whole `transcribe()` path with
 the tokenizer).
 
+### With the real checkpoint, without the 60 GB language model
+
+The audio tower can be checked against transformers with the real weights on
+a small machine: fetch only the `perception.*` tensors (~1.4 GB), then
+
+```bash
+python weight_converter.py --model_path <dir> --out_dir <dir>/nntr --audio_only
+python make_audio_reference.py --model_path <dir> --out_dir <dir>/ref a.wav b.wav
+./build/Applications/CausalLM/nntr_nemotron_transcribe --verify-audio <dir>/nntr <dir>/ref
+```
+
+`--verify-llm <model_dir> <ref_dir>` does the same for the language model
+alone (tokenizer, prefill logits, greedy tokens), e.g. with a checkpoint cut
+down to one block of each type.
+
 ## Not supported yet
 
 - Word timestamps (CTC alignment head) and the MTP speculative-decoding head.
