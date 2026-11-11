@@ -472,16 +472,18 @@ void NemotronHCausalLM::run_with_embeddings(const void *prefill_embeds,
 
   auto accept = [&](const std::vector<unsigned int> &ids, unsigned int pos) {
     generated_ids_.push_back(ids[0]);
+    // Mark EOS first: registerOutputs() skips finished rows, so the end of
+    // turn token is not appended to the transcript.
+    for (unsigned int b = 0; b < BATCH_SIZE; ++b)
+      if (std::find(EOS_TOKEN_ID.begin(), EOS_TOKEN_ID.end(), ids[b]) !=
+          EOS_TOKEN_ID.end())
+        eos_list[b] = true;
     if (has_tokenizer) {
       registerOutputs(tokenizer, ids, pos, eos_list, log_output);
     } else {
       for (unsigned int b = 0; b < BATCH_SIZE; ++b)
         ids_history[b * MAX_SEQ_LEN + pos] = ids[b];
     }
-    for (unsigned int b = 0; b < BATCH_SIZE; ++b)
-      if (std::find(EOS_TOKEN_ID.begin(), EOS_TOKEN_ID.end(), ids[b]) !=
-          EOS_TOKEN_ID.end())
-        eos_list[b] = true;
   };
   accept(id_list, input_len);
 
