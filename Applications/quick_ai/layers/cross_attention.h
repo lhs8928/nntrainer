@@ -17,7 +17,9 @@
  * rather than in graph inputs.
  *
  * cross_memory_writer
- *   inputs: key_0, value_0, key_1, value_1, ... (B = 1, 1, S, width)
+ *   inputs: key_0, value_0, key_1, value_1, ... (B = 1, 1, S, width); an
+ *           incremental step [0, T) stores only its T rows (an encoder run
+ *           over the frames of a shorter segment)
  *   output: (1, 1, 1, 1), only so that the graph keeps the layer
  *   property memory_prefix: the memory of input pair i is "<prefix>_l<i>"
  *
@@ -106,9 +108,7 @@ public:
 
   WIN_EXPORT void incremental_forwarding(nntrainer::RunLayerContext &context,
                                          unsigned int from, unsigned int to,
-                                         bool training) override {
-    forwarding(context, training);
-  }
+                                         bool training) override;
 
   WIN_EXPORT void calcDerivative(nntrainer::RunLayerContext &context) override {
   }

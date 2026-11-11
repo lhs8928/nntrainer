@@ -72,8 +72,14 @@ public:
   void initialize();
   void load_weight(const std::string &path);
 
-  /** @brief encode mel [n_mels][n_frames] (channel-major) into the memories */
-  void run(const std::vector<float> &mel);
+  /**
+   * @brief encode mel [n_mels][n_frames] (channel-major) into the memories
+   * @param positions encoder positions to compute (0 or n_ctx: all). Fewer
+   *        runs the blocks over the first positions only (an incremental
+   *        step), so the attention sees no position past them and the
+   *        memories hold those rows: whisper.cpp's audio_ctx
+   */
+  void run(const std::vector<float> &mel, unsigned int positions = 0);
 
 private:
   Dims dims_;
@@ -100,6 +106,9 @@ public:
     std::vector<WhisperWordTiming> words; /**< when word timestamps are on */
     float no_speech_prob = 0.0f;
     float avg_logprob = 0.0f;
+    unsigned int encoder_positions = 0; /**< 20 ms positions encoded */
+    /** milliseconds of the stages (NNTR_WHISPER_TIMING=1 prints them) */
+    double mel_ms = 0, encoder_ms = 0, decoder_ms = 0, words_ms = 0;
   };
 
   WhisperCausalLM(json &cfg, json &generation_cfg, json &nntr_cfg);
@@ -128,6 +137,21 @@ public:
   void setAudioPcm(std::vector<float> pcm) { audio_pcm_ = std::move(pcm); }
   void setLanguage(const std::string &code) { language_ = code; }
   void setWordTimestamps(bool on) { word_timestamps_ = on; }
+
+  /**
+   * @brief encoder context: false runs every segment over the 30 s window
+   *        (Whisper as trained); true only over the segment's audio, padded
+   *        by pad_sec and at least min_sec (faster for short segments, but
+   *        the model never saw a window shorter than 30 s). Also set by
+   *        nntr_config.json "encoder_context" ("full" | "audio"),
+   *        "encoder_context_pad_sec", "encoder_context_min_sec".
+   */
+  void setEncoderContext(bool audio, float pad_sec = 0.0f,
+                         float min_sec = 0.0f) {
+    encoder_audio_ctx_ = audio;
+    encoder_pad_sec_ = pad_sec;
+    encoder_min_sec_ = min_sec;
+  }
 
   /**
    * @brief run() times the words with this wav2vec2 model (WhisperX forced
@@ -178,6 +202,9 @@ private:
   std::string language_;
   bool word_timestamps_ = true;
   bool capture_on_ = false;
+  bool encoder_audio_ctx_ = false;
+  float encoder_pad_sec_ = 0.0f;
+  float encoder_min_sec_ = 0.0f;
   Wav2Vec2CTC *aligner_ = nullptr;
   Result last_;
 };

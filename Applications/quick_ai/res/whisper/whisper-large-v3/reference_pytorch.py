@@ -17,6 +17,7 @@
 # outputs can be compared line by line.
 #
 #   python reference_pytorch.py <hf_checkpoint_dir> <wav> [--language ko]
+#       [--encoder-context audio [--context-pad-sec S] [--context-min-sec S]]
 #   python reference_pytorch.py --make-tiny <dir>   # random small checkpoint
 #
 # Needs torch, transformers and openai-whisper (its tokenizer and timing
@@ -29,6 +30,7 @@
 
 import argparse
 import json
+import math
 import os
 import wave
 
@@ -86,7 +88,29 @@ def load_wav(path):
     return pcm.astype(np.float32) / 32768.0
 
 
-def transcribe(ckpt, wav, language, sample_len=224):
+def encoder_positions(samples, context, pad_sec, min_sec, n_ctx=1500):
+    """whisper_causallm.cpp: the whole window, or the audio's positions"""
+    if context != "audio":
+        return n_ctx
+    pos = math.ceil(samples / 320) + math.ceil(pad_sec * 50)
+    pos = max(pos, math.ceil(min_sec * 50))
+    return int(min(max(pos, 1), n_ctx))
+
+
+def encode(model, mel, positions):
+    """the encoder over its first positions only (whisper.cpp's audio_ctx)"""
+    enc = model.model.encoder
+    x = torch.nn.functional.gelu(enc.conv1(mel))
+    x = torch.nn.functional.gelu(enc.conv2(x)).permute(0, 2, 1)[:, :positions]
+    x = x + enc.embed_positions.weight[:positions]
+    for layer in enc.layers:
+        x = layer(x, None)
+        x = x[0] if isinstance(x, tuple) else x
+    return enc.layer_norm(x)
+
+
+def transcribe(ckpt, wav, language, sample_len=224, context="full",
+               pad_sec=0.0, min_sec=0.0):
     model = WhisperForConditionalGeneration.from_pretrained(
         ckpt, attn_implementation="eager").eval()
     gen = json.load(open(os.path.join(ckpt, "generation_config.json")))
@@ -97,8 +121,9 @@ def transcribe(ckpt, wav, language, sample_len=224):
     fe = WhisperFeatureExtractor(feature_size=model.config.num_mel_bins)
     mel = fe(audio, sampling_rate=16000, return_tensors="pt").input_features
 
+    positions = encoder_positions(len(audio), context, pad_sec, min_sec)
     with torch.no_grad():
-        enc = model.model.encoder(mel).last_hidden_state
+        enc = encode(model, mel, positions)
 
         def run(ids):
             o = model(encoder_outputs=(enc,),
@@ -143,7 +168,7 @@ def transcribe(ckpt, wav, language, sample_len=224):
             frames = len(audio) // 160
             w = torch.stack([cross[l][0, h] for l, h in heads])
             # softmax over the segment's frames == renormalized probabilities
-            w = torch.log(w[:, :, : frames // 2].double()).softmax(dim=-1)
+            w = torch.log(w[:, :, : min(frames // 2, positions)].double()).softmax(dim=-1)
             std, mean = torch.std_mean(w, dim=-2, keepdim=True, unbiased=False)
             w = timing.median_filter(((w - mean) / std).float(), 7)
             matrix = w.mean(axis=0)[3:-1]
@@ -183,11 +208,15 @@ def main():
     p.add_argument("wav", nargs="?")
     p.add_argument("--language", default="")
     p.add_argument("--make-tiny", metavar="DIR")
+    p.add_argument("--encoder-context", default="full", choices=["full", "audio"])
+    p.add_argument("--context-pad-sec", type=float, default=0.0)
+    p.add_argument("--context-min-sec", type=float, default=0.0)
     a = p.parse_args()
     if a.make_tiny:
         make_tiny(a.make_tiny)
     else:
-        transcribe(a.checkpoint, a.wav, a.language)
+        transcribe(a.checkpoint, a.wav, a.language, context=a.encoder_context,
+                   pad_sec=a.context_pad_sec, min_sec=a.context_min_sec)
 
 
 if __name__ == "__main__":

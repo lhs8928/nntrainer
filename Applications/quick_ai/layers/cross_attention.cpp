@@ -131,12 +131,21 @@ void CrossMemoryWriterLayer::finalize(nntrainer::InitLayerContext &context) {
 
 void CrossMemoryWriterLayer::forwarding(nntrainer::RunLayerContext &context,
                                         bool training) {
+  incremental_forwarding(context, 0, 0, training);
+}
+
+void CrossMemoryWriterLayer::incremental_forwarding(
+  nntrainer::RunLayerContext &context, unsigned int from, unsigned int to,
+  bool training) {
   const unsigned int pairs = context.getNumInputs() / 2;
   for (unsigned int i = 0; i < pairs; ++i) {
     const nntrainer::Tensor &k = context.getInput(2 * i);
     const nntrainer::Tensor &v = context.getInput(2 * i + 1);
-    // batch 1: the encoder runs one utterance at a time
-    const size_t rows = k.getDim().height();
+    // batch 1: the encoder runs one utterance at a time; a step's rows start
+    // at row 0
+    const size_t height = k.getDim().height();
+    const size_t rows =
+      to > from ? std::min<size_t>(to - from, height) : height;
     const size_t width = k.getDim().width();
     CrossMemory &mem = crossMemory(memory_prefix + "_l" + std::to_string(i));
     storeTensor(k, rows * width, mem.key);

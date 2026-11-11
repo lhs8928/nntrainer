@@ -14,7 +14,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
@@ -238,7 +240,8 @@ void WhisperEncoder::load_weight(const std::string &path) {
                         : ml::train::ModelFormat::MODEL_FORMAT_BIN);
 }
 
-void WhisperEncoder::run(const std::vector<float> &mel) {
+void WhisperEncoder::run(const std::vector<float> &mel,
+                         unsigned int positions) {
   if (mel.size() != static_cast<size_t>(dims_.n_mels) * dims_.n_frames)
     throw std::invalid_argument("WhisperEncoder: wrong mel size");
   // mha_core advances its own cache index on every forward: start over
@@ -248,8 +251,19 @@ void WhisperEncoder::run(const std::vector<float> &mel) {
         l.setProperty({"cache_index=0"});
     },
     nullptr);
-  // the output points into the graph's own memory (not to be freed)
-  model_->inference(1, {const_cast<float *>(mel.data())});
+  if (positions == 0 || positions >= dims_.n_ctx) {
+    // the output points into the graph's own memory (not to be freed)
+    model_->inference(1, {const_cast<float *>(mel.data())});
+    return;
+  }
+  // one incremental step [0, positions): the conv stem runs over the whole
+  // window, the blocks and the memory writer over the first positions only
+  std::vector<float *> label;
+  auto out =
+    model_->incremental_inference(1, {const_cast<float *>(mel.data())}, label,
+                                  dims_.n_ctx, 0, positions, false);
+  for (float *p : out)
+    delete[] p;
 }
 
 /* -------------------------------- decoder -------------------------------- */
@@ -311,6 +325,11 @@ WhisperCausalLM::WhisperCausalLM(json &cfg, json &generation_cfg,
       for (int h = 0; h < NUM_HEADS; ++h)
         alignment_heads_.emplace_back(l, h);
   }
+
+  encoder_audio_ctx_ =
+    nntr_cfg.value("encoder_context", std::string("full")) == "audio";
+  encoder_pad_sec_ = nntr_cfg.value("encoder_context_pad_sec", 0.0f);
+  encoder_min_sec_ = nntr_cfg.value("encoder_context_min_sec", 0.0f);
 
   // the prompt (4), the generated text and the end-of-text token must fit
   sample_len_ = std::min<unsigned int>(nntr_cfg.value("num_to_generate", 224u),
@@ -482,15 +501,23 @@ WhisperCausalLM::transcribe(const std::vector<float> &pcm,
   if (!is_initialized)
     throw std::runtime_error("WhisperCausalLM is not initialized");
   Result r;
+  using clock = std::chrono::steady_clock;
+  auto ms_since = [](clock::time_point t) {
+    return std::chrono::duration<double, std::milli>(clock::now() - t).count();
+  };
+  auto t_stage = clock::now();
 
-  // 1. log-mel of the zero-padded 30 s window, channel-major
+  // 1. log-mel of the zero-padded 30 s window, channel-major. A frame whose
+  //    400-sample window (centered, 200 on each side) lies past the audio
+  //    sees only zeros: no transform for it
   const size_t window = windowSamples();
   const size_t used = std::min(pcm.size(), window);
   std::vector<float> padded(window, 0.0f);
   std::copy(pcm.begin(), pcm.begin() + used, padded.begin());
   AudioPreprocessor pre;
+  const size_t audio_frames = (used + 200 + HOP - 1) / HOP + 1;
   const std::vector<float> mel_tf =
-    pre.computeMelSpectrogram(padded, enc_dims_.n_mels);
+    pre.computeMelSpectrogram(padded, enc_dims_.n_mels, 400, HOP, audio_frames);
   const size_t frames = enc_dims_.n_frames;
   if (mel_tf.size() < frames * enc_dims_.n_mels)
     throw std::runtime_error("WhisperCausalLM: short mel spectrogram");
@@ -499,8 +526,23 @@ WhisperCausalLM::transcribe(const std::vector<float> &pcm,
     for (size_t m = 0; m < enc_dims_.n_mels; ++m)
       mel[m * frames + t] = mel_tf[t * enc_dims_.n_mels + m];
 
-  // 2. encoder: fills the cross memories
-  encoder_.run(mel);
+  r.mel_ms = ms_since(t_stage);
+
+  // 2. encoder: fills the cross memories, over the whole window or only the
+  //    segment's positions (two mel frames each)
+  r.encoder_positions = enc_dims_.n_ctx;
+  if (encoder_audio_ctx_) {
+    const double per_sec = SAMPLE_RATE / (2.0 * HOP); // 50 positions per s
+    double positions =
+      std::ceil(used / (2.0 * HOP)) + std::ceil(encoder_pad_sec_ * per_sec);
+    positions = std::max(positions, std::ceil(encoder_min_sec_ * per_sec));
+    r.encoder_positions = static_cast<unsigned int>(
+      std::clamp(positions, 1.0, static_cast<double>(enc_dims_.n_ctx)));
+  }
+  t_stage = clock::now();
+  encoder_.run(mel, r.encoder_positions);
+  r.encoder_ms = ms_since(t_stage);
+  t_stage = clock::now();
   dumpFloats("mel", mel.data(), mel.size());
   if (std::getenv("NNTR_WHISPER_DUMP") != nullptr) {
     const CrossMemory &m0 = crossMemory(memory_prefix_ + "_l0");
@@ -590,6 +632,8 @@ WhisperCausalLM::transcribe(const std::vector<float> &pcm,
     ++pos;
   }
   r.avg_logprob = static_cast<float>(sum_logprob / (r.tokens.size() + 1));
+  r.decoder_ms = ms_since(t_stage);
+  t_stage = clock::now();
 
   if (!r.tokens.empty()) {
     r.text = tokenizer->Decode(r.tokens);
@@ -630,6 +674,16 @@ WhisperCausalLM::transcribe(const std::vector<float> &pcm,
                                             r.language, decode);
   }
 
+  r.words_ms = ms_since(t_stage);
+  if (const char *e = std::getenv("NNTR_WHISPER_TIMING"); e && *e && *e != '0')
+    std::fprintf(
+      stderr,
+      "[Whisper timing] audio %.2f s: mel %.0f ms, encoder %.0f ms "
+      "(%u positions), decoder %.0f ms (%zu tokens, %.1f ms/token), "
+      "words %.0f ms\n",
+      static_cast<double>(used) / SAMPLE_RATE, r.mel_ms, r.encoder_ms,
+      r.encoder_positions, r.decoder_ms, r.tokens.size(),
+      r.decoder_ms / static_cast<double>(r.tokens.size() + 1), r.words_ms);
   last_ = r;
   return r;
 }
