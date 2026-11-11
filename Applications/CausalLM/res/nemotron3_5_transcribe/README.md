@@ -68,7 +68,31 @@ not at 16 kHz is resampled linearly; resample offline for best quality. One
 audio token covers 80 ms, so `max_seq_len` must hold `12.5 x seconds` plus the
 prompt and the transcript.
 
-### Quantize the language model (needed for the real checkpoint)
+### Low-memory conversion and run (what was used on a 15 GB machine)
+
+Convert straight from the BF16 checkpoint to Q4_0, one tensor at a time, and
+put the routed experts in their own file that the MoE layers memory-map (only
+the experts the router picks are read):
+
+```bash
+ninja -C build Applications/CausalLM/nntr_stream_quantize
+NNTR_STREAM_QUANTIZE=$PWD/build/Applications/CausalLM/nntr_stream_quantize \
+python Applications/CausalLM/res/nemotron3_5_transcribe/weight_converter.py \
+    --model_path /path/to/checkpoint_json_and_tokenizer_files \
+    --safetensors_url https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B/resolve/main/model.safetensors \
+    --out_dir /path/to/out --fc_dtype q4_0 --split_experts --embedding_dtype bfloat16
+```
+
+`--safetensors_url` reads the weights with HTTP range requests, so the 64 GB
+source is never stored; drop it to read local `*.safetensors` instead. The
+output is ~1.1 GB of LLM weights, ~16.5 GB of experts, a 0.7 GB embedding
+table and the 2.8 GB audio tower; conversion peaks at ~2.5 GB of memory.
+
+On a 4-core x86 machine with 15 GB of RAM and slow storage this transcribes a
+6 s LibriSpeech utterance correctly in ~2 minutes from a cold page cache
+(most of it paging experts in); see `PLAN.md` R1-4 for numbers.
+
+### Quantize the language model with nntr_quantize
 
 The FP32 LLM weights of the 30B checkpoint are ~130 GB. Quantize the
 projections to Q4_0 with the generic tool; the Mamba2 parameters, the MoE

@@ -206,14 +206,15 @@ Applications/CausalLM/
 우선순위 순서. 각 항목의 **완료 기준**을 만족해야 체크한다.
 
 #### R1. 실제 체크포인트 실행 (최우선, 다른 모든 항목의 전제)
-- [ ] R1-1 체크포인트 확보 및 변환 — **부분 완료 (2026-11-11)**
+- [x] R1-1 체크포인트 확보 및 변환 — **완료 (2026-11-11)**
   - [x] 실제 safetensors 헤더(1395 텐서)로 이름 매핑 검증: 기대 텐서 7257 개(expert 분해 후) 전부 매핑,
         shape 불일치 0. 미사용 `hidden_to_spks` 2 개는 IGNORED 에 추가
   - [x] 설정값 확인: hidden 2688, 52 블록 `MEMEM*EMEMEM*...`, attn 32/2 head_dim 128, Mamba 64×64 groups 8
         state 128, expert 128 top-6 (1856 / shared 3712), relu2, vocab 131072, audio_token_id 131072,
         ASR 1280d×32, diarization 512d×31 speaker 8, chunk 500/50/50 — 분석 때 가정과 동일
   - [x] 오디오 타워 실제 가중치 변환 (`--audio_only`, 2.8 GB FP32)
-  - [ ] 전체 LLM 변환 (60 GB, 디스크·RAM 부족으로 미실행)
+  - [x] 전체 LLM 변환: `--safetensors_url` 로 원본을 저장하지 않고 스트리밍, BF16 → Q4_0 직접 기록,
+        expert 분리(`--split_experts`). 28 분, 결과 LLM 1.07 GB + experts 16.5 GB + BF16 임베딩 0.7 GB
   - huggingface.co 접근 가능 + RAM ≥ 160 GB 머신에서 `weight_converter.py` 실행
     (NeMo export 이름 매핑은 transformers `conversion_mapping.py` 기준으로만 작성됨 → 실제 키 목록과 대조)
   - 변환기가 무시한 키(`IGNORED`)와 매핑되지 않은 키를 로그로 남기도록 보강
@@ -232,12 +233,22 @@ Applications/CausalLM/
         speaker logits rel ≤ 1.3e-6, audio embeds rel ≤ 7.4e-5 (화자 2 명 검출되는 파일 포함)
   - [x] LLM, 실제 가중치 3 블록 축소본(0 번 M, 1 번 E, 5 번 \*): `--verify-llm` 에서 logits rel 9.5e-5,
         greedy 8 토큰 일치. 실제 크기 레이아웃(expert 128, vocab 131072) 검증됨
-  - [ ] 전체 52 블록 + 오디오 end-to-end (고메모리 서버 필요)
+  - [ ] 전체 52 블록 + 오디오 FP32 end-to-end 대조 (고메모리 서버 필요). Q4_0 실행은 R1-4 참고
   - 실 가중치로 HF transformers 와 단계별 비교: log-mel, ASR 출력, speaker logits, audio embeds, prefill logits
   - 기존 `--verify` 를 실 체크포인트용으로 확장 (참조 덤프 스크립트 `make_real_reference.py` 추가)
   - 완료 기준: 각 단계 rel 1e-3 이내, 30 s 한국어/영어 샘플 각 2 개에서 greedy 출력 문자열 일치
-- [ ] R1-4 Q4_0 실행 — 3 블록 축소본으로 시험: 6.8 GB → 0.96 GB, 처음 4 토큰 일치,
-  logits 최대 편차 rel 0.22 (축소 모델이라 품질 판단 불가, 전체 모델 WER 로 판단 필요)
+- [x] R1-4 Q4_0 실행 — **완료 (2026-11-11)**, 이 환경(4 코어, RAM 15 GB, 디스크 직접 읽기 ≈40 MB/s)에서
+  전체 30B 모델 + 실제 오디오 타워로 전사 성공 (expert mmap, 첫 실행 기준)
+
+  | 입력 | 결과 | prefill | 생성 | 전체 |
+  |---|---|---|---|---|
+  | LibriSpeech 5.9 s | "mister Quilter is the apostle of the middle classes, and we are glad to welcome his gospel." (정답과 단어 일치) | 125 tok 84.7 s | 23 tok 27.5 s | 124 s |
+  | en-Alice 9.3 s | "So just to clarify, we've had nineteen to twenty year olds on our podcast so far, and if you don't mind me asking, how old are you?" | 167 tok 83.4 s | 35 tok 38.1 s | 130 s |
+  | 2 화자 60 s, 화자 태그 프롬프트 | 전체 내용 전사, 단 `<spk:0>` 만 출력 (화자 전환 미표시 — HF 원본과 비교 필요) | 794 tok 189 s | 253 tok 219 s | 425 s |
+
+  - peak RSS 12.5~13.2 GB (mmap 된 expert 페이지 포함, OS 가 회수 가능한 file-backed 메모리)
+  - 시간 대부분은 expert 페이지 폴트(디스크 읽기). 디코딩 토큰당 ≈0.9~1.2 s
+  - [ ] HF 원본(BF16) 결과와 문자열 비교, 화자 태그 동작 확인 (고메모리 서버)
   - `nntr_quantize --fc_dtype Q4_0 --lmhead_dtype Q4_0` 후 동일 샘플 실행
   - 완료 기준: 전사 결과가 FP32 와 의미상 동일(WER 차이 R2 에서 측정), 크래시/NaN 없음
 
@@ -263,7 +274,7 @@ Applications/CausalLM/
       1 토큰이면 HF 와 다를 수 있음. prefill/decode 구분을 레이어에 명시적으로 전달하도록 수정
 
 #### R4. 성능 최적화 (x86 → ARM 순)
-- [ ] R4-1 프로파일링 (첫 측정, x86 4 코어: 오디오 타워 로딩 13.5 s, 60 s 오디오 인코딩 10.2 s ≈ RTF 0.17,
+- [ ] R4-1 프로파일링 (첫 측정, x86 4 코어: 오디오 타워 로딩 13.5 s, 60 s 오디오 인코딩 10.2 s ≈ RTF 0.17, 전체 모델 전사는 R1-4 표,
       28 s → 3.9 s, log-mel 60 s → 0.19 s): 30 s 오디오 기준 단계별 시간(전처리 / ASR / diarization / prefill / decode tok/s) 측정표 작성
 - [ ] R4-2 Mamba2 prefill 을 순차 recurrence → chunked scan(SSD, chunk 128) GEMM 화. decode 경로는 head 단위
       벡터화(NEON/AVX2). 완료 기준: prefill 수치 rel 1e-4 유지, prefill 속도 ≥ 5 배
@@ -282,7 +293,7 @@ Applications/CausalLM/
 타임스탬프 헤드(0.05 B)만 **F32**. 현재 변환기는 전부 FP32 로 올려 저장하므로 크기가 2 배가 된다
 (LLM ≈ 130 GB, 오디오 2.8 GB). BF16→FP32 는 무손실이라 정확도 문제는 없고, 아래는 메모리/디스크 문제다.
 
-- [ ] R5-1 BF16 에서 바로 Q4_0 로 스트리밍 변환 (FP32 중간 파일 / FP32 전체 로드 제거)
+- [x] R5-1 BF16 에서 바로 Q4_0 로 스트리밍 변환 (FP32 중간 파일 / FP32 전체 로드 제거) — **완료**
   - 현재: `weight_converter.py` → FP32 `.bin`(≈130 GB) → `nntr_quantize` 가 FP32 모델 전체를 메모리에 로드
     → 변환 머신에 RAM·디스크 각각 ≈130 GB 필요
   - 방법: 변환기가 safetensors 를 텐서 단위로 읽어(로컬 파일 또는 HTTP Range) BF16→FP32 를 텐서 하나씩만
@@ -293,6 +304,9 @@ Applications/CausalLM/
       작은 C++ 도구에 텐서를 stdin 으로 흘려 보내는 방식(형식 일치가 자동 보장, 권장)
     - 1-row FP32 weight(Mamba 파라미터, router) 와 norm 은 FP32 그대로
   - 출력 `nntr_config.json` 에 `model_tensor_type: Q4_0-FP32`, `fc_layer_dtype: Q4_0` 기록
+  - 결과: `nntr_stream_quantize` (C++, `Layer::save()` 와 같은 quantize/repack 호출) + 변환기 `--fc_dtype q4_0`.
+    tiny 에서 `nntr_quantize` 결과와 바이트 일치. 실 체크포인트 변환 peak RSS ≈2.5 GB, 원격 Range 로
+    64 MB 조각 4 병렬 (≈60 MB/s)
   - 완료 기준: tiny(`--quant_friendly`) 에서 `nntr_quantize` 결과와 `.bin` 바이트 일치,
     실 체크포인트 변환 시 peak RSS ≤ 4 GB, 디스크는 결과물(≈18 GB)만 사용
 - [ ] R5-2 오디오 타워 가중치 BF16 그대로 저장 (2.8 GB → 1.4 GB)
@@ -302,7 +316,10 @@ Applications/CausalLM/
   - 추가 절감이 필요하면 상주 메모리도 BF16 로 두고 GEMM 직전 레이어 단위로 FP32 변환 (속도와 trade-off)
   - 완료 기준: `--verify-audio` 결과가 FP32 저장과 동일, 파일 크기 절반
 - [ ] R5-3 임베딩 테이블: 원본 BF16 을 그대로 쓰는 옵션 추가 (현재 FP32/FP16 만 지원, FP16 변환은 무손실 아님)
-- [ ] R5-4 slim / FSU expert on-demand 로딩 (`qwen3_cached_slim_moe` 방식 이식). 목표: 상주 메모리 ≤ 6 GB
+- [ ] R5-4 slim / FSU expert on-demand 로딩 — **1 단계 완료**: expert 를 별도 파일로 분리하고 MoE 레이어가
+      mmap(`MADV_RANDOM`) 해서 선택된 expert 페이지만 읽음 (`--split_experts`, `moe_expert_file_name`).
+      tiny 에서 분리 전과 토큰 완전 일치. 남은 것: Windows 지원, 상주 메모리 ≤ 6 GB 목표 측정(Android),
+      prefill 시 expert 접근 순서 정렬로 디스크 읽기 줄이기, 자주 쓰는 expert 고정(cache) 정책
   - 현황: 일반 FSU(`fsu: true`)는 3 블록 Q4_0 모델에서 동작은 함(토큰 동일), 단 종료 시
     "Couldn't find buffer" 오류 메시지 → 원인 확인 필요. 레이어 수가 적어 메모리 절감 효과는 측정 못 함
   - FSU 는 MoE 레이어 전체(Q4_0 ≈ 0.6 GB/층)를 읽으므로 decode 1 토큰당 최대 ≈14 GB 디스크 읽기 →
@@ -360,3 +377,7 @@ Applications/CausalLM/
   `--verify-audio`, `--verify-llm` 추가.
 - 2026-11-11: 원본 dtype 확인(대부분 BF16, SSM 파라미터/라우터 bias 만 F32) → R5 를 BF16 직접 저장·
   BF16→Q4_0 스트리밍 변환 중심으로 구체화. 3 블록 Q4_0 모델에서 FSU 모드 동작 확인(토큰 동일).
+- 2026-11-11: 실제 30B 모델 Q4_0 변환·실행 성공. 원격 스트리밍 변환 중 문제 2 개 수정(큰 Range 요청이
+  타임아웃 없이 정체 → 64 MB 병렬 조각, up/down 교대 접근으로 1-entry 캐시가 1.3 GB 텐서를 expert 마다
+  재다운로드 → 2-entry 캐시). FSU 는 토큰마다 레이어 전체를 다시 읽어 느린 디스크(≈40 MB/s)에서 비현실적이라
+  expert mmap 방식 추가. 전사 결과 정확, 출력에 `<|im_end|>` 가 붙던 문제 수정.
