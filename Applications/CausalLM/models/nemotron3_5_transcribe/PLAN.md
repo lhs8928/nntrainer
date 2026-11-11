@@ -276,13 +276,39 @@ Applications/CausalLM/
 - [ ] R4-6 Mamba state / conv state 를 FP16 으로 둘지 정밀도 영향 평가
 
 #### R5. 메모리 / 모바일
-- [ ] R5-1 변환 경로 메모리: `nntr_quantize` 가 FP32 모델 전체(≈130 GB)를 로드함 → `weight_converter.py` 에서
-      Q4_0 을 직접 기록(블록 양자화 + ISA repack 포맷 재현)하거나 레이어 단위 스트리밍 양자화 도구 작성
-- [ ] R5-2 오디오 타워 가중치 FP16/Q8 저장 (현재 FP32 2.8 GB)
-- [ ] R5-3 slim / FSU expert on-demand 로딩 (`qwen3_cached_slim_moe` 방식 이식). 목표: 상주 메모리 ≤ 6 GB
-- [ ] R5-4 임베딩 테이블 Q6_K/Q4_0 (현재 FP32/FP16 side file)
+
+원본 체크포인트 dtype (safetensors 헤더 기준): LLM 본체·lm_head·MTP·오디오 인코더·projector 는 **BF16**
+(LLM 31.6 B + MTP 1.3 B + 오디오 0.73 B), Mamba `A_log`/`D`/`dt_bias` 와 MoE `e_score_correction_bias` 및
+타임스탬프 헤드(0.05 B)만 **F32**. 현재 변환기는 전부 FP32 로 올려 저장하므로 크기가 2 배가 된다
+(LLM ≈ 130 GB, 오디오 2.8 GB). BF16→FP32 는 무손실이라 정확도 문제는 없고, 아래는 메모리/디스크 문제다.
+
+- [ ] R5-1 BF16 에서 바로 Q4_0 로 스트리밍 변환 (FP32 중간 파일 / FP32 전체 로드 제거)
+  - 현재: `weight_converter.py` → FP32 `.bin`(≈130 GB) → `nntr_quantize` 가 FP32 모델 전체를 메모리에 로드
+    → 변환 머신에 RAM·디스크 각각 ≈130 GB 필요
+  - 방법: 변환기가 safetensors 를 텐서 단위로 읽어(로컬 파일 또는 HTTP Range) BF16→FP32 를 텐서 하나씩만
+    풀고, 양자화 대상(FC/expert/lm_head)은 바로 Q4_0 레코드로 기록
+    - Q4_0 레코드 형식은 `Layer::save()` 와 바이트 단위로 같아야 함: `[in,out]` FP32 → transpose →
+      `quantize_q4_0` (32 블록, fp16 scale) → `repack_q4_0` (x86: q4_0x8, ARM: q4_0x4, `--isa` 선택)
+    - 구현 선택지: (a) numpy 로 quantize/repack 재현, (b) nntrainer 의 `quantize_q4_0`/`repack_q4_0` 를 쓰는
+      작은 C++ 도구에 텐서를 stdin 으로 흘려 보내는 방식(형식 일치가 자동 보장, 권장)
+    - 1-row FP32 weight(Mamba 파라미터, router) 와 norm 은 FP32 그대로
+  - 출력 `nntr_config.json` 에 `model_tensor_type: Q4_0-FP32`, `fc_layer_dtype: Q4_0` 기록
+  - 완료 기준: tiny(`--quant_friendly`) 에서 `nntr_quantize` 결과와 `.bin` 바이트 일치,
+    실 체크포인트 변환 시 peak RSS ≤ 4 GB, 디스크는 결과물(≈18 GB)만 사용
+- [ ] R5-2 오디오 타워 가중치 BF16 그대로 저장 (2.8 GB → 1.4 GB)
+  - `nntr_audio.bin` 에 텐서별 dtype 필드 추가(`F32`/`BF16`), 로딩 시 BF16→FP32 로 펼쳐 계산은 FP32 유지
+    (HF 도 오디오 타워를 FP32 로 계산: `_keep_in_fp32_modules_strict`). 결과는 지금과 비트 단위로 동일해야 함
+  - FP16 으로 바꾸지 않는다: BF16 → FP16 은 지수 범위가 좁아 오버플로 가능, 무손실 아님
+  - 추가 절감이 필요하면 상주 메모리도 BF16 로 두고 GEMM 직전 레이어 단위로 FP32 변환 (속도와 trade-off)
+  - 완료 기준: `--verify-audio` 결과가 FP32 저장과 동일, 파일 크기 절반
+- [ ] R5-3 임베딩 테이블: 원본 BF16 을 그대로 쓰는 옵션 추가 (현재 FP32/FP16 만 지원, FP16 변환은 무손실 아님)
+- [ ] R5-4 slim / FSU expert on-demand 로딩 (`qwen3_cached_slim_moe` 방식 이식). 목표: 상주 메모리 ≤ 6 GB
+  - 현황: 일반 FSU(`fsu: true`)는 3 블록 Q4_0 모델에서 동작은 함(토큰 동일), 단 종료 시
+    "Couldn't find buffer" 오류 메시지 → 원인 확인 필요. 레이어 수가 적어 메모리 절감 효과는 측정 못 함
+  - FSU 는 MoE 레이어 전체(Q4_0 ≈ 0.6 GB/층)를 읽으므로 decode 1 토큰당 최대 ≈14 GB 디스크 읽기 →
+    선택된 6/128 expert 만 읽는 slim 방식이 필요
 - [ ] R5-5 Android 실기기 측정: peak RSS, 30 s 오디오 처리 시간, 발열/스로틀링
-- 참고: Q4_0 만으로는 LLM ≈ 17 GB + 오디오 2.8 GB → 모바일 불가. R5-3 없이는 모바일 목표 달성 불가
+- 참고: Q4_0 만으로는 LLM ≈ 17.8 GB + 오디오 1.4~2.8 GB → 모바일 불가. R5-4 없이는 모바일 목표 달성 불가
 
 #### R6. 테스트 / CI
 - [ ] R6-1 `mamba2_ssm`, `nemotron_h_moe` gtest 단위 테스트 추가 (참조 텐서 고정 파일 사용, torch 불필요)
@@ -332,3 +358,5 @@ Applications/CausalLM/
   헤더와 필요한 텐서만 받음. 이름 매핑·설정·chat template 확인, 오디오 타워는 실제 가중치로 HF 와 일치,
   LLM 은 블록 종류별 1 개씩(3 블록) 실제 가중치로 일치 확인. `--audio_only`, `make_audio_reference.py`,
   `--verify-audio`, `--verify-llm` 추가.
+- 2026-11-11: 원본 dtype 확인(대부분 BF16, SSM 파라미터/라우터 bias 만 F32) → R5 를 BF16 직접 저장·
+  BF16→Q4_0 스트리밍 변환 중심으로 구체화. 3 블록 Q4_0 모델에서 FSU 모드 동작 확인(토큰 동일).
