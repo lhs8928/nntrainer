@@ -77,6 +77,26 @@ public:
   using prop_tag = nntrainer::uint_prop_tag;
 };
 
+/**
+ * @brief file holding the expert projections outside of the model weight
+ *        file; the layer memory-maps it, so only the experts the router
+ *        picks are paged in (empty = experts are ordinary weights)
+ */
+class ExpertFile : public nntrainer::Property<std::string> {
+public:
+  ExpertFile(const std::string &value = "") { set(value); }
+  static constexpr const char *key = "expert_file";
+  using prop_tag = nntrainer::str_prop_tag;
+};
+
+/** @brief byte offset of this layer's experts in expert_file */
+class ExpertOffset : public nntrainer::Property<std::string> {
+public:
+  ExpertOffset(const std::string &value = "0") { set(value); }
+  static constexpr const char *key = "expert_offset";
+  using prop_tag = nntrainer::str_prop_tag;
+};
+
 /** @brief number of groups kept by group limited routing */
 class TopkGroups : public nntrainer::Property<unsigned int> {
 public:
@@ -94,7 +114,14 @@ public:
 class WIN_EXPORT NemotronHMoELayer : public nntrainer::LayerImpl {
 public:
   NemotronHMoELayer();
-  ~NemotronHMoELayer() = default;
+  ~NemotronHMoELayer();
+
+  /**
+   * @brief bytes of one [rows, cols] projection stored with dtype, as
+   *        Layer::save() writes it (FP32 or Q4_0)
+   */
+  static size_t projectionBytes(unsigned int rows, unsigned int cols,
+                                ml::train::TensorDim::DataType dtype);
 
   void finalize(nntrainer::InitLayerContext &context) override;
   void forwarding(nntrainer::RunLayerContext &context, bool training) override;
@@ -131,11 +158,27 @@ private:
                  const nntrainer::Tensor &up, const nntrainer::Tensor &down,
                  unsigned int hidden, unsigned int inter);
 
+  /** @brief map expert_file and wrap every expert projection */
+  void mapExternalExperts();
+
   std::tuple<props::NumExperts, props::NumExpertsPerToken,
              nntrainer::props::Unit, props::SharedExpertSize,
              props::RoutedScalingFactor, props::NormTopkProb,
-             props::NumExpertGroups, props::TopkGroups>
+             props::NumExpertGroups, props::TopkGroups, props::ExpertFile,
+             props::ExpertOffset>
     moe_props;
+
+  // external (memory-mapped) experts
+  std::string expert_file;
+  size_t expert_offset = 0;
+  unsigned int hidden_size = 0;
+  ml::train::TensorDim::DataType expert_dtype =
+    ml::train::TensorDim::DataType::FP32;
+  ml::train::TensorDim::Format expert_format =
+    ml::train::TensorDim::Format::NCHW;
+  void *map_base = nullptr;
+  size_t map_length = 0;
+  std::vector<nntrainer::Tensor> ext_up, ext_down;
 
   unsigned int num_experts = 0;
   unsigned int topk = 0;

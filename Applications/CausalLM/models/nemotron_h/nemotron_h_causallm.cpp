@@ -135,6 +135,10 @@ void NemotronHCausalLM::setupParameters(json &cfg, json &generation_cfg,
         "NemotronH: moe_latent_size (latent MoE) is not supported yet");
 
     EMBEDDING_TABLE_PATH = nntr_cfg.value("embedding_file_name", std::string());
+    MOE_EXPERT_FILE = nntr_cfg.contains("moe_expert_file_name") &&
+                          nntr_cfg["moe_expert_file_name"].is_string()
+                        ? nntr_cfg["moe_expert_file_name"].get<std::string>()
+                        : std::string();
     EMBEDDING_TABLE_DTYPE =
       nntr_cfg.value("embedding_file_dtype", std::string("FP32"));
   } catch (const std::exception &e) {
@@ -182,16 +186,40 @@ Tensor NemotronHCausalLM::createMambaBlock(int layer_id, Tensor x) {
 }
 
 Tensor NemotronHCausalLM::createMoEBlock(int layer_id, Tensor x) {
-  LayerHandle moe(createLayer(
-    "nemotron_h_moe",
-    {withKey("name", "layer" + std::to_string(layer_id) + "_moe"),
-     withKey("num_experts", NUM_EXPERTS),
-     withKey("num_experts_per_token", NUM_EXPERTS_PER_TOK),
-     withKey("unit", MOE_INTERMEDIATE_SIZE),
-     withKey("shared_expert_size", MOE_SHARED_INTERMEDIATE_SIZE),
-     withKey("routed_scaling_factor", std::to_string(ROUTED_SCALING_FACTOR)),
-     withKey("norm_topk_prob", NORM_TOPK_PROB ? "true" : "false"),
-     withKey("n_group", N_GROUP), withKey("topk_group", TOPK_GROUP)}));
+  // With moe_expert_file_name the experts of every MoE block are stored back
+  // to back in that file, block by block and expert by expert (up, down), in
+  // the weight dtype of the model; each block maps its own slice.
+  std::string expert_offset = "0";
+  if (!MOE_EXPERT_FILE.empty()) {
+    const std::string wtype =
+      MODEL_TENSOR_TYPE.substr(0, MODEL_TENSOR_TYPE.find('-'));
+    const auto dtype = wtype == "Q4_0" ? ml::train::TensorDim::DataType::Q4_0
+                                       : ml::train::TensorDim::DataType::FP32;
+    if (wtype != "Q4_0" && wtype != "FP32")
+      throw std::invalid_argument("NemotronH: moe_expert_file_name needs a "
+                                  "Q4_0 or FP32 model, not " +
+                                  MODEL_TENSOR_TYPE);
+    expert_offset = std::to_string(next_expert_offset_);
+    next_expert_offset_ +=
+      static_cast<size_t>(NUM_EXPERTS) *
+      (NemotronHMoELayer::projectionBytes(DIM, MOE_INTERMEDIATE_SIZE, dtype) +
+       NemotronHMoELayer::projectionBytes(MOE_INTERMEDIATE_SIZE, DIM, dtype));
+  }
+  std::vector<std::string> props = {
+    withKey("name", "layer" + std::to_string(layer_id) + "_moe"),
+    withKey("num_experts", NUM_EXPERTS),
+    withKey("num_experts_per_token", NUM_EXPERTS_PER_TOK),
+    withKey("unit", MOE_INTERMEDIATE_SIZE),
+    withKey("shared_expert_size", MOE_SHARED_INTERMEDIATE_SIZE),
+    withKey("routed_scaling_factor", std::to_string(ROUTED_SCALING_FACTOR)),
+    withKey("norm_topk_prob", NORM_TOPK_PROB ? "true" : "false"),
+    withKey("n_group", N_GROUP),
+    withKey("topk_group", TOPK_GROUP)};
+  if (!MOE_EXPERT_FILE.empty()) {
+    props.push_back(withKey("expert_file", MOE_EXPERT_FILE));
+    props.push_back(withKey("expert_offset", expert_offset));
+  }
+  LayerHandle moe(createLayer("nemotron_h_moe", props));
   return moe(x);
 }
 
@@ -214,6 +242,7 @@ Tensor NemotronHCausalLM::createAttentionBlock(int layer_id, Tensor x) {
 }
 
 std::pair<Tensor, Tensor> NemotronHCausalLM::constructModel() {
+  next_expert_offset_ = 0;
   LayerHandle input_layer(createLayer(
     "input", {withKey("name", "input0"),
               withKey("input_shape", "1:" + std::to_string(INIT_SEQ_LEN) + ":" +

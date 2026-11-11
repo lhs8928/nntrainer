@@ -113,6 +113,10 @@ protected:
   unsigned int N_GROUP = 1;
   unsigned int TOPK_GROUP = 1;
 
+  // experts kept in a separate, memory-mapped file (empty = in the model)
+  std::string MOE_EXPERT_FILE;
+  size_t next_expert_offset_ = 0;
+
   // embedding side table
   std::string EMBEDDING_TABLE_PATH;
   std::string EMBEDDING_TABLE_DTYPE = "FP32";

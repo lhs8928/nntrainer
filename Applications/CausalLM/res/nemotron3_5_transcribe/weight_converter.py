@@ -304,8 +304,12 @@ class Writer:
             self.f.close()
 
 
+def experts_name(quantize):
+    return "nntr_nemotron_h_experts_q40.bin" if quantize else "nntr_nemotron_h_experts.bin"
+
+
 def convert_llm(reader, text_cfg, out_dir, fc_dtype, embedding_dtype,
-                quantize=None, isa="DEFAULT"):
+                quantize=None, isa="DEFAULT", split_experts=False):
     """Weights in the order NemotronHCausalLM::constructModel() requests them."""
     pre = "model.language_model."
     types = layer_types(text_cfg)
@@ -322,6 +326,12 @@ def convert_llm(reader, text_cfg, out_dir, fc_dtype, embedding_dtype,
 
     bin_name = "nntr_nemotron_h_q40.bin" if quantize == "q4_0" else "nntr_nemotron_h.bin"
     w = Writer(os.path.join(out_dir, bin_name), fc_dtype, quantize, isa)
+    # routed experts (95 % of the weights) in their own file, which the MoE
+    # layers memory-map instead of loading (nntr_config moe_expert_file_name)
+    ew = w
+    if split_experts:
+        ew = Writer(os.path.join(out_dir, experts_name(quantize)), fc_dtype,
+                    quantize, isa)
     f32 = np.float32
 
     def fc(name):  # torch Linear [out, in] -> nntrainer [in, out]
@@ -351,8 +361,8 @@ def convert_llm(reader, text_cfg, out_dir, fc_dtype, embedding_dtype,
             w.write(reader.get(mx + "gate.weight").transpose(0, 1), f32)
             w.write(reader.get(mx + "gate.e_score_correction_bias"), f32)
             for e in range(text_cfg.n_routed_experts):
-                w.write(reader.get(f"{mx}experts.{e}.up_proj.weight").transpose(0, 1))
-                w.write(reader.get(f"{mx}experts.{e}.down_proj.weight").transpose(0, 1))
+                ew.write(reader.get(f"{mx}experts.{e}.up_proj.weight").transpose(0, 1))
+                ew.write(reader.get(f"{mx}experts.{e}.down_proj.weight").transpose(0, 1))
             if text_cfg.n_shared_experts:
                 w.write(reader.get(mx + "shared_experts.up_proj.weight").transpose(0, 1))
                 w.write(reader.get(mx + "shared_experts.down_proj.weight").transpose(0, 1))
@@ -368,6 +378,9 @@ def convert_llm(reader, text_cfg, out_dir, fc_dtype, embedding_dtype,
     w.write(reader.get(pre + "norm_f.weight"), f32)
     w.write(reader.get("lm_head.weight").transpose(0, 1))
     w.close()
+    if ew is not w:
+        ew.close()
+        print(f"experts: {ew.count} parameters written to {experts_name(quantize)}")
     print(f"LLM: {w.count} parameters written to {bin_name}")
 
 
@@ -524,6 +537,7 @@ def write_configs(config, model_path, out_dir, fc_dtype_name, emb_dtype_name, ar
         "batch_size": 1,
         "tokenizer_file": tok if os.path.exists(tok) else None,
         "audio_file_name": "nntr_audio.bin",
+        "moe_expert_file_name": experts_name(q4) if args.split_experts else None,
         "transcribe_config_file": "transcribe_config.json",
     }
     dump_json(nntr, os.path.join(out_dir, "nntr_config.json"))
@@ -548,6 +562,11 @@ def main():
                         help="read the weights from this URL with HTTP range "
                         "requests instead of the *.safetensors of --model_path "
                         "(which then only needs the json / tokenizer files)")
+    parser.add_argument("--split_experts", action="store_true",
+                        help="write the routed experts to their own file, which "
+                        "the MoE layers memory-map: only the experts the router "
+                        "picks are paged in, so the model runs in less memory "
+                        "than its size (POSIX only)")
     parser.add_argument("--llm_only", action="store_true",
                         help="skip nntr_audio.bin (e.g. when it is converted already)")
     parser.add_argument("--init_seq_len", type=int, default=512)
@@ -577,7 +596,7 @@ def main():
         print("done (audio only):", args.out_dir)
         return
     convert_llm(reader, config.text_config, args.out_dir, np.float32, emb_dtype,
-                quantize, args.isa)
+                quantize, args.isa, args.split_experts)
     write_configs(config, args.model_path, args.out_dir,
                   "Q4_0" if quantize else "FP32",
                   {"float32": "FP32", "float16": "FP16",

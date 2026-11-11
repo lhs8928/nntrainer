@@ -252,8 +252,8 @@ int verifyLLM(const std::string &model_dir, const std::string &ref_dir) {
   causallm::json gen =
     causallm::LoadJsonFile(model_dir + "/generation_config.json");
   causallm::json nntr = causallm::LoadJsonFile(model_dir + "/nntr_config.json");
-  for (const char *key :
-       {"tokenizer_file", "model_file_name", "embedding_file_name"}) {
+  for (const char *key : {"tokenizer_file", "model_file_name",
+                          "embedding_file_name", "moe_expert_file_name"}) {
     if (nntr.contains(key) && nntr[key].is_string()) {
       const std::string v = nntr[key].get<std::string>();
       if (!v.empty() && v[0] != '/')

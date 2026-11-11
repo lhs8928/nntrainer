@@ -43,7 +43,7 @@ Nemotron35Transcribe::Nemotron35Transcribe(const std::string &model_dir) {
   json nntr_cfg = LoadJsonFile(model_dir + "/nntr_config.json");
   for (const char *key :
        {"tokenizer_file", "model_file_name", "embedding_file_name",
-        "audio_file_name", "transcribe_config_file"})
+        "audio_file_name", "transcribe_config_file", "moe_expert_file_name"})
     resolveKey(nntr_cfg, key, model_dir);
 
   const std::string tc_path = nntr_cfg.value(

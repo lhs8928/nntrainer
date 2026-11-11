@@ -18,8 +18,16 @@
 #include <numeric>
 #include <stdexcept>
 
+#include <memory_data.h>
 #include <nntrainer_error.h>
 #include <nntrainer_log.h>
+
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace causallm {
 
@@ -30,7 +38,32 @@ NemotronHMoELayer::NemotronHMoELayer() :
   moe_props(props::NumExperts(), props::NumExpertsPerToken(),
             nntrainer::props::Unit(), props::SharedExpertSize(),
             props::RoutedScalingFactor(), props::NormTopkProb(),
-            props::NumExpertGroups(), props::TopkGroups()) {}
+            props::NumExpertGroups(), props::TopkGroups(), props::ExpertFile(),
+            props::ExpertOffset()) {}
+
+NemotronHMoELayer::~NemotronHMoELayer() {
+  ext_up.clear();
+  ext_down.clear();
+#if !defined(_WIN32)
+  if (map_base != nullptr)
+    munmap(map_base, map_length);
+#endif
+}
+
+size_t
+NemotronHMoELayer::projectionBytes(unsigned int rows, unsigned int cols,
+                                   ml::train::TensorDim::DataType dtype) {
+  const size_t n = static_cast<size_t>(rows) * cols;
+  switch (dtype) {
+  case ml::train::TensorDim::DataType::FP32:
+    return n * sizeof(float);
+  case ml::train::TensorDim::DataType::Q4_0:
+    return n / 32 * 18; // block_q4_0: fp16 scale + 16 bytes per 32 values
+  default:
+    throw std::invalid_argument(
+      "[NemotronHMoE] external experts support FP32 and Q4_0 only");
+  }
+}
 
 void NemotronHMoELayer::finalize(nntrainer::InitLayerContext &context) {
   NNTR_THROW_IF(context.getNumInputs() != 1, std::invalid_argument)
@@ -56,6 +89,12 @@ void NemotronHMoELayer::finalize(nntrainer::InitLayerContext &context) {
   const nntrainer::TensorDim &in_dim = context.getInputDimensions()[0];
   context.setOutputDimensions({in_dim});
   const unsigned int hidden = in_dim.width();
+  hidden_size = hidden;
+  expert_file = std::get<props::ExpertFile>(moe_props).get();
+  expert_offset = static_cast<size_t>(
+    std::stoull(std::get<props::ExpertOffset>(moe_props).get()));
+  expert_dtype = context.getWeightDataType();
+  expert_format = context.getFormat();
 
   auto fp32_dim = [&](unsigned int h, unsigned int w) {
     return nntrainer::TensorDim(
@@ -84,7 +123,9 @@ void NemotronHMoELayer::finalize(nntrainer::InitLayerContext &context) {
   down_idx.clear();
   up_idx.reserve(num_experts);
   down_idx.reserve(num_experts);
-  for (unsigned int e = 0; e < num_experts; ++e) {
+  // External experts are not weights of the graph: they are mapped from
+  // expert_file on the first forward (see mapExternalExperts()).
+  for (unsigned int e = 0; e < num_experts && expert_file.empty(); ++e) {
     up_idx.push_back(context.requestWeight(
       weight_dim(hidden, inter_size), nntrainer::Initializer::NONE,
       nntrainer::WeightRegularizer::NONE, 0.0f, 0.0f,
@@ -102,6 +143,58 @@ void NemotronHMoELayer::finalize(nntrainer::InitLayerContext &context) {
       weight_dim(shared_size, hidden), nntrainer::Initializer::NONE,
       nntrainer::WeightRegularizer::NONE, 0.0f, 0.0f, "shared_down", false);
   }
+}
+
+void NemotronHMoELayer::mapExternalExperts() {
+#if defined(_WIN32)
+  throw std::runtime_error(
+    "[NemotronHMoE] expert_file (memory-mapped experts) is not supported on "
+    "Windows yet");
+#else
+  const size_t up_bytes =
+    projectionBytes(hidden_size, inter_size, expert_dtype);
+  const size_t down_bytes =
+    projectionBytes(inter_size, hidden_size, expert_dtype);
+  const size_t total = num_experts * (up_bytes + down_bytes);
+
+  const int fd = open(expert_file.c_str(), O_RDONLY);
+  NNTR_THROW_IF(fd < 0, std::runtime_error)
+    << "[NemotronHMoE] cannot open expert_file " << expert_file;
+  struct stat st;
+  fstat(fd, &st);
+  if (static_cast<size_t>(st.st_size) < expert_offset + total) {
+    close(fd);
+    NNTR_THROW_IF(true, std::runtime_error)
+      << "[NemotronHMoE] " << expert_file << " is too small for " << num_experts
+      << " experts at offset " << expert_offset;
+  }
+  const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+  const size_t aligned = expert_offset / page * page;
+  map_length = total + (expert_offset - aligned);
+  map_base = mmap(nullptr, map_length, PROT_READ, MAP_SHARED, fd,
+                  static_cast<off_t>(aligned));
+  close(fd);
+  NNTR_THROW_IF(map_base == MAP_FAILED, std::runtime_error)
+    << "[NemotronHMoE] mmap of " << expert_file << " failed";
+  // the router picks a few experts per token: do not read the others ahead
+  madvise(map_base, map_length, MADV_RANDOM);
+
+  char *p = static_cast<char *>(map_base) + (expert_offset - aligned);
+  auto wrap = [&](unsigned int rows, unsigned int cols, size_t bytes) {
+    nntrainer::Tensor t(
+      nntrainer::TensorDim({1, 1, rows, cols}, {expert_format, expert_dtype}),
+      false);
+    t.setData(std::make_shared<nntrainer::MemoryData>(p), 0, false);
+    p += bytes;
+    return t;
+  };
+  ext_up.clear();
+  ext_down.clear();
+  for (unsigned int e = 0; e < num_experts; ++e) {
+    ext_up.push_back(wrap(hidden_size, inter_size, up_bytes));
+    ext_down.push_back(wrap(inter_size, hidden_size, down_bytes));
+  }
+#endif
 }
 
 void NemotronHMoELayer::route(
@@ -249,9 +342,14 @@ void NemotronHMoELayer::incremental_forwarding(
       num_experts);
     route(x.getData<float>(), len, hidden, router_w, bias, assign);
 
+    const bool external = !expert_file.empty();
+    if (external && ext_up.empty())
+      mapExternalExperts();
     for (unsigned int e = 0; e < num_experts; ++e)
-      runExpert(x, y, assign[e], context.getWeight(up_idx[e]),
-                context.getWeight(down_idx[e]), hidden, inter_size);
+      runExpert(x, y, assign[e],
+                external ? ext_up[e] : context.getWeight(up_idx[e]),
+                external ? ext_down[e] : context.getWeight(down_idx[e]), hidden,
+                inter_size);
 
     if (shared_size > 0) {
       std::vector<std::pair<unsigned int, float>> all(len);
