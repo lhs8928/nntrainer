@@ -371,6 +371,13 @@ e_quantize = executable('nntr_quantize',
 )
 
 
+e_stream_quantize = executable('nntr_stream_quantize',
+    [meson.current_source_dir() / 'stream_quantize.cpp'],
+    include_directories: causallm_inc,
+    dependencies: [nntrainer_dep, nntrainer_ccapi_dep],
+)
+
+
 safetensors_info_src = [
     meson.current_source_dir() / 'safetensors_info.cpp',
 ]

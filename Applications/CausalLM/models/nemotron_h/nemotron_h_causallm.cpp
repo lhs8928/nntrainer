@@ -302,16 +302,28 @@ void NemotronHCausalLM::loadEmbeddingTable() {
     f.read(reinterpret_cast<char *>(embedding_table_.data()),
            static_cast<std::streamsize>(bytes));
   } else if (EMBEDDING_TABLE_DTYPE == "FP16" ||
-             EMBEDDING_TABLE_DTYPE == "fp16") {
+             EMBEDDING_TABLE_DTYPE == "fp16" ||
+             EMBEDDING_TABLE_DTYPE == "BF16" ||
+             EMBEDDING_TABLE_DTYPE == "bf16") {
     if (bytes != count * sizeof(uint16_t))
-      throw std::runtime_error("NemotronHCausalLM: FP16 embedding file size " +
-                               std::to_string(bytes) + " != expected " +
+      throw std::runtime_error("NemotronHCausalLM: " + EMBEDDING_TABLE_DTYPE +
+                               " embedding file size " + std::to_string(bytes) +
+                               " != expected " +
                                std::to_string(count * sizeof(uint16_t)));
     std::vector<uint16_t> half(count);
     f.read(reinterpret_cast<char *>(half.data()),
            static_cast<std::streamsize>(bytes));
-    for (size_t i = 0; i < count; ++i)
-      embedding_table_[i] = half_to_float(half[i]);
+    const bool bf16 =
+      EMBEDDING_TABLE_DTYPE[0] == 'B' || EMBEDDING_TABLE_DTYPE[0] == 'b';
+    for (size_t i = 0; i < count; ++i) {
+      if (bf16) {
+        // the checkpoint's own dtype: widening is exact
+        const uint32_t bits = static_cast<uint32_t>(half[i]) << 16;
+        std::memcpy(&embedding_table_[i], &bits, sizeof(float));
+      } else {
+        embedding_table_[i] = half_to_float(half[i]);
+      }
+    }
   } else {
     throw std::runtime_error("NemotronHCausalLM: unsupported embedding dtype " +
                              EMBEDDING_TABLE_DTYPE);

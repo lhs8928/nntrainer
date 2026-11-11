@@ -18,6 +18,13 @@
 ##
 ## Usage:
 ##   python weight_converter.py --model_path <hf dir> --out_dir <out dir>
+##
+##   # Q4_0 language model written straight from the BF16 checkpoint, one
+##   # tensor at a time (no FP32 copy of the model on disk or in memory),
+##   # reading the weights over HTTP range requests instead of a local file:
+##   python weight_converter.py --model_path <dir with the json/tokenizer files> \
+##       --safetensors_url https://huggingface.co/<repo>/resolve/main/model.safetensors \
+##       --out_dir <out dir> --fc_dtype q4_0 --embedding_dtype bfloat16
 
 import argparse
 import glob
@@ -25,6 +32,9 @@ import json
 import os
 import re
 import struct
+import subprocess
+import time
+import urllib.request
 
 import numpy as np
 import torch
@@ -86,6 +96,66 @@ IGNORED = [
 ]
 
 
+_ST_DTYPES = {
+    "BF16": torch.bfloat16,
+    "F16": torch.float16,
+    "F32": torch.float32,
+    "I64": torch.int64,
+    "U8": torch.uint8,
+}
+
+
+class RemoteSafetensors:
+    """safe_open-like access to a remote safetensors file with HTTP range
+    requests: only the header and the tensors asked for are downloaded."""
+
+    class _Slice:
+        def __init__(self, shape):
+            self.shape = shape
+
+        def get_shape(self):
+            return self.shape
+
+    def __init__(self, url, retries=6):
+        self.url = url
+        self.retries = retries
+        n = struct.unpack("<Q", self._range(0, 8))[0]
+        self.header = json.loads(self._range(8, 8 + n))
+        self.header.pop("__metadata__", None)
+        self.base = 8 + n
+
+    def _range(self, start, end):
+        for attempt in range(self.retries):
+            try:
+                req = urllib.request.Request(
+                    self.url, headers={"Range": f"bytes={start}-{end - 1}"}
+                )
+                with urllib.request.urlopen(req, timeout=120) as r:
+                    data = r.read()
+                if len(data) != end - start:
+                    raise IOError(f"short read {len(data)} != {end - start}")
+                return data
+            except Exception as e:  # network hiccup: back off and retry
+                if attempt + 1 == self.retries:
+                    raise
+                wait = 2 ** (attempt + 1)
+                print(f"  range {start}-{end} failed ({e}); retry in {wait}s")
+                time.sleep(wait)
+
+    def keys(self):
+        return list(self.header)
+
+    def get_slice(self, key):
+        return self._Slice(self.header[key]["shape"])
+
+    def get_tensor(self, key):
+        info = self.header[key]
+        a, b = info["data_offsets"]
+        data = bytearray(self._range(self.base + a, self.base + b))
+        t = torch.frombuffer(data, dtype=_ST_DTYPES[info["dtype"]])
+        return t.reshape(info["shape"])
+
+
 def canonical_name(key):
     for pattern, repl in RENAMES:
         key = re.sub(pattern, repl, key)
@@ -95,11 +165,14 @@ def canonical_name(key):
 class CheckpointReader:
     """Lazy tensor access by transformers name, split / transposed on demand."""
 
-    def __init__(self, model_path):
-        files = sorted(glob.glob(os.path.join(model_path, "*.safetensors")))
-        if not files:
-            raise FileNotFoundError(f"no *.safetensors in {model_path}")
-        self.handles = [safe_open(f, framework="pt") for f in files]
+    def __init__(self, model_path, url=None):
+        if url:
+            self.handles = [RemoteSafetensors(url)]
+        else:
+            files = sorted(glob.glob(os.path.join(model_path, "*.safetensors")))
+            if not files:
+                raise FileNotFoundError(f"no *.safetensors in {model_path}")
+            self.handles = [safe_open(f, framework="pt") for f in files]
         self.entries = {}  # name -> (handle, key, op)
         self._cache_key = None
         self._cache_val = None
@@ -191,32 +264,64 @@ def layer_types(text_cfg):
 
 
 class Writer:
-    def __init__(self, path, dtype):
-        self.f = open(path, "wb")
+    """LLM weight file. write(t) with no dtype is a projection ([in, out]
+    fully_connected / expert / lm_head weight): FP32, or Q4_0 when the
+    writer quantizes. write(t, np.float32) is always stored as FP32."""
+
+    def __init__(self, path, dtype, quantize=None, isa="DEFAULT"):
         self.dtype = dtype
         self.count = 0
+        self.proc = None
+        if quantize == "q4_0":
+            tool = os.environ.get("NNTR_STREAM_QUANTIZE", "nntr_stream_quantize")
+            self.proc = subprocess.Popen([tool, path, "--isa", isa],
+                                         stdin=subprocess.PIPE)
+            self.f = self.proc.stdin
+        else:
+            self.f = open(path, "wb")
+
+    def _record(self, kind, arr):
+        rows, cols = (arr.shape if arr.ndim == 2 else (1, arr.size))
+        self.f.write(b"NTQR" + struct.pack("<III", kind, rows, cols))
+        self.f.write(np.ascontiguousarray(arr, dtype=np.float32).tobytes())
 
     def write(self, tensor, dtype=None):
-        arr = tensor.detach().cpu().numpy().astype(dtype or self.dtype)
-        arr.tofile(self.f)
+        arr = tensor.detach().cpu().float().numpy() if torch.is_tensor(tensor) \
+            else np.asarray(tensor)
+        if self.proc is not None:
+            self._record(1 if dtype is None else 0, arr)
+        else:
+            arr.astype(dtype or self.dtype).tofile(self.f)
         self.count += arr.size
 
     def close(self):
-        self.f.close()
+        if self.proc is not None:
+            self.f.write(b"NTQE")
+            self.f.close()
+            if self.proc.wait() != 0:
+                raise RuntimeError("nntr_stream_quantize failed")
+        else:
+            self.f.close()
 
 
-def convert_llm(reader, text_cfg, out_dir, fc_dtype, embedding_dtype):
+def convert_llm(reader, text_cfg, out_dir, fc_dtype, embedding_dtype,
+                quantize=None, isa="DEFAULT"):
     """Weights in the order NemotronHCausalLM::constructModel() requests them."""
     pre = "model.language_model."
     types = layer_types(text_cfg)
     hidden = text_cfg.hidden_size
 
     emb = reader.get(pre + "embeddings.weight")
-    emb.numpy().astype(embedding_dtype).tofile(
-        os.path.join(out_dir, "nntr_nemotron_h_embedding.bin")
-    )
+    emb_path = os.path.join(out_dir, "nntr_nemotron_h_embedding.bin")
+    if embedding_dtype == "bfloat16":
+        # lossless: the checkpoint stores the table in BF16
+        emb.to(torch.bfloat16).view(torch.int16).numpy().tofile(emb_path)
+    else:
+        emb.numpy().astype(embedding_dtype).tofile(emb_path)
+    del emb
 
-    w = Writer(os.path.join(out_dir, "nntr_nemotron_h.bin"), fc_dtype)
+    bin_name = "nntr_nemotron_h_q40.bin" if quantize == "q4_0" else "nntr_nemotron_h.bin"
+    w = Writer(os.path.join(out_dir, bin_name), fc_dtype, quantize, isa)
     f32 = np.float32
 
     def fc(name):  # torch Linear [out, in] -> nntrainer [in, out]
@@ -259,11 +364,11 @@ def convert_llm(reader, text_cfg, out_dir, fc_dtype, embedding_dtype):
             w.write(torch.zeros(1), f32)
             w.write(reader.get(mx + "up_proj.weight").transpose(0, 1))
             w.write(reader.get(mx + "down_proj.weight").transpose(0, 1))
-        print(f"  llm layer {i:2d} [{t}] done")
+        print(f"  llm layer {i:2d} [{t}] done", flush=True)
     w.write(reader.get(pre + "norm_f.weight"), f32)
     w.write(reader.get("lm_head.weight").transpose(0, 1))
     w.close()
-    print(f"LLM: {w.count} parameters written")
+    print(f"LLM: {w.count} parameters written to {bin_name}")
 
 
 def convert_audio(reader, config, out_dir):
@@ -377,6 +482,7 @@ def transcribe_config(config, model_path):
 
 
 def write_configs(config, model_path, out_dir, fc_dtype_name, emb_dtype_name, args):
+    q4 = fc_dtype_name == "Q4_0"
     text = config.text_config
     llm_cfg = text.to_dict()
     llm_cfg["architectures"] = ["NemotronHForCausalLM"]
@@ -404,7 +510,7 @@ def write_configs(config, model_path, out_dir, fc_dtype_name, emb_dtype_name, ar
     nntr = {
         "model_type": "CausalLM",
         "model_tensor_type": f"{fc_dtype_name}-FP32",
-        "model_file_name": "nntr_nemotron_h.bin",
+        "model_file_name": "nntr_nemotron_h_q40.bin" if q4 else "nntr_nemotron_h.bin",
         "embedding_file_name": "nntr_nemotron_h_embedding.bin",
         "embedding_file_dtype": emb_dtype_name,
         "fc_layer_dtype": fc_dtype_name,
@@ -430,10 +536,20 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", required=True)
     parser.add_argument("--out_dir", required=True)
-    parser.add_argument("--fc_dtype", default="float32", choices=["float32"],
-                        help="dtype of the LLM projection weights")
+    parser.add_argument("--fc_dtype", default="float32", choices=["float32", "q4_0"],
+                        help="dtype of the LLM projection weights. q4_0 quantizes "
+                        "while streaming through nntr_stream_quantize (set "
+                        "NNTR_STREAM_QUANTIZE to its path if it is not on PATH)")
+    parser.add_argument("--isa", default="DEFAULT", choices=["DEFAULT", "X86", "ARM"],
+                        help="Q4_0 block packing of the target CPU")
     parser.add_argument("--embedding_dtype", default="float32",
-                        choices=["float32", "float16"])
+                        choices=["float32", "float16", "bfloat16"])
+    parser.add_argument("--safetensors_url", default=None,
+                        help="read the weights from this URL with HTTP range "
+                        "requests instead of the *.safetensors of --model_path "
+                        "(which then only needs the json / tokenizer files)")
+    parser.add_argument("--llm_only", action="store_true",
+                        help="skip nntr_audio.bin (e.g. when it is converted already)")
     parser.add_argument("--init_seq_len", type=int, default=512)
     parser.add_argument("--max_seq_len", type=int, default=4096)
     parser.add_argument("--num_to_generate", type=int, default=1024)
@@ -448,19 +564,24 @@ def main():
 
     os.makedirs(args.out_dir, exist_ok=True)
     config = load_config(args.model_path)
-    reader = CheckpointReader(args.model_path)
+    reader = CheckpointReader(args.model_path, args.safetensors_url)
 
-    fc_dtype = {"float32": np.float32}[args.fc_dtype]
-    emb_dtype = {"float32": np.float32, "float16": np.float16}[args.embedding_dtype]
-    convert_audio(reader, config, args.out_dir)
+    quantize = "q4_0" if args.fc_dtype == "q4_0" else None
+    emb_dtype = {"float32": np.float32, "float16": np.float16,
+                 "bfloat16": "bfloat16"}[args.embedding_dtype]
+    if not args.llm_only:
+        convert_audio(reader, config, args.out_dir)
     if args.audio_only:
         dump_json(transcribe_config(config, args.model_path),
                   os.path.join(args.out_dir, "transcribe_config.json"))
         print("done (audio only):", args.out_dir)
         return
-    convert_llm(reader, config.text_config, args.out_dir, fc_dtype, emb_dtype)
-    write_configs(config, args.model_path, args.out_dir, "FP32",
-                  "FP32" if args.embedding_dtype == "float32" else "FP16", args)
+    convert_llm(reader, config.text_config, args.out_dir, np.float32, emb_dtype,
+                quantize, args.isa)
+    write_configs(config, args.model_path, args.out_dir,
+                  "Q4_0" if quantize else "FP32",
+                  {"float32": "FP32", "float16": "FP16",
+                   "bfloat16": "BF16"}[args.embedding_dtype], args)
     print("done:", args.out_dir)
 
 
