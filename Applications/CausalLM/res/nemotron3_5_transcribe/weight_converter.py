@@ -27,6 +27,7 @@
 ##       --out_dir <out dir> --fc_dtype q4_0 --embedding_dtype bfloat16
 
 import argparse
+import collections
 import glob
 import json
 import os
@@ -193,8 +194,12 @@ class CheckpointReader:
                 raise FileNotFoundError(f"no *.safetensors in {model_path}")
             self.handles = [safe_open(f, framework="pt") for f in files]
         self.entries = {}  # name -> (handle, key, op)
-        self._cache_key = None
-        self._cache_val = None
+        # A few most recently read source tensors. Per-expert reads alternate
+        # between the stacked up and down tensors of a block, so a single
+        # entry would re-read (or, remotely, re-download) each of them for
+        # every expert.
+        self._cache = collections.OrderedDict()
+        self._cache_size = 2
         for h in self.handles:
             for key in h.keys():
                 if any(re.search(p, key) for p in IGNORED):
@@ -232,10 +237,14 @@ class CheckpointReader:
         return list(self.entries)
 
     def _raw(self, h, key):
-        if self._cache_key != (id(h), key):
-            self._cache_val = h.get_tensor(key)
-            self._cache_key = (id(h), key)
-        return self._cache_val
+        ck = (id(h), key)
+        if ck in self._cache:
+            self._cache.move_to_end(ck)
+            return self._cache[ck]
+        while len(self._cache) >= self._cache_size:
+            self._cache.popitem(last=False)
+        self._cache[ck] = h.get_tensor(key)
+        return self._cache[ck]
 
     def get(self, name):
         h, key, op = self.entries[name]
