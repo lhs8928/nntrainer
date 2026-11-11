@@ -23,7 +23,10 @@
  * padding (the reference gets the segment alone, without a mask).
  *
  * The model directory holds config.json and vocab.json of the checkpoint,
- * nntr_config.json (res/wav2vec2) and the converted weights.
+ * nntr_config.json (res/wav2vec2) and the converted weights. WhisperX feeds
+ * the raw waveform; nntr_config.json "normalize_input": true normalizes it
+ * first (zero mean, unit variance) as the checkpoint's feature extractor
+ * does, which most checkpoints were trained with.
  */
 
 #ifndef __WAV2VEC2_CTC_H__
@@ -81,6 +84,7 @@ private:
   size_t vocab_ = 0;
   size_t max_samples_ = 0;
   size_t max_frames_ = 0;
+  bool normalize_ = false; /**< nntr_config.json "normalize_input" */
 };
 
 } // namespace quick_ai

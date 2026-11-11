@@ -110,9 +110,11 @@ def merge_repeats(path):
     return segs
 
 
-def align(ckpt, wav, text, language):
+def align(ckpt, wav, text, language, normalize=False):
     model = Wav2Vec2ForCTC.from_pretrained(ckpt).eval()
-    dictionary = json.load(open(os.path.join(ckpt, "vocab.json")))
+    # WhisperX lower-cases the dictionary ("[PAD]" -> "[pad]", the blank)
+    dictionary = {c.lower(): i for c, i in
+                  json.load(open(os.path.join(ckpt, "vocab.json"))).items()}
     audio = torch.from_numpy(load_wav(wav)[None])
     t1, t2 = 0.0, audio.shape[1] / 16000
 
@@ -132,6 +134,8 @@ def align(ckpt, wav, text, language):
         return []
 
     seg = audio
+    if normalize:  # the feature extractor's do_normalize (not WhisperX's)
+        seg = (seg - seg.mean()) / torch.sqrt(seg.var(unbiased=False) + 1e-7)
     if seg.shape[-1] < 400:
         seg = torch.nn.functional.pad(seg, (0, 400 - seg.shape[-1]))
     with torch.inference_mode():
@@ -186,12 +190,14 @@ def main():
     p.add_argument("--language", default="")
     p.add_argument("--make-tiny", metavar="DIR")
     p.add_argument("--post-ln", action="store_true")
+    p.add_argument("--normalize", action="store_true",
+                   help="normalize the waveform first (nntr_config normalize_input)")
     a = p.parse_args()
     if a.make_tiny:
         make_tiny(a.make_tiny, a.args[0], a.post_ln)
         return
     ckpt, wav, text = a.args
-    for word, s, e in align(ckpt, wav, text, a.language):
+    for word, s, e in align(ckpt, wav, text, a.language, a.normalize):
         print(f"  {s:.3f} - {e:.3f}  {word}")
 
 

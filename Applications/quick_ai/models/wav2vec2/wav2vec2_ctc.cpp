@@ -13,6 +13,7 @@
 #include "wav2vec2_ctc.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -108,9 +109,16 @@ void Wav2Vec2CTC::load(const std::string &dir) {
   registerLayers();
   const json cfg = readJson(dir + "/config.json");
   const json nntr = readJson(dir + "/nntr_config.json");
+  // WhisperX lower-cases the dictionary ("[PAD]" -> "[pad]", the blank)
   const json vocab = readJson(dir + "/vocab.json");
-  for (const auto &[ch, id] : vocab.items())
-    dict_[ch] = id.get<int>();
+  for (const auto &[ch, id] : vocab.items()) {
+    std::string key = ch;
+    std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) {
+      return static_cast<char>(std::tolower(c));
+    });
+    dict_[key] = id.get<int>();
+  }
+  normalize_ = nntr.value("normalize_input", false);
 
   const unsigned int D = cfg.value("hidden_size", 768u);
   const unsigned int L = cfg.value("num_hidden_layers", 12u);
@@ -211,6 +219,19 @@ std::vector<float> Wav2Vec2CTC::emissions(const std::vector<float> &pcm,
   const size_t n = std::max(pcm.size(), MIN_SAMPLES);
   std::vector<float> in(max_samples_, 0.0f);
   std::copy(pcm.begin(), pcm.end(), in.begin());
+  if (normalize_) {
+    // Wav2Vec2FeatureExtractor's do_normalize: zero mean, unit variance
+    double mean = 0.0, var = 0.0;
+    for (float v : pcm)
+      mean += v;
+    mean /= std::max<size_t>(pcm.size(), 1);
+    for (float v : pcm)
+      var += (v - mean) * (v - mean);
+    var /= std::max<size_t>(pcm.size(), 1);
+    const double inv = 1.0 / std::sqrt(var + 1e-7);
+    for (size_t i = 0; i < pcm.size(); ++i)
+      in[i] = static_cast<float>((pcm[i] - mean) * inv);
+  }
   frames = Wav2Vec2FeatureEncoderLayer::framesOf(n, kernel_, stride_);
 
   model_->forEachLayer(
