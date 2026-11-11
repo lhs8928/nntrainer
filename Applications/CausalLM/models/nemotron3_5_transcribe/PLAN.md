@@ -192,13 +192,96 @@ Applications/CausalLM/
 - [x] P8 파이프라인 + 앱 + end-to-end 검증 — `nntr_nemotron_transcribe --verify` ALL CHECKS PASSED
       (텍스트 / 2.6 s / 11 s / tokenizer 를 거친 `transcribe()` 전체 경로)
 - [x] P9 문서화 — `res/nemotron3_5_transcribe/README.md`
-- [ ] P10 (후속)
+- [ ] P10 (후속) — 일부만 완료. 세부 항목과 순서는 아래 **6.1 남은 작업** 참고
   - [x] LLM Q4_0 양자화 — `nntr_quantize --fc_dtype Q4_0` 지원. Mamba 파라미터/라우터는 1-row FP32 weight 로
         요청해 `Layer::save()` 가 양자화하지 않도록 하고, expert/FC/lm_head 만 Q4_0.
         검증: Q4_0 격자에 snap 한 가중치로 FP32 vs Q4_0 실행 시 greedy 48 토큰 중 47 개 일치
         (나머지 1 개는 Q4_0 GEMM 의 활성값 Q8 양자화 영향)
-  - [ ] 단어 타임스탬프 헤드 (CTC) + forced alignment
-  - [ ] slim/FSU expert on-demand 로딩, 스트리밍 입력
+
+> **현재 상태 요약**: P0~P9 는 "작동하는 첫 구현 + tiny 랜덤 모델로 HF 참조와 수치 일치" 수준이다.
+> 실제 30B 체크포인트로는 한 번도 실행하지 않았고, 성능 최적화·모바일 메모리 대응·WER 평가는 하지 않았다.
+
+### 6.1 남은 작업
+
+우선순위 순서. 각 항목의 **완료 기준**을 만족해야 체크한다.
+
+#### R1. 실제 체크포인트 실행 (최우선, 다른 모든 항목의 전제)
+- [ ] R1-1 체크포인트 확보 및 변환
+  - huggingface.co 접근 가능 + RAM ≥ 160 GB 머신에서 `weight_converter.py` 실행
+    (NeMo export 이름 매핑은 transformers `conversion_mapping.py` 기준으로만 작성됨 → 실제 키 목록과 대조)
+  - 변환기가 무시한 키(`IGNORED`)와 매핑되지 않은 키를 로그로 남기도록 보강
+  - 완료 기준: 모든 LLM/오디오 텐서가 shape 오류 없이 변환되고 unmapped 키 0 개(MTP, preprocessor 등 의도한 것 제외)
+- [ ] R1-2 프롬프트 형식 확인
+  - processor 파일로 `chat_template_parts()` 가 렌더링되는지 확인 (현재 tiny 는 ChatML fallback 만 검증됨)
+  - HF `apply_transcription_request()` 가 만든 `input_ids` 와 `buildPromptIds()` 결과를 바이트 단위로 비교
+  - `enable_thinking=False` 처리, BOS 유무, `<|audio|>` 앞뒤 공백/개행 확인
+  - 완료 기준: 기본 프롬프트·사용자 프롬프트 각 3 개에서 prompt ids 완전 일치
+- [ ] R1-3 FP32 레퍼런스 대조 (고메모리 서버, x86)
+  - 실 가중치로 HF transformers 와 단계별 비교: log-mel, ASR 출력, speaker logits, audio embeds, prefill logits
+  - 기존 `--verify` 를 실 체크포인트용으로 확장 (참조 덤프 스크립트 `make_real_reference.py` 추가)
+  - 완료 기준: 각 단계 rel 1e-3 이내, 30 s 한국어/영어 샘플 각 2 개에서 greedy 출력 문자열 일치
+- [ ] R1-4 Q4_0 실행
+  - `nntr_quantize --fc_dtype Q4_0 --lmhead_dtype Q4_0` 후 동일 샘플 실행
+  - 완료 기준: 전사 결과가 FP32 와 의미상 동일(WER 차이 R2 에서 측정), 크래시/NaN 없음
+
+#### R2. 정확도 평가
+- [ ] R2-1 평가 스크립트: wav 목록 → `nntr_nemotron_transcribe` → 전사 결과 수집 (배치 실행 모드 추가 필요,
+      현재 앱은 실행마다 모델을 다시 로드함)
+- [ ] R2-2 한국어 WER/CER (예: KsponSpeech eval, Zeroth-Korean test) — HF transformers 결과와 함께 측정
+- [ ] R2-3 영어 WER (LibriSpeech test-clean 일부) — 모델 카드 수치와 비교
+- 완료 기준: NNTrainer FP32 vs HF 의 CER 차이 0.1 %p 이내, Q4_0 의 열화폭을 표로 기록
+
+#### R3. 기능 보완
+- [ ] R3-1 Android / 앱 빌드 목록에 새 소스 추가 — `jni/Android.mk`, `app_build/meson.build` 에
+      `mamba2_ssm_layer.cpp`, `nemotron_h_moe_layer.cpp`, `models/nemotron_h`, `models/nemotron3_5_transcribe`
+      가 빠져 있음. 완료 기준: `build_android.sh` 빌드 성공
+- [ ] R3-2 Windows 빌드 확인 (`std::filesystem`, `std::erf` 등 사용) — CI Windows 셀 통과
+- [ ] R3-3 장시간 오디오: 현재 전체 오디오 임베딩을 한 번에 prefill → `max_seq_len` 이 12.5 × 초 이상 필요.
+      30 분 입력(≈22,500 토큰)에서 KV cache / 활성 메모리 측정, 필요 시 오디오를 구간 분할해 여러 번 전사
+- [ ] R3-4 리샘플러: 현재 선형 보간 → 윈도드 sinc 등 품질 보장되는 방식으로 교체 (16 kHz 아닌 입력 대응)
+- [ ] R3-5 앱 기능: 여러 파일 연속 처리(모델 1 회 로드), 스트리밍 출력 콜백, 사용자 프롬프트 파일 입력
+- [ ] R3-6 단어 타임스탬프: word timestamp encoder(ConvTranspose ×2 + 2층) + CTC head(23,863 class) +
+      forced alignment(Viterbi) + 화자 매칭(`_match_tags_to_speakers`, Hungarian). alignment tokenizer 필요
+- [ ] R3-7 Mamba prefill 의 dt clamp: 현재 "이번 step 길이 > 1" 일 때만 clamp → prefill 마지막 chunk 가
+      1 토큰이면 HF 와 다를 수 있음. prefill/decode 구분을 레이어에 명시적으로 전달하도록 수정
+
+#### R4. 성능 최적화 (x86 → ARM 순)
+- [ ] R4-1 프로파일링: 30 s 오디오 기준 단계별 시간(전처리 / ASR / diarization / prefill / decode tok/s) 측정표 작성
+- [ ] R4-2 Mamba2 prefill 을 순차 recurrence → chunked scan(SSD, chunk 128) GEMM 화. decode 경로는 head 단위
+      벡터화(NEON/AVX2). 완료 기준: prefill 수치 rel 1e-4 유지, prefill 속도 ≥ 5 배
+- [ ] R4-3 MoE: router GEMV 를 스칼라 루프 → sgemv, expert 별 gather 버퍼 재사용(매 호출 Tensor 할당 제거),
+      decode 시 6 expert 병렬화
+- [ ] R4-4 오디오 인코더: attention 을 head 단위 병렬화, 활성 버퍼 재사용, GELU/LayerNorm 벡터화,
+      FP16 가중치(ARM) 옵션
+- [ ] R4-5 KV cache: 52 레이어 전부 할당 중 → attention 6 레이어만 할당 (`getKVCacheRows` 를 레이어별로 0 반환
+      가능하게 수정)
+- [ ] R4-6 Mamba state / conv state 를 FP16 으로 둘지 정밀도 영향 평가
+
+#### R5. 메모리 / 모바일
+- [ ] R5-1 변환 경로 메모리: `nntr_quantize` 가 FP32 모델 전체(≈130 GB)를 로드함 → `weight_converter.py` 에서
+      Q4_0 을 직접 기록(블록 양자화 + ISA repack 포맷 재현)하거나 레이어 단위 스트리밍 양자화 도구 작성
+- [ ] R5-2 오디오 타워 가중치 FP16/Q8 저장 (현재 FP32 2.8 GB)
+- [ ] R5-3 slim / FSU expert on-demand 로딩 (`qwen3_cached_slim_moe` 방식 이식). 목표: 상주 메모리 ≤ 6 GB
+- [ ] R5-4 임베딩 테이블 Q6_K/Q4_0 (현재 FP32/FP16 side file)
+- [ ] R5-5 Android 실기기 측정: peak RSS, 30 s 오디오 처리 시간, 발열/스로틀링
+- 참고: Q4_0 만으로는 LLM ≈ 17 GB + 오디오 2.8 GB → 모바일 불가. R5-3 없이는 모바일 목표 달성 불가
+
+#### R6. 테스트 / CI
+- [ ] R6-1 `mamba2_ssm`, `nemotron_h_moe` gtest 단위 테스트 추가 (참조 텐서 고정 파일 사용, torch 불필요)
+- [ ] R6-2 tiny 모델 end-to-end 를 CI 에서 돌릴 수 있도록 참조 파일을 작은 크기로 커밋하거나 생성 단계 분리
+- [ ] R6-3 `check_count` 영향 확인 및 테스트 수 갱신
+
+#### 예상 일정 (1 인 기준, 대략)
+
+| 묶음 | 기간 | 비고 |
+|---|---|---|
+| R1 실 체크포인트 실행 | 1~2 주 | 고메모리 서버 필요. 이름 매핑/템플릿 문제 발생 시 증가 |
+| R2 정확도 평가 | 1 주 | 데이터셋 준비 포함 |
+| R3 기능 보완 | 2~3 주 | 타임스탬프(R3-6) 가 절반 |
+| R4 성능 최적화 | 3~5 주 | SSD chunked scan, NEON |
+| R5 메모리/모바일 | 3~5 주 | slim expert 로딩이 핵심 |
+| R6 테스트/CI | 1 주 | |
+| 합계 | 약 11~17 주 | |
 
 ### 검증 결과 (tiny 모델, `--verify`)
 
@@ -225,3 +308,5 @@ Applications/CausalLM/
   1-row FP32 요청으로 해결, `nntr_quantize` 에 Nemotron-H 등록/레이어 이름 매핑 추가.
   tiny 랜덤 모델은 Q4_0 에 매우 민감(HF 에서 Q4_0 시뮬레이션만 해도 logits rel 0.84)하여
   Q4_0 격자 snap 가중치로 FP32/Q4_0 동치성을 확인.
+- 2026-11-11: 남은 작업을 R1~R6 으로 구체화 (실 체크포인트 실행, 정확도 평가, 기능 보완, 성능, 메모리/모바일,
+  테스트). Android/앱 빌드 목록 누락(R3-1), Mamba dt clamp edge case(R3-7), KV cache 전 레이어 할당(R4-5) 확인.
