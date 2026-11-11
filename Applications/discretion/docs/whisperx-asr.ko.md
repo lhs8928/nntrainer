@@ -117,14 +117,15 @@ transcribe / lastWords)이 그대로라 `asr_lane`, `batch_pipeline`, `speech_op
 
 - [x] `segmentSamples()`는 `segment_sec`(최대 30초). 호출자가 채운 뒤쪽 0은 떼고 넣어 단어 시각이 소리 안에 있게 함
 - [x] `speech_ops`: Whisper면 `asr_secs` 전체에 모델 하나(가장 긴 길이)
-- [ ] `speech_ops`: 첫 길이로 Whisper를 올렸다 버리고 다시 올림 → 시작할 때 가중치를 두 번 읽음(FP32 6.2 GB)
+- [x] `speech_ops`: 첫 길이로 Whisper를 올렸다 버리고 다시 올림 → `config.json`만 보고 미리 정해 한 번만 읽음(9절 7)
+- [x] 인코더를 구간 길이만큼만(`encoder_context`): FLEURS 100문장에서 최소 10초면 30초 창과 CER 거의 같음(9절 7). 폰 속도 측정은 아직
 - [x] `room_api.h` 머리말, `main.cpp` 도움말
 - [x] `meson.build`·`jni/Android.mk`(quick_ai, discretion)에 Whisper 소스와 헤더 경로. Qwen3과 함께 빌드, 설정으로 하나만 올림
 - [x] 폰 빌드(ndk-build) 확인: quick_ai `build_android.sh`, discretion `ndk-build NNTRAINER_ROOT=<절대 경로>` 성공. `libquick_ai_core.so` 9.9 MB (9절 4)
 
 ### 5.6 wav2vec2 강제 정렬 (b) — WhisperX 4단계 그대로
 
-- [ ] 한국어 CTC 모델 확정(WhisperX 기본: `kresnik/wav2vec2-large-xlsr-korean`, 라이선스 확인). 회사망에서 HF 큰 파일(CDN)이 받아지지 않아 아직 실제 모델로 확인 못 함(9절 4)
+- [ ] 한국어 CTC 모델 확정(WhisperX 기본: `kresnik/wav2vec2-large-xlsr-korean`, 라이선스 확인). 실제 모델로 PyTorch 대조는 함(9절 7)
 - [x] nntrainer로 wav2vec2 구현 (`models/wav2vec2/wav2vec2_ctc.*`, `layers/wav2vec2_layers.*`): conv 특징 추출(layer/group norm),
       feature projection, group conv 위치 임베딩, encoder(pre-LN XLS-R / post-LN base), CTC head. 30초 graph에서 구간 길이만큼만 계산
 - [x] WhisperX 3.8.6 `align()` 그대로 (`models/wav2vec2/ctc_align.*`): 소문자, 공백 `|`, 사전 밖 글자는 와일드카드,
@@ -324,3 +325,44 @@ nntr_discretion <model_dir> --no-sd --stream-file x.wav --align-model <w2v_dir>
 - 이어서 할 것: 인코더 FP16 + 디코더 Q4_0의 FLEURS 382문장, (커널을 만든다면) 인코더 Q8_0 다시 측정, FP16 남은 31문장, 조용한 끝 구간 환각 거르기
 - 폰: `models/whisper-large-v3-eq8_0-dq4_0`·`-dq8_0`의 `nntr_config.json`을 고친 값으로 바꿈(원본 `nntr_config.json.orig`).
   결과 `whisper/room_e8d4.jsonl`·`.log`
+
+### 7. 속도: 인코더 길이, 시간 측정, 실제 한국어 정렬 모델 (2026-11-11, 클라우드 x86)
+
+이 기록의 실험은 모두 **x86_64 4코어 클라우드 컨테이너**에서 함(폰 아님). 폰 속도는 아래 로그로 사용자가 잼.
+
+- 왜 느린가: Whisper는 구간이 5초여도 인코더를 30초 창(1500 위치)으로 돌림. 인코더 32층 + 층별 cross K/V로 구간마다 약 1조 곱셈.
+  Qwen3-ASR 인코더는 구간 길이만큼(8초에 약 100토큰). 폰 측정(6절)에서도 인코더 FP16 → Q4_0이 RTF를 약 2.2 줄임
+- **인코더 길이 옵션** (`nntr_config.json`, 기본은 지금과 같은 `"full"`)
+  - `"encoder_context": "audio"`: 인코더 블록을 구간의 위치(20 ms당 1개)만큼만 계산(증분 스텝 `[0, T)`, whisper.cpp의 `audio_ctx`).
+    conv 2개는 30초 창 그대로, attention은 T까지만, cross-attention 메모리도 T행
+  - `"encoder_context_pad_sec"`: 뒤에 붙이는 여유, `"encoder_context_min_sec"`: 최소 길이
+  - 정확성: 랜덤 작은 모델로 PyTorch에서 같은 방식으로 자른 인코더(`reference_pytorch.py --encoder-context audio`)와 5가지 설정 모두 글·단어 시각 같음
+  - 정확도 영향, FLEURS 한국어 앞 100문장(4.7~24초, 평균 12.5초), large-v3 PyTorch FP32(nntrainer와 같은 디코딩):
+
+    | 인코더 길이 | Macro CER | Micro CER | 30초 창과 같은 글 |
+    |---|---|---|---|
+    | 30초 창 (`full`) | 3.18% | 3.36% | – |
+    | 구간 그대로 (`audio`) | **12.62%** | 8.23% | 86/100 |
+    | 구간 + 1초 (`pad 1`) | 3.43% | 3.40% | 89/100 |
+    | 구간, **최소 10초** (`min 10`) | **3.31%** | **3.27%** | 87/100 |
+
+    - 구간 그대로는 4.7초 문장에서 같은 문장을 되풀이하는 환각(+250자)이 나와 크게 나빠짐. 최소 10초는 30초 창과 거의 같고,
+      남은 차이는 대부분 숫자 표기("70km" ↔ "칠십 킬로미터")
+    - 권장: `"encoder_context": "audio", "encoder_context_min_sec": 10`. 회의 구간(최대 12.5초)이면 인코더 위치가 500~625개로
+      30초 창의 1/3~2/5 → 인코더 시간이 그만큼 줄 것으로 예상. **폰 RTF는 아직 안 잼**
+    - (x86 시간은 다른 작업과 CPU를 나눠 써서 믿기 어려움: 문장당 평균 full 14.5초, min 10 7.3초)
+- **시간 측정**: `NNTR_WHISPER_TIMING=1`이면 구간마다
+  `[Whisper timing] audio 3.10 s: mel 39 ms, encoder 46 ms (155 positions), decoder 989 ms (224 tokens, 4.4 ms/token), words 12 ms`.
+  `Result`에도 같은 값(`mel_ms`, `encoder_ms`, `decoder_ms`, `words_ms`, `encoder_positions`)
+- **멜**: 소리 없는 패딩 프레임은 계산 생략(값은 같음). x86 3.1초 구간 68 → 39 ms
+- x86에서만 본 것: OpenBLAS 스레드와 nntrainer 스레드풀이 겨뤄 작은 행렬-벡터 곱마다 기다림 → 디코딩 토큰당 52.5 ms가
+  `OPENBLAS_NUM_THREADS=1`이면 4.4 ms(작은 랜덤 모델). 폰은 FC를 Q4_0/FP16 전용 커널로 돌려 해당 없을 수 있음 → 위 로그의 ms/token으로 확인
+- `speech_ops`: Whisper면 `asr_secs` 중 가장 긴 것 하나만 남기고 한 번만 올림(빌드만 확인, 화자 모델이 없어 실행 못 함)
+- **실제 한국어 정렬 모델** `kresnik/wav2vec2-large-xlsr-korean`(XLS-R large, 어휘 1205)
+  - 버그: 이 모델의 blank는 대문자 `[PAD]`. WhisperX는 사전 키를 소문자로 바꿔 `[pad]`를 찾는데 우리 구현은 그대로 읽어 blank를 못 찾고
+    0번('볍')을 blank로 씀 → 14.7초 문장의 단어가 앞 1.2초에 몰림. 소문자로 바꿔 고침(랜덤 모델은 `<pad>`라 안 드러났음)
+  - `nntr_config.json` `"normalize_input": true`: 파형 정규화(체크포인트의 feature extractor처럼). WhisperX는 정규화 안 함(기본 끔).
+    이 모델은 정규화하면 인식이 나음(탐욕 CTC로 "목욕자는" → "목격자는")
+  - PyTorch 대조(FLEURS 3문장, 14~16초, 정답 글): logits 차이 최대 0.03(최대값 20.7), 프레임별 최댓값 글자 100% 같음. 단어·시각은
+    6번 중 5번 같고 1번은 경계 하나가 80 ms 밀림(동점에 가까움). x86 4코어에서 문장당 약 11초 → 폰에서는 정렬 모델도 무거움(약 3억 파라미터)
+- 다음: 폰에서 `encoder_context` min 10(인코더 FP16 + 디코더 Q4_0)의 RTF와 boda CER, 시간 로그로 인코더·디코더 비중 확인
