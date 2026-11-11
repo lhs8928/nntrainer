@@ -80,6 +80,9 @@ IGNORED = [
     r"^ctc_timestamp\.decoder\.upsample_factor$",
     r"^ctc_timestamp\.tokenizer\.",
     r"^mtp\.",
+    # an unused speaker head of the diarization model (transformers ignores
+    # it too)
+    r"^perception\.encoder\.diarization_model\.sortformer_modules\.hidden_to_spks\.",
 ]
 
 
@@ -334,6 +337,45 @@ def chat_template_parts(model_path):
         }
 
 
+def transcribe_config(config, model_path):
+    """settings of the audio front-end, the audio tower and the chat prompt"""
+    text = config.text_config
+    audio = config.audio_config
+    diar = audio.diarization_config
+    tc = {
+        "audio_token_id": config.audio_token_id,
+        "text_hidden_size": text.hidden_size,
+        "asr": audio.asr_config.to_dict(),
+        "diarization": diar.to_dict(),
+        "speaker_activity_threshold": audio.speaker_activity_threshold,
+        "feature_extractor": {
+            "sampling_rate": 16000,
+            "n_fft": 512,
+            "win_length": 400,
+            "hop_length": 160,
+            "num_mel_bins": audio.asr_config.num_mel_bins,
+            "preemphasis": 0.97,
+            "mel_filters_dtype": "bfloat16",
+        },
+        "prompt": chat_template_parts(model_path),
+    }
+    for fe_name in ("processor_config.json", "preprocessor_config.json"):
+        fe_path = os.path.join(model_path, fe_name)
+        if not os.path.exists(fe_path):
+            continue
+        with open(fe_path) as f:
+            fe = json.load(f)
+        fe = fe.get("feature_extractor", fe)
+        for k in ("sampling_rate", "n_fft", "win_length", "hop_length", "preemphasis",
+                  "mel_filters_dtype"):
+            if k in fe:
+                tc["feature_extractor"][k] = fe[k]
+        if "feature_size" in fe:
+            tc["feature_extractor"]["num_mel_bins"] = fe["feature_size"]
+        break
+    return tc
+
+
 def write_configs(config, model_path, out_dir, fc_dtype_name, emb_dtype_name, args):
     text = config.text_config
     llm_cfg = text.to_dict()
@@ -380,37 +422,8 @@ def write_configs(config, model_path, out_dir, fc_dtype_name, emb_dtype_name, ar
     }
     dump_json(nntr, os.path.join(out_dir, "nntr_config.json"))
 
-    audio = config.audio_config
-    diar = audio.diarization_config
-    tc = {
-        "audio_token_id": config.audio_token_id,
-        "text_hidden_size": text.hidden_size,
-        "asr": audio.asr_config.to_dict(),
-        "diarization": diar.to_dict(),
-        "speaker_activity_threshold": audio.speaker_activity_threshold,
-        "feature_extractor": {
-            "sampling_rate": 16000,
-            "n_fft": 512,
-            "win_length": 400,
-            "hop_length": 160,
-            "num_mel_bins": audio.asr_config.num_mel_bins,
-            "preemphasis": 0.97,
-            "mel_filters_dtype": "bfloat16",
-        },
-        "prompt": chat_template_parts(model_path),
-    }
-    fe_path = os.path.join(model_path, "preprocessor_config.json")
-    if os.path.exists(fe_path):
-        with open(fe_path) as f:
-            fe = json.load(f)
-        fe = fe.get("feature_extractor", fe)
-        for k in ("sampling_rate", "n_fft", "win_length", "hop_length", "preemphasis",
-                  "mel_filters_dtype"):
-            if k in fe:
-                tc["feature_extractor"][k] = fe[k]
-        if "feature_size" in fe:
-            tc["feature_extractor"]["num_mel_bins"] = fe["feature_size"]
-    dump_json(tc, os.path.join(out_dir, "transcribe_config.json"))
+    dump_json(transcribe_config(config, model_path),
+              os.path.join(out_dir, "transcribe_config.json"))
 
 
 def main():
@@ -424,6 +437,13 @@ def main():
     parser.add_argument("--init_seq_len", type=int, default=512)
     parser.add_argument("--max_seq_len", type=int, default=4096)
     parser.add_argument("--num_to_generate", type=int, default=1024)
+    parser.add_argument(
+        "--audio_only",
+        action="store_true",
+        help="write only nntr_audio.bin and transcribe_config.json (the "
+        "checkpoint may then hold just the perception.* tensors), for "
+        "nntr_nemotron_transcribe --verify-audio",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -433,6 +453,11 @@ def main():
     fc_dtype = {"float32": np.float32}[args.fc_dtype]
     emb_dtype = {"float32": np.float32, "float16": np.float16}[args.embedding_dtype]
     convert_audio(reader, config, args.out_dir)
+    if args.audio_only:
+        dump_json(transcribe_config(config, args.model_path),
+                  os.path.join(args.out_dir, "transcribe_config.json"))
+        print("done (audio only):", args.out_dir)
+        return
     convert_llm(reader, config.text_config, args.out_dir, fc_dtype, emb_dtype)
     write_configs(config, args.model_path, args.out_dir, "FP32",
                   "FP32" if args.embedding_dtype == "float32" else "FP16", args)

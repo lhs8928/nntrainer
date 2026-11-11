@@ -14,9 +14,16 @@
  * Usage:
  *   nntr_nemotron_transcribe <model_dir> <audio.wav> [prompt]
  *   nntr_nemotron_transcribe --verify <model_dir> <reference_dir>
+ *   nntr_nemotron_transcribe --verify-audio <model_dir> <reference_dir>
+ *   nntr_nemotron_transcribe --verify-llm <model_dir> <reference_dir>
+ *     (language model only: tokenizer, prefill logits and greedy tokens of a
+ *      text prompt; works with a checkpoint cut down to a few blocks)
+ *     (audio tower only: needs nntr_audio.bin + transcribe_config.json and
+ *      the references of make_audio_reference.py, not the language model)
  */
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -185,16 +192,116 @@ int verify(const std::string &model_dir, const std::string &ref_dir) {
   return check.failures == 0 ? 0 : 1;
 }
 
+int verifyAudio(const std::string &model_dir, const std::string &ref_dir) {
+  using causallm::nemotron_transcribe::AudioTower;
+  using causallm::nemotron_transcribe::LogMelFrontend;
+  using clock = std::chrono::steady_clock;
+  auto ms = [](clock::time_point a, clock::time_point b) {
+    return std::chrono::duration<double, std::milli>(b - a).count();
+  };
+
+  Reference ref(ref_dir);
+  std::ifstream cf(model_dir + "/transcribe_config.json");
+  if (!cf.is_open())
+    throw std::runtime_error("cannot open " + model_dir +
+                             "/transcribe_config.json");
+  json tc = json::parse(cf);
+  auto t0 = clock::now();
+  AudioTower tower(model_dir + "/nntr_audio.bin", tc);
+  LogMelFrontend frontend(tower.frontendConfig());
+  std::cout << "[info] audio tower loaded in " << ms(t0, clock::now())
+            << " ms\n";
+
+  Checker check;
+  for (const auto &w : ref.meta().at("wavs")) {
+    const std::string tag = w.at("tag").get<std::string>();
+    const std::string path = w.at("path").get<std::string>();
+    int rate = 0;
+    std::vector<float> audio =
+      causallm::nemotron_transcribe::loadWav(path, rate);
+    if (rate != tower.frontendConfig().sampling_rate)
+      throw std::runtime_error(path + ": reference wav must be 16 kHz");
+
+    auto t1 = clock::now();
+    MelFeatures mel = frontend.compute(audio);
+    auto t2 = clock::now();
+    AudioOutput out = tower.encode(mel);
+    auto t3 = clock::now();
+    std::cout << "[info] " << tag << " (" << path
+              << "): " << w.at("seconds").get<double>() << " s, "
+              << out.num_audio_tokens << " audio tokens, log-mel " << ms(t1, t2)
+              << " ms, audio tower " << ms(t2, t3) << " ms\n";
+
+    check.close(tag + ": log-mel", mel.data, ref.load<float>(tag + "_mel"),
+                1e-4);
+    check.close(tag + ": asr encoder states", out.asr_hidden,
+                ref.load<float>(tag + "_asr_hidden"), 1e-3);
+    check.close(tag + ": speaker logits", out.speaker_logits,
+                ref.load<float>(tag + "_speaker_logits"), 1e-3);
+    check.close(tag + ": audio embeddings", out.embeds,
+                ref.load<float>(tag + "_audio_embeds"), 1e-3);
+  }
+  std::cout << (check.failures == 0 ? "ALL CHECKS PASSED\n"
+                                    : "SOME CHECKS FAILED\n");
+  return check.failures == 0 ? 0 : 1;
+}
+
+int verifyLLM(const std::string &model_dir, const std::string &ref_dir) {
+  Reference ref(ref_dir);
+  causallm::json cfg = causallm::LoadJsonFile(model_dir + "/config.json");
+  causallm::json gen =
+    causallm::LoadJsonFile(model_dir + "/generation_config.json");
+  causallm::json nntr = causallm::LoadJsonFile(model_dir + "/nntr_config.json");
+  for (const char *key :
+       {"tokenizer_file", "model_file_name", "embedding_file_name"}) {
+    if (nntr.contains(key) && nntr[key].is_string()) {
+      const std::string v = nntr[key].get<std::string>();
+      if (!v.empty() && v[0] != '/')
+        nntr[key] = model_dir + "/" + v;
+    }
+  }
+  causallm::NemotronHCausalLM llm(cfg, gen, nntr);
+  llm.initialize();
+  llm.load_weight(nntr.at("model_file_name").get<std::string>());
+
+  Checker check;
+  std::vector<int> ids = ref.load<int>("text_ids");
+  if (ref.meta().contains("text_prompt") && llm.getTokenizer() != nullptr) {
+    std::vector<int> mine = llm.getTokenizer()->Encode(
+      ref.meta()["text_prompt"].get<std::string>(), false);
+    check.same("tokenizer: prompt ids", mine, ids);
+  }
+  std::vector<float> emb = llm.embedTokens(ids);
+  llm.run_with_embeddings(emb.data(), ids.size(), ids, false, false);
+  std::vector<float> logits = ref.load<float>("text_logits");
+  const size_t V = llm.getVocabSize();
+  std::vector<float> last(logits.end() - V, logits.end());
+  check.close("text: last-position logits", llm.getPrefillLogits(), last, 1e-3);
+  check.same("text: greedy tokens", toInt(llm.getGeneratedIds()),
+             ref.load<int>("text_generated"));
+  std::cout << (check.failures == 0 ? "ALL CHECKS PASSED\n"
+                                    : "SOME CHECKS FAILED\n");
+  return check.failures == 0 ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char *argv[]) {
   try {
     if (argc >= 4 && std::string(argv[1]) == "--verify")
       return verify(argv[2], argv[3]);
+    if (argc >= 4 && std::string(argv[1]) == "--verify-audio")
+      return verifyAudio(argv[2], argv[3]);
+    if (argc >= 4 && std::string(argv[1]) == "--verify-llm")
+      return verifyLLM(argv[2], argv[3]);
     if (argc < 3) {
       std::cerr << "Usage:\n"
                 << "  " << argv[0] << " <model_dir> <audio.wav> [prompt]\n"
-                << "  " << argv[0] << " --verify <model_dir> <reference_dir>\n";
+                << "  " << argv[0] << " --verify <model_dir> <reference_dir>\n"
+                << "  " << argv[0]
+                << " --verify-audio <model_dir> <reference_dir>\n"
+                << "  " << argv[0]
+                << " --verify-llm <model_dir> <reference_dir>\n";
       return 1;
     }
     Nemotron35Transcribe pipe(argv[1]);

@@ -46,6 +46,7 @@ Applications/CausalLM/res/qwen3/test/*
 Applications/CausalLM/res/nemotron3_5_transcribe/*
 !Applications/CausalLM/res/nemotron3_5_transcribe/weight_converter.py
 !Applications/CausalLM/res/nemotron3_5_transcribe/make_tiny_reference.py
+!Applications/CausalLM/res/nemotron3_5_transcribe/make_audio_reference.py
 !Applications/CausalLM/res/nemotron3_5_transcribe/README.md
 !Applications/CausalLM/res/qwen3/test/generate_qwen3_reference.py
 # qwen3-0.6b QS4CX conversion pipeline
